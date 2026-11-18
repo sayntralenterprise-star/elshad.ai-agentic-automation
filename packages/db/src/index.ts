@@ -904,6 +904,56 @@ export interface AgentMessagesTable {
   created_at: Date;
 }
 
+export interface CustomToolsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  version: string;
+  description: string;
+  side_effect_class: 'read' | 'write' | 'destructive' | 'external_comms';
+  implementation: 'http' | 'sandbox_js' | 'sandbox_python' | 'mcp' | 'workflow' | 'builtin';
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  config: Record<string, unknown>;
+  tags: string[];
+  owner: string | null;
+  status: 'active' | 'deprecated' | 'disabled';
+  untrusted_source: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface McpServersTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  transport: 'sse' | 'stdio' | 'http';
+  endpoint: string;
+  status: 'connected' | 'disconnected' | 'error';
+  metadata: Record<string, unknown>;
+  last_health_check_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface McpServerToolsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  mcp_server_id: string;
+  name: string;
+  description: string | null;
+  input_schema: Record<string, unknown>;
+  side_effect_class: 'read' | 'write' | 'destructive' | 'external_comms';
+  approval_status: 'pending_approval' | 'approved' | 'rejected';
+  approved_by: string | null;
+  approved_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -963,6 +1013,9 @@ export interface Database {
   team_handoffs: TeamHandoffsTable;
   blackboards: BlackboardsTable;
   agent_messages: AgentMessagesTable;
+  custom_tools: CustomToolsTable;
+  mcp_servers: McpServersTable;
+  mcp_server_tools: McpServerToolsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

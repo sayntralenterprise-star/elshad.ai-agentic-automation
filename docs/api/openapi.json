@@ -7251,6 +7251,529 @@
         "required": [
           "input"
         ]
+      },
+      "CustomTool": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ]
+          },
+          "implementation": {
+            "type": "string",
+            "enum": [
+              "http",
+              "sandbox_js",
+              "sandbox_python",
+              "mcp",
+              "workflow",
+              "builtin"
+            ]
+          },
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "output_schema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated",
+              "disabled"
+            ]
+          },
+          "untrusted_source": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "name",
+          "version",
+          "description",
+          "side_effect_class",
+          "implementation",
+          "input_schema",
+          "output_schema",
+          "config",
+          "tags",
+          "owner",
+          "status",
+          "untrusted_source",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateCustomToolRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 64
+          },
+          "version": {
+            "type": "string",
+            "default": "1.0.0"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ],
+            "default": "read"
+          },
+          "implementation": {
+            "type": "string",
+            "enum": [
+              "http",
+              "sandbox_js",
+              "sandbox_python",
+              "mcp",
+              "workflow",
+              "builtin"
+            ],
+            "default": "http"
+          },
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {
+              "type": "object"
+            }
+          },
+          "output_schema": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {
+              "type": "object"
+            }
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "untrusted_source": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ]
+      },
+      "ImportOpenApiResponse": {
+        "type": "object",
+        "properties": {
+          "spec_title": {
+            "type": "string"
+          },
+          "spec_version": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "imported_tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomTool"
+            }
+          }
+        },
+        "required": [
+          "spec_title",
+          "spec_version",
+          "base_url",
+          "imported_tools"
+        ]
+      },
+      "ImportOpenApiRequest": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            ]
+          },
+          "base_url_override": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "register": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "spec"
+        ]
+      },
+      "TestToolResponse": {
+        "type": "object",
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "valid_args": {
+            "type": "boolean"
+          },
+          "raw_result": {},
+          "sanitized_text": {
+            "type": "string"
+          },
+          "wrapped_observation": {
+            "type": "string"
+          },
+          "untrusted_source": {
+            "type": "boolean"
+          },
+          "injection_suspected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tool_name",
+          "dry_run",
+          "valid_args",
+          "sanitized_text",
+          "wrapped_observation",
+          "untrusted_source",
+          "injection_suspected"
+        ]
+      },
+      "TestToolRequest": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "simulated_raw_result": {}
+        }
+      },
+      "McpServer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "sse",
+              "stdio",
+              "http"
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "disconnected",
+              "error"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "last_health_check_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "name",
+          "transport",
+          "endpoint",
+          "status",
+          "metadata",
+          "last_health_check_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "McpServerTool": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "mcp_server_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ]
+          },
+          "approval_status": {
+            "type": "string",
+            "enum": [
+              "pending_approval",
+              "approved",
+              "rejected"
+            ]
+          },
+          "approved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "mcp_server_id",
+          "name",
+          "description",
+          "input_schema",
+          "side_effect_class",
+          "approval_status",
+          "approved_by",
+          "approved_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateMcpServerRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "sse",
+              "stdio",
+              "http"
+            ]
+          },
+          "endpoint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "discovered_tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": {
+                  "type": "string"
+                },
+                "input_schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {
+                    "type": "object"
+                  }
+                },
+                "side_effect_class": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "destructive",
+                    "external_comms"
+                  ]
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "transport",
+          "endpoint"
+        ]
+      },
+      "UpdateMcpToolApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "approval_status": {
+            "type": "string",
+            "enum": [
+              "pending_approval",
+              "approved",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "approval_status"
+        ]
+      },
+      "InvokeMcpToolRequest": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "simulated_raw_result": {}
+        }
       }
     },
     "parameters": {}
@@ -13788,6 +14311,505 @@
                   "required": [
                     "items"
                   ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/custom": {
+      "get": {
+        "operationId": "tools.list_custom",
+        "summary": "List custom & imported tools in workspace registry (FR-TL-2)",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CustomTool"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "tools.create_custom",
+        "summary": "Create a custom tool contract in the registry (FR-TL-7)",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomTool"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/import/openapi": {
+      "post": {
+        "operationId": "tools.import_openapi",
+        "summary": "Import tools from an OpenAPI 3.0/3.1 JSON specification (FR-TL-7)",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportOpenApiRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportOpenApiResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/{name}/test": {
+      "post": {
+        "operationId": "tools.test",
+        "summary": "Test a tool with schema validation, dry-run mode, and sanitization (FR-TL-8, FR-TL-9)",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "name",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestToolResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/servers": {
+      "get": {
+        "operationId": "mcp.servers.list",
+        "summary": "List registered external MCP servers (FR-TL-1)",
+        "tags": [
+          "MCP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/McpServer"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "mcp.servers.create",
+        "summary": "Register an external MCP server and discover its tools (FR-TL-1)",
+        "tags": [
+          "MCP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMcpServerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "server": {
+                      "$ref": "#/components/schemas/McpServer"
+                    },
+                    "discovered_tools": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/McpServerTool"
+                      }
+                    }
+                  },
+                  "required": [
+                    "server",
+                    "discovered_tools"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/servers/{id}/tools": {
+      "get": {
+        "operationId": "mcp.servers.tools",
+        "summary": "List discovered tools for an MCP server (FR-TL-1)",
+        "tags": [
+          "MCP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/McpServerTool"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/tools/{id}/approval": {
+      "patch": {
+        "operationId": "mcp.tools.update_approval",
+        "summary": "Approve or reject a discovered MCP tool (FR-TL-1)",
+        "tags": [
+          "MCP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMcpToolApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerTool"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/servers/{id}/tools/{name}/invoke": {
+      "post": {
+        "operationId": "mcp.tools.invoke",
+        "summary": "Invoke an approved MCP tool with dry-run & sanitization (FR-TL-1, FR-TL-5)",
+        "tags": [
+          "MCP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "name",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeMcpToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestToolResponse"
                 }
               }
             }

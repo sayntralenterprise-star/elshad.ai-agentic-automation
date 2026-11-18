@@ -975,6 +975,74 @@ export interface TeamSimulationDto {
   durationMs: number;
 }
 
+export interface CustomToolDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  version: string;
+  description: string;
+  sideEffectClass: 'read' | 'write' | 'destructive' | 'external_comms';
+  implementation: 'http' | 'sandbox_js' | 'sandbox_python' | 'mcp' | 'workflow' | 'builtin';
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  config: Record<string, unknown>;
+  tags: string[];
+  owner: string | null;
+  status: 'active' | 'deprecated' | 'disabled';
+  untrustedSource: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OpenApiImportResultDto {
+  specTitle: string;
+  specVersion: string;
+  baseUrl: string;
+  importedTools: CustomToolDto[];
+}
+
+export interface TestToolResultDto {
+  toolName: string;
+  dryRun: boolean;
+  validArgs: boolean;
+  rawResult: unknown;
+  sanitizedText: string;
+  wrappedObservation: string;
+  untrustedSource: boolean;
+  injectionSuspected: boolean;
+}
+
+export interface McpServerDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  transport: 'sse' | 'stdio' | 'http';
+  endpoint: string;
+  status: 'connected' | 'disconnected' | 'error';
+  metadata: Record<string, unknown>;
+  lastHealthCheckAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpServerToolDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  mcpServerId: string;
+  name: string;
+  description: string | null;
+  inputSchema: Record<string, unknown>;
+  sideEffectClass: 'read' | 'write' | 'destructive' | 'external_comms';
+  approvalStatus: 'pending_approval' | 'approved' | 'rejected';
+  approvedBy: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -1694,6 +1762,180 @@ export class PlatformClient {
         idempotencyKey,
       });
       return mapToolContract(res);
+    },
+    listCustom: async (): Promise<CustomToolDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>('GET', '/api/v1/tools/custom');
+      return res.items.map(mapCustomTool);
+    },
+    createCustom: async (
+      input: {
+        name: string;
+        version?: string;
+        description: string;
+        sideEffectClass?: CustomToolDto['sideEffectClass'];
+        implementation?: CustomToolDto['implementation'];
+        inputSchema?: Record<string, unknown>;
+        outputSchema?: Record<string, unknown>;
+        config?: Record<string, unknown>;
+        tags?: string[];
+        untrustedSource?: boolean;
+      },
+      idempotencyKey?: string,
+    ): Promise<CustomToolDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/tools/custom', {
+        idempotencyKey: idempotencyKey ?? `tool-create-${Date.now()}`,
+        body: {
+          name: input.name,
+          version: input.version,
+          description: input.description,
+          side_effect_class: input.sideEffectClass,
+          implementation: input.implementation,
+          input_schema: input.inputSchema,
+          output_schema: input.outputSchema,
+          config: input.config,
+          tags: input.tags,
+          untrusted_source: input.untrustedSource,
+        },
+      });
+      return mapCustomTool(res);
+    },
+    importOpenApi: async (
+      input: {
+        spec: string | Record<string, unknown>;
+        baseUrlOverride?: string;
+        tags?: string[];
+        register?: boolean;
+      },
+      idempotencyKey?: string,
+    ): Promise<OpenApiImportResultDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/tools/import/openapi',
+        {
+          idempotencyKey: idempotencyKey ?? `openapi-import-${Date.now()}`,
+          body: {
+            spec: input.spec,
+            base_url_override: input.baseUrlOverride,
+            tags: input.tags,
+            register: input.register ?? true,
+          },
+        },
+      );
+      const rawTools = Array.isArray(res.imported_tools) ? (res.imported_tools as Record<string, unknown>[]) : [];
+      return {
+        specTitle: String(res.spec_title),
+        specVersion: String(res.spec_version),
+        baseUrl: String(res.base_url),
+        importedTools: rawTools.map(mapCustomTool),
+      };
+    },
+    test: async (
+      name: string,
+      input: {
+        args?: Record<string, unknown>;
+        dryRun?: boolean;
+        simulatedRawResult?: unknown;
+      },
+    ): Promise<TestToolResultDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/tools/${encodeURIComponent(name)}/test`,
+        {
+          idempotencyKey: `tool-test-${Date.now()}`,
+          body: {
+            args: input.args ?? {},
+            dry_run: input.dryRun ?? true,
+            simulated_raw_result: input.simulatedRawResult,
+          },
+        },
+      );
+      return mapTestToolResult(res);
+    },
+  };
+
+  readonly mcp = {
+    listServers: async (): Promise<McpServerDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>('GET', '/api/v1/mcp/servers');
+      return res.items.map(mapMcpServer);
+    },
+    createServer: async (
+      input: {
+        name: string;
+        transport: McpServerDto['transport'];
+        endpoint: string;
+        discoveredTools?: Array<{
+          name: string;
+          description?: string;
+          inputSchema?: Record<string, unknown>;
+          sideEffectClass?: McpServerToolDto['sideEffectClass'];
+        }>;
+      },
+      idempotencyKey?: string,
+    ): Promise<{ server: McpServerDto; discoveredTools: McpServerToolDto[] }> => {
+      const res = await this.request<{
+        server: Record<string, unknown>;
+        discovered_tools: Record<string, unknown>[];
+      }>('POST', '/api/v1/mcp/servers', {
+        idempotencyKey: idempotencyKey ?? `mcp-create-${Date.now()}`,
+        body: {
+          name: input.name,
+          transport: input.transport,
+          endpoint: input.endpoint,
+          discovered_tools: input.discoveredTools?.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.inputSchema ?? { type: 'object' },
+            side_effect_class: t.sideEffectClass,
+          })),
+        },
+      });
+      return {
+        server: mapMcpServer(res.server),
+        discoveredTools: res.discovered_tools.map(mapMcpServerTool),
+      };
+    },
+    listServerTools: async (serverId: string): Promise<McpServerToolDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/mcp/servers/${serverId}/tools`,
+      );
+      return res.items.map(mapMcpServerTool);
+    },
+    updateToolApproval: async (
+      toolId: string,
+      approvalStatus: McpServerToolDto['approvalStatus'],
+    ): Promise<McpServerToolDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'PATCH',
+        `/api/v1/mcp/tools/${toolId}/approval`,
+        {
+          body: { approval_status: approvalStatus },
+        },
+      );
+      return mapMcpServerTool(res);
+    },
+    invokeTool: async (
+      serverId: string,
+      toolName: string,
+      input: {
+        args?: Record<string, unknown>;
+        dryRun?: boolean;
+        simulatedRawResult?: unknown;
+      },
+    ): Promise<TestToolResultDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/mcp/servers/${serverId}/tools/${encodeURIComponent(toolName)}/invoke`,
+        {
+          idempotencyKey: `mcp-invoke-${Date.now()}`,
+          body: {
+            args: input.args ?? {},
+            dry_run: input.dryRun ?? false,
+            simulated_raw_result: input.simulatedRawResult,
+          },
+        },
+      );
+      return mapTestToolResult(res);
     },
   };
 
@@ -4003,5 +4245,74 @@ function mapTeamSimulation(s: Record<string, unknown>): TeamSimulationDto {
     totalTokensOut: Number(s.total_tokens_out ?? 0),
     totalCostMicroUsd: Number(s.total_cost_micro_usd ?? 0),
     durationMs: Number(s.duration_ms ?? 0),
+  };
+}
+
+function mapCustomTool(t: Record<string, unknown>): CustomToolDto {
+  return {
+    id: String(t.id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    name: String(t.name),
+    version: String(t.version ?? '1.0.0'),
+    description: String(t.description ?? ''),
+    sideEffectClass: (t.side_effect_class ?? 'read') as CustomToolDto['sideEffectClass'],
+    implementation: (t.implementation ?? 'http') as CustomToolDto['implementation'],
+    inputSchema: (t.input_schema ?? {}) as Record<string, unknown>,
+    outputSchema: (t.output_schema ?? {}) as Record<string, unknown>,
+    config: (t.config ?? {}) as Record<string, unknown>,
+    tags: Array.isArray(t.tags) ? (t.tags as string[]) : [],
+    owner: t.owner ? String(t.owner) : null,
+    status: (t.status ?? 'active') as CustomToolDto['status'],
+    untrustedSource: Boolean(t.untrusted_source),
+    createdAt: String(t.created_at),
+    updatedAt: String(t.updated_at),
+  };
+}
+
+function mapTestToolResult(r: Record<string, unknown>): TestToolResultDto {
+  return {
+    toolName: String(r.tool_name),
+    dryRun: Boolean(r.dry_run),
+    validArgs: Boolean(r.valid_args),
+    rawResult: r.raw_result,
+    sanitizedText: String(r.sanitized_text ?? ''),
+    wrappedObservation: String(r.wrapped_observation ?? ''),
+    untrustedSource: Boolean(r.untrusted_source),
+    injectionSuspected: Boolean(r.injection_suspected),
+  };
+}
+
+function mapMcpServer(s: Record<string, unknown>): McpServerDto {
+  return {
+    id: String(s.id),
+    orgId: String(s.org_id),
+    workspaceId: String(s.workspace_id),
+    name: String(s.name),
+    transport: s.transport as McpServerDto['transport'],
+    endpoint: String(s.endpoint),
+    status: s.status as McpServerDto['status'],
+    metadata: (s.metadata ?? {}) as Record<string, unknown>,
+    lastHealthCheckAt: s.last_health_check_at ? String(s.last_health_check_at) : null,
+    createdAt: String(s.created_at),
+    updatedAt: String(s.updated_at),
+  };
+}
+
+function mapMcpServerTool(t: Record<string, unknown>): McpServerToolDto {
+  return {
+    id: String(t.id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    mcpServerId: String(t.mcp_server_id),
+    name: String(t.name),
+    description: t.description ? String(t.description) : null,
+    inputSchema: (t.input_schema ?? {}) as Record<string, unknown>,
+    sideEffectClass: (t.side_effect_class ?? 'read') as McpServerToolDto['sideEffectClass'],
+    approvalStatus: t.approval_status as McpServerToolDto['approvalStatus'],
+    approvedBy: t.approved_by ? String(t.approved_by) : null,
+    approvedAt: t.approved_at ? String(t.approved_at) : null,
+    createdAt: String(t.created_at),
+    updatedAt: String(t.updated_at),
   };
 }

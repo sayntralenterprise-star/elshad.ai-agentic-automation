@@ -37,6 +37,8 @@ export type RoleBindingId = Brand<string, 'RoleBindingId'>;
 export type TeamId = Brand<string, 'TeamId'>;
 export type BlackboardId = Brand<string, 'BlackboardId'>;
 export type MessageId = Brand<string, 'MessageId'>;
+export type McpServerId = Brand<string, 'McpServerId'>;
+export type McpServerToolId = Brand<string, 'McpServerToolId'>;
 
 export const ExternalPrefix = {
   org: 'org_',
@@ -65,6 +67,8 @@ export const ExternalPrefix = {
   team: 'team_',
   blackboard: 'bb_',
   message: 'msg_',
+  mcpServer: 'mcps_',
+  mcpServerTool: 'mcpt_',
   audit: 'aud_',
   webhook: 'whk_',
   apiKey: 'key_',

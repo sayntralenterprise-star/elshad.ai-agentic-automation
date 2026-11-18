@@ -42,6 +42,7 @@ import { GovernanceHardeningView } from './GovernanceHardeningView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
 import { TeamCanvasView } from './TeamCanvasView.js';
+import { ToolsView } from './ToolsView.js';
 import { WorkflowCanvasView } from './WorkflowCanvasView.js';
 import { t } from './i18n.js';
 
@@ -1255,6 +1256,14 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <EvaluationsView client={client} workspaceId={activeWorkspace?.id} />
             )}
 
+            {section === 'tools' && (
+              <ToolsView
+                client={client}
+                workspaceId={activeWorkspace?.id}
+                environment={env}
+              />
+            )}
+
             {section !== 'home' &&
               section !== 'settings' &&
               section !== 'governance' &&
@@ -1264,7 +1273,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'workflows' &&
               section !== 'knowledge' &&
               section !== 'approvals' &&
-              section !== 'evaluations' && (
+              section !== 'evaluations' &&
+              section !== 'tools' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}

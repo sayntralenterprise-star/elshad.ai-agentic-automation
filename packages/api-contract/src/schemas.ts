@@ -2050,3 +2050,149 @@ export const TeamSimulationResponseSchema = z
     duration_ms: z.number(),
   })
   .openapi('TeamSimulationResponse');
+
+// ---------- S1.5 Tooling v1 (OpenAPI Import, MCP Client, Registry & Dry-Run) ----------
+
+export const CustomToolWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string(),
+    version: z.string(),
+    description: z.string(),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']),
+    implementation: z.enum(['http', 'sandbox_js', 'sandbox_python', 'mcp', 'workflow', 'builtin']),
+    input_schema: z.record(z.string(), z.unknown()),
+    output_schema: z.record(z.string(), z.unknown()),
+    config: z.record(z.string(), z.unknown()),
+    tags: z.array(z.string()),
+    owner: z.string().nullable(),
+    status: z.enum(['active', 'deprecated', 'disabled']),
+    untrusted_source: z.boolean(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('CustomTool');
+
+export const CreateCustomToolRequestSchema = z
+  .object({
+    name: z.string().min(2).max(64),
+    version: z.string().default('1.0.0'),
+    description: z.string().min(1),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']).default('read'),
+    implementation: z
+      .enum(['http', 'sandbox_js', 'sandbox_python', 'mcp', 'workflow', 'builtin'])
+      .default('http'),
+    input_schema: z.record(z.string(), z.unknown()).default({ type: 'object' }),
+    output_schema: z.record(z.string(), z.unknown()).default({ type: 'object' }),
+    config: z.record(z.string(), z.unknown()).default({}),
+    tags: z.array(z.string()).default([]),
+    untrusted_source: z.boolean().default(false),
+  })
+  .openapi('CreateCustomToolRequest');
+
+export const ImportOpenApiRequestSchema = z
+  .object({
+    spec: z.union([z.string(), z.record(z.string(), z.unknown())]),
+    base_url_override: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    register: z.boolean().default(true),
+  })
+  .openapi('ImportOpenApiRequest');
+
+export const ImportOpenApiResponseSchema = z
+  .object({
+    spec_title: z.string(),
+    spec_version: z.string(),
+    base_url: z.string(),
+    imported_tools: z.array(CustomToolWireSchema),
+  })
+  .openapi('ImportOpenApiResponse');
+
+export const TestToolRequestSchema = z
+  .object({
+    args: z.record(z.string(), z.unknown()).default({}),
+    dry_run: z.boolean().default(true),
+    simulated_raw_result: z.unknown().optional(),
+  })
+  .openapi('TestToolRequest');
+
+export const TestToolResponseSchema = z
+  .object({
+    tool_name: z.string(),
+    dry_run: z.boolean(),
+    valid_args: z.boolean(),
+    raw_result: z.unknown(),
+    sanitized_text: z.string(),
+    wrapped_observation: z.string(),
+    untrusted_source: z.boolean(),
+    injection_suspected: z.boolean(),
+  })
+  .openapi('TestToolResponse');
+
+export const McpServerWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string(),
+    transport: z.enum(['sse', 'stdio', 'http']),
+    endpoint: z.string(),
+    status: z.enum(['connected', 'disconnected', 'error']),
+    metadata: z.record(z.string(), z.unknown()),
+    last_health_check_at: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('McpServer');
+
+export const McpServerToolWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    mcp_server_id: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    input_schema: z.record(z.string(), z.unknown()),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']),
+    approval_status: z.enum(['pending_approval', 'approved', 'rejected']),
+    approved_by: z.string().nullable(),
+    approved_at: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('McpServerTool');
+
+export const CreateMcpServerRequestSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    transport: z.enum(['sse', 'stdio', 'http']),
+    endpoint: z.string().min(1),
+    discovered_tools: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          description: z.string().optional(),
+          input_schema: z.record(z.string(), z.unknown()).default({ type: 'object' }),
+          side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']).optional(),
+        }),
+      )
+      .optional(),
+  })
+  .openapi('CreateMcpServerRequest');
+
+export const UpdateMcpToolApprovalRequestSchema = z
+  .object({
+    approval_status: z.enum(['pending_approval', 'approved', 'rejected']),
+  })
+  .openapi('UpdateMcpToolApprovalRequest');
+
+export const InvokeMcpToolRequestSchema = z
+  .object({
+    args: z.record(z.string(), z.unknown()).default({}),
+    dry_run: z.boolean().default(false),
+    simulated_raw_result: z.unknown().optional(),
+  })
+  .openapi('InvokeMcpToolRequest');

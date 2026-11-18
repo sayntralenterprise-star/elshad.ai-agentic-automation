@@ -143,9 +143,18 @@ import {
 } from '@elshad/telemetry';
 import {
   InMemoryToolRegistry,
+  McpClientManager,
   ToolContractSchema,
   ToolGateway,
+  importOpenApiSpec,
+  sanitizeAndWrapToolResult,
+  validateJsonSchema,
   type LethalTrifectaReport,
+  type McpDiscoveryFixtureTool,
+  type McpServerRecord,
+  type McpServerToolRecord,
+  type McpToolApprovalStatus,
+  type McpTransport,
   type ToolContract,
 } from '@elshad/tool-kit';
 import {
@@ -5948,6 +5957,406 @@ export function buildApiServer(opts: ApiServerOptions): {
     const messages = agentMessagesByRunId.get(runId) ?? [];
     const filtered = messages.filter((m) => m.org_id === orgId);
     return { items: filtered };
+  });
+
+  // ---------- S1.5 Tooling v1 (OpenAPI import, MCP Client, Registry & Dry-Run) ----------
+
+  interface StoredCustomTool {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    name: string;
+    version: string;
+    description: string;
+    side_effect_class: 'read' | 'write' | 'destructive' | 'external_comms';
+    implementation: 'http' | 'sandbox_js' | 'sandbox_python' | 'mcp' | 'workflow' | 'builtin';
+    input_schema: Record<string, unknown>;
+    output_schema: Record<string, unknown>;
+    config: Record<string, unknown>;
+    tags: string[];
+    owner: string | null;
+    status: 'active' | 'deprecated' | 'disabled';
+    untrusted_source: boolean;
+    created_at: string;
+    updated_at: string;
+  }
+
+  const customToolsById = new Map<string, StoredCustomTool>();
+  const mcpClientManager = new McpClientManager();
+
+  const mapMcpServerWire = (s: McpServerRecord) => ({
+    id: s.id,
+    org_id: s.orgId,
+    workspace_id: s.workspaceId,
+    name: s.name,
+    transport: s.transport,
+    endpoint: s.endpoint,
+    status: s.status,
+    metadata: s.metadata,
+    last_health_check_at: s.lastHealthCheckAt,
+    created_at: s.createdAt,
+    updated_at: s.updatedAt,
+  });
+
+  const mapMcpToolWire = (t: McpServerToolRecord) => ({
+    id: t.id,
+    org_id: t.orgId,
+    workspace_id: t.workspaceId,
+    mcp_server_id: t.mcpServerId,
+    name: t.name,
+    description: t.description,
+    input_schema: t.inputSchema,
+    side_effect_class: t.sideEffectClass,
+    approval_status: t.approvalStatus,
+    approved_by: t.approvedBy,
+    approved_at: t.approvedAt,
+    created_at: t.createdAt,
+    updated_at: t.updatedAt,
+  });
+
+  app.get('/api/v1/tools/custom', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+    const items = Array.from(customToolsById.values()).filter(
+      (t) => t.org_id === orgId && (!workspaceId || t.workspace_id === workspaceId),
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/tools/custom', async (req, reply) => {
+    const routePath = '/api/v1/tools/custom';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      version?: string;
+      description: string;
+      side_effect_class?: StoredCustomTool['side_effect_class'];
+      implementation?: StoredCustomTool['implementation'];
+      input_schema?: Record<string, unknown>;
+      output_schema?: Record<string, unknown>;
+      config?: Record<string, unknown>;
+      tags?: string[];
+      untrusted_source?: boolean;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = (req.headers['x-workspace-id'] as string) || 'ws_default';
+    const now = clock.now().toISOString();
+    const id = `tool_${idGen.uuidv7()}`;
+
+    const item: StoredCustomTool = {
+      id,
+      org_id: orgId,
+      workspace_id: workspaceId,
+      name: body.name,
+      version: body.version ?? '1.0.0',
+      description: body.description,
+      side_effect_class: body.side_effect_class ?? 'read',
+      implementation: body.implementation ?? 'http',
+      input_schema: body.input_schema ?? { type: 'object' },
+      output_schema: body.output_schema ?? { type: 'object' },
+      config: body.config ?? {},
+      tags: body.tags ?? [],
+      owner: auth.subject.principalId,
+      status: 'active',
+      untrusted_source: body.untrusted_source ?? false,
+      created_at: now,
+      updated_at: now,
+    };
+    customToolsById.set(id, item);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'tool.custom.create',
+      resource: { type: 'tool', id, name: item.name },
+      decision: 'allow',
+      context: { implementation: item.implementation, side_effect_class: item.side_effect_class },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, item);
+    return item;
+  });
+
+  app.post('/api/v1/tools/import/openapi', async (req, reply) => {
+    const routePath = '/api/v1/tools/import/openapi';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      spec: string | Record<string, unknown>;
+      base_url_override?: string;
+      tags?: string[];
+      register?: boolean;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = (req.headers['x-workspace-id'] as string) || 'ws_default';
+
+    const imported = importOpenApiSpec(body.spec, {
+      baseUrlOverride: body.base_url_override,
+      tags: body.tags,
+    });
+
+    const now = clock.now().toISOString();
+    const stored: StoredCustomTool[] = imported.tools.map((t) => {
+      const id = `tool_${idGen.uuidv7()}`;
+      const rec: StoredCustomTool = {
+        id,
+        org_id: orgId,
+        workspace_id: workspaceId,
+        name: t.contract.name,
+        version: t.contract.version,
+        description: t.contract.description,
+        side_effect_class: t.contract.side_effect_class,
+        implementation: t.contract.implementation,
+        input_schema: t.contract.input_schema,
+        output_schema: t.contract.output_schema,
+        config: { http: t.httpConfig },
+        tags: [...t.tags],
+        owner: auth.subject.principalId,
+        status: 'active',
+        untrusted_source: Boolean(t.contract.untrusted_source),
+        created_at: now,
+        updated_at: now,
+      };
+      if (body.register !== false) {
+        customToolsById.set(id, rec);
+      }
+      return rec;
+    });
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'tool.import_openapi',
+      resource: { type: 'tool', title: imported.specTitle },
+      decision: 'allow',
+      context: { count: stored.length, base_url: imported.baseUrl },
+    });
+
+    const response = {
+      spec_title: imported.specTitle,
+      spec_version: imported.specVersion,
+      base_url: imported.baseUrl,
+      imported_tools: stored,
+    };
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, response);
+    return response;
+  });
+
+  app.post('/api/v1/tools/:name/test', async (req, reply) => {
+    const routePath = '/api/v1/tools/{name}/test';
+    const contract = findContract('POST', routePath)!;
+    const { name } = req.params as { name: string };
+    const body = validateWithSchema<{
+      args: Record<string, unknown>;
+      dry_run: boolean;
+      simulated_raw_result?: unknown;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const builtin = toolGateway.registry.get(name);
+    const custom = Array.from(customToolsById.values()).find(
+      (t) => t.org_id === orgId && t.name === name,
+    );
+
+    if (!builtin && !custom) {
+      throw new PlatformError('RES_NOT_FOUND', `Tool "${name}" not found in registry`);
+    }
+
+    const inputSchema = builtin ? builtin.input_schema : custom!.input_schema;
+    const sideEffect = builtin ? builtin.side_effect_class : custom!.side_effect_class;
+    const untrusted = builtin ? Boolean(builtin.untrusted_source) : custom!.untrusted_source;
+
+    const errors = validateJsonSchema(inputSchema, body.args);
+    if (errors.length > 0) {
+      throw new PlatformError('VAL_SCHEMA_MISMATCH', `Tool args validation failed: ${errors.join('; ')}`);
+    }
+
+    const rawResult =
+      body.simulated_raw_result !== undefined
+        ? body.simulated_raw_result
+        : body.dry_run
+          ? {
+              dry_run: true,
+              tool: name,
+              side_effect_class: sideEffect,
+              would_execute_with: body.args,
+            }
+          : {
+              ok: true,
+              tool: name,
+              executed_at: clock.now().toISOString(),
+              args: body.args,
+            };
+
+    const provenance = untrusted ? 'untrusted_external' : 'tool_output';
+    const sanitized = sanitizeAndWrapToolResult(`test_${Date.now()}`, name, rawResult, provenance);
+
+    const response = {
+      tool_name: name,
+      dry_run: body.dry_run,
+      valid_args: true,
+      raw_result: rawResult,
+      sanitized_text: sanitized.sanitizedText,
+      wrapped_observation: sanitized.wrappedObservation,
+      untrusted_source: sanitized.untrustedSource,
+      injection_suspected: sanitized.injectionSuspected,
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  app.get('/api/v1/mcp/servers', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+    const servers = mcpClientManager.listServers({
+      orgId: orgId as OrgId,
+      workspaceId: workspaceId as WorkspaceId | undefined,
+    });
+    return { items: servers.map(mapMcpServerWire) };
+  });
+
+  app.post('/api/v1/mcp/servers', async (req, reply) => {
+    const routePath = '/api/v1/mcp/servers';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      transport: McpTransport;
+      endpoint: string;
+      discovered_tools?: Array<{
+        name: string;
+        description?: string;
+        input_schema?: Record<string, unknown>;
+        side_effect_class?: 'read' | 'write' | 'destructive' | 'external_comms';
+      }>;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = ((req.headers['x-workspace-id'] as string) || 'ws_default') as WorkspaceId;
+
+    const result = await mcpClientManager.registerServer(
+      { orgId: orgId as OrgId, workspaceId },
+      {
+        name: body.name,
+        transport: body.transport,
+        endpoint: body.endpoint,
+        discoveredTools: body.discovered_tools?.map(
+          (t): McpDiscoveryFixtureTool => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.input_schema ?? { type: 'object' },
+            sideEffectClass: t.side_effect_class,
+          }),
+        ),
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'mcp.server.register',
+      resource: { type: 'mcp_server', id: result.server.id, name: result.server.name },
+      decision: 'allow',
+      context: { discovered_tools: result.discoveredTools.length },
+    });
+
+    const response = {
+      server: mapMcpServerWire(result.server),
+      discovered_tools: result.discoveredTools.map(mapMcpToolWire),
+    };
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, response);
+    return response;
+  });
+
+  app.get('/api/v1/mcp/servers/:id/tools', async (req) => {
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const tools = mcpClientManager.listServerTools({ orgId: orgId as OrgId }, id);
+    return { items: tools.map(mapMcpToolWire) };
+  });
+
+  app.patch('/api/v1/mcp/tools/:id/approval', async (req) => {
+    const routePath = '/api/v1/mcp/tools/{id}/approval';
+    const contract = findContract('PATCH', routePath)!;
+    const { id } = req.params as { id: string };
+    const body = validateWithSchema<{ approval_status: McpToolApprovalStatus }>(
+      contract.bodySchema!,
+      req.body,
+    );
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const updated = mcpClientManager.updateToolApproval(
+      {
+        orgId: orgId as OrgId,
+        principal: { id: auth.context.principal.id as PrincipalId, type: auth.context.principal.type },
+      },
+      id,
+      body.approval_status,
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'mcp.tool.approval',
+      resource: { type: 'mcp_server_tool', id: updated.id, name: updated.name },
+      decision: 'allow',
+      context: { approval_status: updated.approvalStatus },
+    });
+
+    return mapMcpToolWire(updated);
+  });
+
+  app.post('/api/v1/mcp/servers/:id/tools/:name/invoke', async (req, reply) => {
+    const routePath = '/api/v1/mcp/servers/{id}/tools/{name}/invoke';
+    const contract = findContract('POST', routePath)!;
+    const { id, name } = req.params as { id: string; name: string };
+    const body = validateWithSchema<{
+      args: Record<string, unknown>;
+      dry_run: boolean;
+      simulated_raw_result?: unknown;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = ((req.headers['x-workspace-id'] as string) || 'ws_default') as WorkspaceId;
+
+    const result = await mcpClientManager.invokeTool(
+      { orgId: orgId as OrgId, workspaceId },
+      {
+        serverId: id,
+        toolName: name,
+        args: body.args,
+        dryRun: body.dry_run,
+        simulatedRawResult: body.simulated_raw_result,
+      },
+    );
+
+    const response = {
+      tool_name: result.toolName,
+      dry_run: result.dryRun,
+      valid_args: true,
+      raw_result: result.rawResult,
+      sanitized_text: result.sanitized.sanitizedText,
+      wrapped_observation: result.sanitized.wrappedObservation,
+      untrusted_source: result.sanitized.untrustedSource,
+      injection_suspected: result.sanitized.injectionSuspected,
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
   });
 
   return {
