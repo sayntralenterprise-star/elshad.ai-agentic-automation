@@ -8,8 +8,12 @@
     "@elshad/db": "workspace:*",
     "@elshad/domain": "workspace:*",
     "@elshad/execution": "workspace:*",
+    "@elshad/model-kit": "workspace:*",
     "@elshad/platform-kit": "workspace:*",
-    "@elshad/telemetry": "workspace:*"
+    "@elshad/policy-kit": "workspace:*",
+    "@elshad/runtime-core": "workspace:*",
+    "@elshad/telemetry": "workspace:*",
+    "@elshad/tool-kit": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

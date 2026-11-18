@@ -1,0 +1,28 @@
+{
+  "name": "@elshad/runtime-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@elshad/db": "workspace:*",
+    "@elshad/domain": "workspace:*",
+    "@elshad/execution": "workspace:*",
+    "@elshad/model-kit": "workspace:*",
+    "@elshad/policy-kit": "workspace:*",
+    "@elshad/telemetry": "workspace:*",
+    "@elshad/tool-kit": "workspace:*",
+    "zod": "^4.3.6"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

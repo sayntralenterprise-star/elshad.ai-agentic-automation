@@ -34,6 +34,7 @@ import {
   type RunStepDto,
 } from '@elshad/sdk-ts';
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { AgentStudioView } from './AgentStudioView.js';
 import { RunsView } from './RunsView.js';
 import { t } from './i18n.js';
 
@@ -817,7 +818,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <div style={{ display: 'grid', gap: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h1 style={{ margin: 0, fontSize: '22px' }}>{t('home.title')}</h1>
-                  <StatusChip label="Slice S0.2 Active" tone="success" />
+                  <StatusChip label="Slice S0.3 Active" tone="success" />
                 </div>
 
                 <div
@@ -877,7 +878,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     </li>
                     <li>Inspect hash-chained audit events — available under Governance</li>
                     <li>Durable run engine &amp; trace viewer — available under Runs</li>
-                    <li>First ReAct agent &amp; Model Gateway — arrives in S0.3</li>
+                    <li>First ReAct agent &amp; Model Gateway — available under Agents</li>
                   </ul>
                 </section>
               </div>
@@ -1132,6 +1133,15 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               </div>
             )}
 
+            {section === 'agents' && (
+              <AgentStudioView
+                client={client}
+                workspaceId={activeWorkspace?.id}
+                projectId={projects[0]?.id}
+                environment={env}
+              />
+            )}
+
             {section === 'runs' && (
               <RunsView
                 runs={runs}
@@ -1186,7 +1196,11 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               />
             )}
 
-            {section !== 'home' && section !== 'settings' && section !== 'governance' && section !== 'runs' && (
+            {section !== 'home' &&
+              section !== 'settings' &&
+              section !== 'governance' &&
+              section !== 'runs' &&
+              section !== 'agents' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}

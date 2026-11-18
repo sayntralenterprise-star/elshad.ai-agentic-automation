@@ -370,3 +370,236 @@ export const BulkRedriveSchema = z
     input_patch: z.unknown().optional(),
   })
   .openapi('BulkRedriveRequest');
+
+// ---------- Slice S0.3 Schemas ----------
+
+export const AgentVersionParamSchema = z.object({
+  id: z.string().min(1),
+  vid: z.string().min(1),
+});
+
+export const ModelCapabilitySchema = z
+  .object({
+    id: z.string(),
+    provider: z.string(),
+    display_name: z.string(),
+    tier: z.enum(['fast', 'standard', 'reasoning', 'embedding']),
+    context_window_tokens: z.number().int(),
+    max_output_tokens: z.number().int(),
+    supports_tools: z.boolean(),
+    supports_structured_output: z.boolean(),
+    supports_vision: z.boolean(),
+    supports_streaming: z.boolean(),
+    pricing_per_million: z.object({
+      input_micro_usd: z.number().int(),
+      output_micro_usd: z.number().int(),
+      cached_input_micro_usd: z.number().int(),
+    }),
+    status: z.enum(['active', 'deprecated']),
+  })
+  .openapi('ModelCapability');
+
+export const ToolContractWireSchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/),
+    version: z.string().regex(/^\d+\.\d+\.\d+$/),
+    description: z.string().min(1).max(1000),
+    input_schema: z.record(z.string(), z.unknown()),
+    output_schema: z.record(z.string(), z.unknown()),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']),
+    idempotent: z.boolean().default(true),
+    required_permissions: z.array(z.string()).default([]),
+    data_classification_touched: z
+      .array(z.enum(['public', 'internal', 'confidential', 'restricted', 'pii']))
+      .default(['internal']),
+    timeout_ms: z.number().int().min(100).max(300_000).default(15_000),
+    cost_model: z
+      .object({ per_call_micro_usd: z.number().int().min(0).default(0) })
+      .default({ per_call_micro_usd: 0 }),
+    implementation: z.enum(['builtin', 'sandbox_js', 'sandbox_python', 'http']).default('builtin'),
+    untrusted_source: z.boolean().optional(),
+  })
+  .openapi('ToolContract');
+
+export const CreateToolRequestSchema = ToolContractWireSchema.extend({
+  workspace_id: z.string().optional(),
+}).openapi('CreateToolRequest');
+
+export const LethalTrifectaReportSchema = z
+  .object({
+    detected: z.boolean(),
+    has_private_data: z.boolean(),
+    has_untrusted_input: z.boolean(),
+    has_external_comms: z.boolean(),
+    reasons: z.array(z.string()),
+  })
+  .openapi('LethalTrifectaReport');
+
+export const AgentToolBindingWireSchema = z.object({
+  tool: z.string().min(2).max(64),
+  version: z.string().optional(),
+  approval: z.enum(['never', 'auto', 'always']).default('auto'),
+  scope: z
+    .object({
+      allowed_domains: z.array(z.string()).optional(),
+      allowed_methods: z.array(z.string()).optional(),
+      max_calls_per_run: z.number().int().min(1).max(500).optional(),
+    })
+    .default({}),
+});
+
+export const AgentDefinitionWireSchema = z
+  .object({
+    kind: z.literal('AgentVersion').default('AgentVersion'),
+    apiVersion: z.literal('elshad.ai/v1').default('elshad.ai/v1'),
+    name: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/),
+    version: z.string().regex(/^\d+\.\d+\.\d+$/),
+    description: z.string().max(2000).optional(),
+    autonomy_level: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    model: z.object({
+      tier: z.enum(['fast', 'standard', 'reasoning', 'embedding']).default('standard'),
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      temperature: z.number().min(0).max(2).default(0.2),
+      max_output_tokens: z.number().int().min(64).max(128_000).optional(),
+      routing_strategy: z.enum(['latency', 'cost', 'quality', 'capability']).default('quality'),
+      fallback: z.array(z.object({ provider: z.string(), model: z.string() })).default([]),
+    }),
+    prompt: z.object({
+      system: z.string().min(1).max(32_000),
+      instructions: z.string().max(16_000).optional(),
+      output_schema: z.record(z.string(), z.unknown()).optional(),
+    }),
+    tools: z.array(AgentToolBindingWireSchema).default([]),
+    limits: z
+      .object({
+        max_steps: z.number().int().min(1).default(25),
+        max_tokens: z.number().int().min(256).default(200_000),
+        max_wall_time_ms: z.number().int().min(500).default(900_000),
+        max_cost_micro_usd: z.number().int().min(0).default(2_000_000),
+        max_tool_calls: z.number().int().min(0).default(40),
+      })
+      .default({
+        max_steps: 25,
+        max_tokens: 200_000,
+        max_wall_time_ms: 900_000,
+        max_cost_micro_usd: 2_000_000,
+        max_tool_calls: 40,
+      }),
+    reasoning: z
+      .object({
+        strategy: z.enum(['react', 'plan_execute', 'single_shot']).default('react'),
+        allow_parallel_tool_calls: z.boolean().default(false),
+      })
+      .default({ strategy: 'react', allow_parallel_tool_calls: false }),
+  })
+  .openapi('AgentDefinition');
+
+export const CreateAgentRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    project_id: z.string().optional(),
+    definition: AgentDefinitionWireSchema,
+  })
+  .openapi('CreateAgentRequest');
+
+export const UpdateAgentDraftRequestSchema = z
+  .object({
+    definition: AgentDefinitionWireSchema,
+    message: z.string().max(500).optional(),
+  })
+  .openapi('UpdateAgentDraftRequest');
+
+export const AgentVersionWireSchema = z
+  .object({
+    id: z.string(),
+    agent_id: z.string(),
+    semver: z.string(),
+    state: z.enum(['draft', 'published', 'retired']),
+    definition: AgentDefinitionWireSchema,
+    definition_hash: z.string(),
+    message: z.string().nullable(),
+    lethal_trifecta: LethalTrifectaReportSchema,
+    created_by: z.string(),
+    created_at: z.string(),
+  })
+  .openapi('AgentVersion');
+
+export const AgentWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    status: z.enum(['draft', 'active', 'deprecated', 'archived']),
+    current_version_id: z.string().nullable(),
+    draft_version: AgentVersionWireSchema.nullable(),
+    published_version: AgentVersionWireSchema.nullable(),
+    versions: z.array(AgentVersionWireSchema),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Agent');
+
+export const PublishAgentVersionRequestSchema = z
+  .object({
+    message: z.string().max(500).optional(),
+    allow_l4_autonomy: z.boolean().optional(),
+  })
+  .openapi('PublishAgentVersionRequest');
+
+export const AgentDiffQuerySchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
+
+export const AgentDiffResponseSchema = z
+  .object({
+    from_version: z.string(),
+    to_version: z.string(),
+    breaking: z.boolean(),
+    changes: z.array(
+      z.object({
+        path: z.string(),
+        kind: z.enum(['added', 'removed', 'changed']),
+        before: z.unknown().optional(),
+        after: z.unknown().optional(),
+      }),
+    ),
+  })
+  .openapi('AgentDiffResponse');
+
+export const RunAgentRequestSchema = z
+  .object({
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    version_id: z.string().optional(),
+    input: z.union([z.string(), z.record(z.string(), z.unknown())]),
+    dry_run: z.boolean().default(false),
+    mock_turns: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .openapi('RunAgentRequest');
+
+export const UsageLedgerEntryWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string(),
+    environment_id: z.string(),
+    run_id: z.string(),
+    step_seq: z.number().int(),
+    principal_id: z.string(),
+    category: z.enum(['llm_tokens', 'tool_call', 'sandbox_ms', 'storage']),
+    provider: z.string().nullable(),
+    model: z.string().nullable(),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    cached_tokens: z.number().int(),
+    quantity: z.number().int(),
+    unit: z.string(),
+    cost_micro_usd: z.number().int(),
+    ts: z.string(),
+  })
+  .openapi('UsageLedgerEntry');

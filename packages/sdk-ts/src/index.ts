@@ -158,6 +158,109 @@ export interface DlqItemDto {
   createdAt: string;
 }
 
+export interface ModelCapabilityDto {
+  id: string;
+  provider: string;
+  displayName: string;
+  tier: 'fast' | 'standard' | 'reasoning' | 'embedding';
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  supportsTools: boolean;
+  supportsStructuredOutput: boolean;
+  supportsVision: boolean;
+  supportsStreaming: boolean;
+  pricingPerMillion: {
+    inputMicroUsd: number;
+    outputMicroUsd: number;
+    cachedInputMicroUsd: number;
+  };
+  status: 'active' | 'deprecated';
+}
+
+export interface ToolContractDto {
+  name: string;
+  version: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  sideEffectClass: 'read' | 'write' | 'destructive' | 'external_comms';
+  idempotent: boolean;
+  requiredPermissions: string[];
+  dataClassificationTouched: string[];
+  timeoutMs: number;
+  implementation: 'builtin' | 'sandbox_js' | 'sandbox_python' | 'http';
+}
+
+export interface LethalTrifectaReportDto {
+  detected: boolean;
+  hasPrivateData: boolean;
+  hasUntrustedInput: boolean;
+  hasExternalComms: boolean;
+  reasons: string[];
+}
+
+export interface AgentVersionDto {
+  id: string;
+  agentId: string;
+  semver: string;
+  state: 'draft' | 'published' | 'retired';
+  definition: Record<string, unknown>;
+  definitionHash: string;
+  message: string | null;
+  lethalTrifecta: LethalTrifectaReportDto;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface AgentDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  status: 'draft' | 'active' | 'deprecated' | 'archived';
+  currentVersionId: string | null;
+  draftVersion: AgentVersionDto | null;
+  publishedVersion: AgentVersionDto | null;
+  versions: AgentVersionDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentDiffDto {
+  fromVersion: string;
+  toVersion: string;
+  breaking: boolean;
+  changes: Array<{
+    path: string;
+    kind: 'added' | 'removed' | 'changed';
+    before?: unknown;
+    after?: unknown;
+  }>;
+}
+
+export interface UsageLedgerEntryDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string;
+  environmentId: string;
+  runId: string;
+  stepSeq: number;
+  principalId: string;
+  category: 'llm_tokens' | 'tool_call' | 'sandbox_ms' | 'storage';
+  provider: string | null;
+  model: string | null;
+  tokensIn: number;
+  tokensOut: number;
+  cachedTokens: number;
+  quantity: number;
+  unit: string;
+  costMicroUsd: number;
+  ts: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -726,5 +829,234 @@ export class PlatformClient {
       );
       return res.data.map(mapRun);
     },
+    listUsageLedger: async (
+      runId: string,
+    ): Promise<{ data: UsageLedgerEntryDto[]; totalCostMicroUsd: number }> => {
+      const res = await this.request<{
+        data: Record<string, unknown>[];
+        total_cost_micro_usd: number;
+      }>('GET', `/api/v1/runs/${runId}/usage-ledger`);
+      return {
+        data: res.data.map(mapUsageLedgerEntry),
+        totalCostMicroUsd: Number(res.total_cost_micro_usd ?? 0),
+      };
+    },
+  };
+
+  readonly models = {
+    list: async (): Promise<ModelCapabilityDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/models');
+      return res.data.map(mapModelCapability);
+    },
+  };
+
+  readonly tools = {
+    list: async (): Promise<ToolContractDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/tools');
+      return res.data.map(mapToolContract);
+    },
+    create: async (
+      contract: Record<string, unknown>,
+      idempotencyKey: string,
+    ): Promise<ToolContractDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/tools', {
+        body: contract,
+        idempotencyKey,
+      });
+      return mapToolContract(res);
+    },
+  };
+
+  readonly agents = {
+    list: async (): Promise<AgentDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/agents');
+      return res.data.map(mapAgent);
+    },
+    create: async (
+      input: { workspaceId?: string; projectId?: string; definition: Record<string, unknown> },
+      idempotencyKey: string,
+    ): Promise<AgentDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/agents', {
+        body: {
+          workspace_id: input.workspaceId,
+          project_id: input.projectId,
+          definition: input.definition,
+        },
+        idempotencyKey,
+      });
+      return mapAgent(res);
+    },
+    get: async (id: string): Promise<AgentDto> => {
+      const res = await this.request<Record<string, unknown>>('GET', `/api/v1/agents/${id}`);
+      return mapAgent(res);
+    },
+    updateDraft: async (
+      id: string,
+      input: { definition: Record<string, unknown>; message?: string },
+    ): Promise<AgentDto> => {
+      const res = await this.request<Record<string, unknown>>('PATCH', `/api/v1/agents/${id}`, {
+        body: input,
+      });
+      return mapAgent(res);
+    },
+    publishVersion: async (
+      id: string,
+      versionId: string,
+      idempotencyKey: string,
+      opts: { message?: string; allowL4Autonomy?: boolean } = {},
+    ): Promise<AgentDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/agents/${id}/versions/${versionId}/publish`,
+        {
+          body: { message: opts.message, allow_l4_autonomy: opts.allowL4Autonomy },
+          idempotencyKey,
+        },
+      );
+      return mapAgent(res);
+    },
+    diff: async (id: string, fromVersionId: string, toVersionId: string): Promise<AgentDiffDto> => {
+      const params = new URLSearchParams({ from: fromVersionId, to: toVersionId });
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/agents/${id}/diff?${params.toString()}`,
+      );
+      return {
+        fromVersion: String(res.from_version),
+        toVersion: String(res.to_version),
+        breaking: Boolean(res.breaking),
+        changes: (res.changes as AgentDiffDto['changes']) ?? [],
+      };
+    },
+    run: async (
+      id: string,
+      input: {
+        environment?: 'dev' | 'staging' | 'prod';
+        versionId?: string;
+        input: string | Record<string, unknown>;
+        dryRun?: boolean;
+        mockTurns?: Array<Record<string, unknown>>;
+      },
+      idempotencyKey: string,
+    ): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', `/api/v1/agents/${id}/runs`, {
+        body: {
+          environment: input.environment,
+          version_id: input.versionId,
+          input: input.input,
+          dry_run: input.dryRun ?? false,
+          mock_turns: input.mockTurns,
+        },
+        idempotencyKey,
+      });
+      return mapRun(res);
+    },
+  };
+}
+
+function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
+  const pricing = (m.pricing_per_million ?? {}) as Record<string, unknown>;
+  return {
+    id: String(m.id),
+    provider: String(m.provider),
+    displayName: String(m.display_name),
+    tier: m.tier as ModelCapabilityDto['tier'],
+    contextWindowTokens: Number(m.context_window_tokens ?? 0),
+    maxOutputTokens: Number(m.max_output_tokens ?? 0),
+    supportsTools: Boolean(m.supports_tools),
+    supportsStructuredOutput: Boolean(m.supports_structured_output),
+    supportsVision: Boolean(m.supports_vision),
+    supportsStreaming: Boolean(m.supports_streaming),
+    pricingPerMillion: {
+      inputMicroUsd: Number(pricing.input_micro_usd ?? 0),
+      outputMicroUsd: Number(pricing.output_micro_usd ?? 0),
+      cachedInputMicroUsd: Number(pricing.cached_input_micro_usd ?? 0),
+    },
+    status: m.status as ModelCapabilityDto['status'],
+  };
+}
+
+function mapToolContract(t: Record<string, unknown>): ToolContractDto {
+  return {
+    name: String(t.name),
+    version: String(t.version),
+    description: String(t.description),
+    inputSchema: (t.input_schema as Record<string, unknown>) ?? {},
+    outputSchema: (t.output_schema as Record<string, unknown>) ?? {},
+    sideEffectClass: t.side_effect_class as ToolContractDto['sideEffectClass'],
+    idempotent: Boolean(t.idempotent),
+    requiredPermissions: (t.required_permissions as string[]) ?? [],
+    dataClassificationTouched: (t.data_classification_touched as string[]) ?? [],
+    timeoutMs: Number(t.timeout_ms ?? 15_000),
+    implementation: (t.implementation as ToolContractDto['implementation']) ?? 'builtin',
+  };
+}
+
+function mapAgentVersion(v: Record<string, unknown>): AgentVersionDto {
+  const tri = (v.lethal_trifecta ?? {}) as Record<string, unknown>;
+  return {
+    id: String(v.id),
+    agentId: String(v.agent_id),
+    semver: String(v.semver),
+    state: v.state as AgentVersionDto['state'],
+    definition: (v.definition as Record<string, unknown>) ?? {},
+    definitionHash: String(v.definition_hash),
+    message: v.message ? String(v.message) : null,
+    lethalTrifecta: {
+      detected: Boolean(tri.detected),
+      hasPrivateData: Boolean(tri.has_private_data),
+      hasUntrustedInput: Boolean(tri.has_untrusted_input),
+      hasExternalComms: Boolean(tri.has_external_comms),
+      reasons: (tri.reasons as string[]) ?? [],
+    },
+    createdBy: String(v.created_by),
+    createdAt: String(v.created_at),
+  };
+}
+
+function mapAgent(a: Record<string, unknown>): AgentDto {
+  return {
+    id: String(a.id),
+    orgId: String(a.org_id),
+    workspaceId: String(a.workspace_id),
+    projectId: String(a.project_id),
+    name: String(a.name),
+    description: a.description ? String(a.description) : null,
+    status: a.status as AgentDto['status'],
+    currentVersionId: a.current_version_id ? String(a.current_version_id) : null,
+    draftVersion: a.draft_version
+      ? mapAgentVersion(a.draft_version as Record<string, unknown>)
+      : null,
+    publishedVersion: a.published_version
+      ? mapAgentVersion(a.published_version as Record<string, unknown>)
+      : null,
+    versions: Array.isArray(a.versions)
+      ? a.versions.map((v) => mapAgentVersion(v as Record<string, unknown>))
+      : [],
+    createdAt: String(a.created_at),
+    updatedAt: String(a.updated_at),
+  };
+}
+
+function mapUsageLedgerEntry(u: Record<string, unknown>): UsageLedgerEntryDto {
+  return {
+    id: String(u.id),
+    orgId: String(u.org_id),
+    workspaceId: String(u.workspace_id),
+    projectId: String(u.project_id),
+    environmentId: String(u.environment_id),
+    runId: String(u.run_id),
+    stepSeq: Number(u.step_seq ?? 0),
+    principalId: String(u.principal_id),
+    category: u.category as UsageLedgerEntryDto['category'],
+    provider: u.provider ? String(u.provider) : null,
+    model: u.model ? String(u.model) : null,
+    tokensIn: Number(u.tokens_in ?? 0),
+    tokensOut: Number(u.tokens_out ?? 0),
+    cachedTokens: Number(u.cached_tokens ?? 0),
+    quantity: Number(u.quantity ?? 0),
+    unit: String(u.unit ?? 'tokens'),
+    costMicroUsd: Number(u.cost_micro_usd ?? 0),
+    ts: String(u.ts),
   };
 }

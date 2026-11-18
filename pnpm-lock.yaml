@@ -229,12 +229,24 @@ importers:
       '@elshad/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@elshad/model-kit':
+        specifier: workspace:*
+        version: link:../../packages/model-kit
       '@elshad/platform-kit':
         specifier: workspace:*
         version: link:../../packages/platform-kit
+      '@elshad/policy-kit':
+        specifier: workspace:*
+        version: link:../../packages/policy-kit
+      '@elshad/runtime-core':
+        specifier: workspace:*
+        version: link:../../packages/runtime-core
       '@elshad/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@elshad/tool-kit':
+        specifier: workspace:*
+        version: link:../../packages/tool-kit
       '@fastify/cookie':
         specifier: ^11.1.5
         version: 11.1.5
@@ -344,12 +356,24 @@ importers:
       '@elshad/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@elshad/model-kit':
+        specifier: workspace:*
+        version: link:../../packages/model-kit
       '@elshad/platform-kit':
         specifier: workspace:*
         version: link:../../packages/platform-kit
+      '@elshad/policy-kit':
+        specifier: workspace:*
+        version: link:../../packages/policy-kit
+      '@elshad/runtime-core':
+        specifier: workspace:*
+        version: link:../../packages/runtime-core
       '@elshad/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@elshad/tool-kit':
+        specifier: workspace:*
+        version: link:../../packages/tool-kit
 
   packages/api-contract:
     dependencies:
@@ -420,6 +444,18 @@ importers:
         specifier: workspace:*
         version: link:../telemetry
 
+  packages/model-kit:
+    dependencies:
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/platform-kit':
+        specifier: workspace:*
+        version: link:../platform-kit
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+
   packages/platform-kit:
     dependencies:
       '@elshad/config':
@@ -428,6 +464,42 @@ importers:
       '@elshad/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/policy-kit:
+    dependencies:
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+
+  packages/runtime-core:
+    dependencies:
+      '@elshad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@elshad/model-kit':
+        specifier: workspace:*
+        version: link:../model-kit
+      '@elshad/policy-kit':
+        specifier: workspace:*
+        version: link:../policy-kit
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      '@elshad/tool-kit':
+        specifier: workspace:*
+        version: link:../tool-kit
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.7
 
   packages/sdk-ts:
     dependencies:
@@ -443,6 +515,24 @@ importers:
       pino:
         specifier: ^10.4.0
         version: 10.4.0
+
+  packages/tool-kit:
+    dependencies:
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/platform-kit':
+        specifier: workspace:*
+        version: link:../platform-kit
+      '@elshad/policy-kit':
+        specifier: workspace:*
+        version: link:../policy-kit
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.7
 
   packages/ui-kit:
     dependencies:

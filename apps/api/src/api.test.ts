@@ -657,4 +657,197 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('supports Agent lifecycle (create/draft/diff/publish), ReAct run, usage-ledger equality, dry-run & cross-org isolation [E0.3-7, E0.3-9]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's03-a@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    store.seedOrganization({
+      slug: 's03-org-b',
+      name: 'S03 Org B',
+      adminEmail: 's03-b@elshad.local',
+      adminPassword: 'Password123!',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's03-a@elshad.local', password: 'Password123!' },
+    });
+    const cookieA = parseCookie(loginA.headers['set-cookie']);
+    const csrfA = loginA.json().csrf_token as string;
+
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's03-b@elshad.local', password: 'Password123!' },
+    });
+    const cookieB = parseCookie(loginB.headers['set-cookie']);
+
+    // 1. Models & built-in tools endpoints
+    const modelsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/models',
+      headers: { cookie: cookieA },
+    });
+    expect(modelsRes.statusCode).toBe(200);
+    expect(modelsRes.json().data.some((m: { id: string }) => m.id === 'mock/react-default')).toBe(
+      true,
+    );
+
+    const toolsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tools',
+      headers: { cookie: cookieA },
+    });
+    expect(toolsRes.statusCode).toBe(200);
+    expect(toolsRes.json().data.map((t: { name: string }) => t.name)).toContain('current_time');
+
+    // 2. Create Agent v1.0.0
+    const v1Def = {
+      name: 'ops-triage-agent',
+      version: '1.0.0',
+      description: 'Triages operational questions.',
+      autonomy_level: 2,
+      model: { tier: 'standard', provider: 'mock', model: 'mock/react-default' },
+      prompt: { system: 'You are an ops triage agent.' },
+      tools: [{ tool: 'current_time', approval: 'auto', scope: {} }],
+    };
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'create-agent-1' },
+      payload: { definition: v1Def },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const agent = createRes.json();
+    const agentId = agent.id as string;
+    const v1Id = agent.versions[0].id as string;
+    expect(agent.status).toBe('draft');
+
+    // 3. Publish v1.0.0
+    const publishV1 = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/versions/${v1Id}/publish`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'pub-v1' },
+      payload: { message: 'Initial release' },
+    });
+    expect(publishV1.statusCode).toBe(200);
+    expect(publishV1.json().status).toBe('active');
+    expect(publishV1.json().current_version_id).toBe(v1Id);
+
+    // 4. Create v1.1.0 draft & compute diff
+    const patchDraft = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/agents/${agentId}`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA },
+      payload: {
+        message: 'Add code interpreter',
+        definition: {
+          ...v1Def,
+          version: '1.1.0',
+          tools: [
+            { tool: 'current_time', approval: 'auto', scope: {} },
+            { tool: 'code_interpreter', approval: 'auto', scope: {} },
+          ],
+        },
+      },
+    });
+    expect(patchDraft.statusCode).toBe(200);
+    const v2Id = patchDraft.json().draft_version.id as string;
+
+    const diffRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/agents/${agentId}/diff?from=${v1Id}&to=${v2Id}`,
+      headers: { cookie: cookieA },
+    });
+    expect(diffRes.statusCode).toBe(200);
+    expect(
+      diffRes
+        .json()
+        .changes.some((c: { path: string; kind: string }) => c.path === 'tools.code_interpreter'),
+    ).toBe(true);
+
+    // 5. Run published agent via scripted ReAct mock turns + verify usage ledger === run.cost_micro_usd
+    const runRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'run-agent-1' },
+      payload: {
+        input: 'What is the current UTC time?',
+        mock_turns: [
+          {
+            kind: 'tool_calls',
+            calls: [{ id: 'tc_1', name: 'current_time', arguments: {} }],
+            tokensIn: 120,
+            tokensOut: 30,
+          },
+          {
+            kind: 'answer',
+            content: 'Checked UTC time successfully.',
+            tokensIn: 180,
+            tokensOut: 20,
+          },
+        ],
+      },
+    });
+    expect(runRes.statusCode).toBe(201);
+    const runBody = runRes.json();
+    expect(runBody.status).toBe('succeeded');
+    expect(runBody.termination_reason).toBe('final_answer');
+
+    const ledgerRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runBody.id}/usage-ledger`,
+      headers: { cookie: cookieA },
+    });
+    expect(ledgerRes.statusCode).toBe(200);
+    expect(ledgerRes.json().data.length).toBeGreaterThanOrEqual(3);
+    expect(ledgerRes.json().total_cost_micro_usd).toBe(runBody.cost_micro_usd);
+    expect(runBody.cost_micro_usd).toBeGreaterThan(0);
+
+    // Dry-run tool invocation check (FR-TL-9)
+    const dryRunRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'run-agent-dry-1' },
+      payload: {
+        input: 'Check UTC time safely in dry run.',
+        dry_run: true,
+        mock_turns: [
+          {
+            kind: 'tool_calls',
+            calls: [{ id: 'tc_dry', name: 'current_time', arguments: {} }],
+            tokensIn: 80,
+            tokensOut: 20,
+          },
+          {
+            kind: 'answer',
+            content: 'Dry run completed.',
+            tokensIn: 100,
+            tokensOut: 15,
+          },
+        ],
+      },
+    });
+    expect(dryRunRes.statusCode).toBe(201);
+    expect(dryRunRes.json().status).toBe('succeeded');
+
+    // 6. Cross-org agent isolation -> 404
+    const orgBGet = await app.inject({
+      method: 'GET',
+      url: `/api/v1/agents/${agentId}`,
+      headers: { cookie: cookieB },
+    });
+    expect(orgBGet.statusCode).toBe(404);
+
+    await app.close();
+  });
 });

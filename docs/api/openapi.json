@@ -1187,6 +1187,852 @@
         "required": [
           "run_ids"
         ]
+      },
+      "ModelCapability": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "standard",
+              "reasoning",
+              "embedding"
+            ]
+          },
+          "context_window_tokens": {
+            "type": "integer"
+          },
+          "max_output_tokens": {
+            "type": "integer"
+          },
+          "supports_tools": {
+            "type": "boolean"
+          },
+          "supports_structured_output": {
+            "type": "boolean"
+          },
+          "supports_vision": {
+            "type": "boolean"
+          },
+          "supports_streaming": {
+            "type": "boolean"
+          },
+          "pricing_per_million": {
+            "type": "object",
+            "properties": {
+              "input_micro_usd": {
+                "type": "integer"
+              },
+              "output_micro_usd": {
+                "type": "integer"
+              },
+              "cached_input_micro_usd": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "input_micro_usd",
+              "output_micro_usd",
+              "cached_input_micro_usd"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "display_name",
+          "tier",
+          "context_window_tokens",
+          "max_output_tokens",
+          "supports_tools",
+          "supports_structured_output",
+          "supports_vision",
+          "supports_streaming",
+          "pricing_per_million",
+          "status"
+        ]
+      },
+      "ToolContract": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,63}$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "output_schema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ]
+          },
+          "idempotent": {
+            "type": "boolean",
+            "default": true
+          },
+          "required_permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "data_classification_touched": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted",
+                "pii"
+              ]
+            },
+            "default": [
+              "internal"
+            ]
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000,
+            "default": 15000
+          },
+          "cost_model": {
+            "type": "object",
+            "properties": {
+              "per_call_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              }
+            },
+            "default": {
+              "per_call_micro_usd": 0
+            }
+          },
+          "implementation": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "sandbox_js",
+              "sandbox_python",
+              "http"
+            ],
+            "default": "builtin"
+          },
+          "untrusted_source": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "description",
+          "input_schema",
+          "output_schema",
+          "side_effect_class"
+        ]
+      },
+      "CreateToolRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ToolContract"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "workspace_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "deprecated",
+              "archived"
+            ]
+          },
+          "current_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft_version": {
+            "$ref": "#/components/schemas/AgentVersion"
+          },
+          "published_version": {
+            "$ref": "#/components/schemas/AgentVersion"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentVersion"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "name",
+          "description",
+          "status",
+          "current_version_id",
+          "draft_version",
+          "published_version",
+          "versions",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "AgentVersion": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "semver": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ]
+          },
+          "definition": {
+            "$ref": "#/components/schemas/AgentDefinition"
+          },
+          "definition_hash": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lethal_trifecta": {
+            "$ref": "#/components/schemas/LethalTrifectaReport"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent_id",
+          "semver",
+          "state",
+          "definition",
+          "definition_hash",
+          "message",
+          "lethal_trifecta",
+          "created_by",
+          "created_at"
+        ]
+      },
+      "AgentDefinition": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "AgentVersion"
+            ],
+            "default": "AgentVersion"
+          },
+          "apiVersion": {
+            "type": "string",
+            "enum": [
+              "elshad.ai/v1"
+            ],
+            "default": "elshad.ai/v1"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "autonomy_level": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  0
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  2
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  3
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  4
+                ]
+              }
+            ]
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "standard",
+                  "reasoning",
+                  "embedding"
+                ],
+                "default": "standard"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2,
+                "default": 0.2
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 128000
+              },
+              "routing_strategy": {
+                "type": "string",
+                "enum": [
+                  "latency",
+                  "cost",
+                  "quality",
+                  "capability"
+                ],
+                "default": "quality"
+              },
+              "fallback": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "provider": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "model"
+                  ]
+                },
+                "default": []
+              }
+            }
+          },
+          "prompt": {
+            "type": "object",
+            "properties": {
+              "system": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32000
+              },
+              "instructions": {
+                "type": "string",
+                "maxLength": 16000
+              },
+              "output_schema": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "system"
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 64
+                },
+                "version": {
+                  "type": "string"
+                },
+                "approval": {
+                  "type": "string",
+                  "enum": [
+                    "never",
+                    "auto",
+                    "always"
+                  ],
+                  "default": "auto"
+                },
+                "scope": {
+                  "type": "object",
+                  "properties": {
+                    "allowed_domains": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "allowed_methods": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "max_calls_per_run": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 500
+                    }
+                  },
+                  "default": {}
+                }
+              },
+              "required": [
+                "tool"
+              ]
+            },
+            "default": []
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_steps": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 25
+              },
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 256,
+                "default": 200000
+              },
+              "max_wall_time_ms": {
+                "type": "integer",
+                "minimum": 500,
+                "default": 900000
+              },
+              "max_cost_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 2000000
+              },
+              "max_tool_calls": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 40
+              }
+            },
+            "default": {
+              "max_steps": 25,
+              "max_tokens": 200000,
+              "max_wall_time_ms": 900000,
+              "max_cost_micro_usd": 2000000,
+              "max_tool_calls": 40
+            }
+          },
+          "reasoning": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "react",
+                  "plan_execute",
+                  "single_shot"
+                ],
+                "default": "react"
+              },
+              "allow_parallel_tool_calls": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "default": {
+              "strategy": "react",
+              "allow_parallel_tool_calls": false
+            }
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "autonomy_level",
+          "model",
+          "prompt"
+        ]
+      },
+      "LethalTrifectaReport": {
+        "type": "object",
+        "properties": {
+          "detected": {
+            "type": "boolean"
+          },
+          "has_private_data": {
+            "type": "boolean"
+          },
+          "has_untrusted_input": {
+            "type": "boolean"
+          },
+          "has_external_comms": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "detected",
+          "has_private_data",
+          "has_untrusted_input",
+          "has_external_comms",
+          "reasons"
+        ]
+      },
+      "CreateAgentRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/AgentDefinition"
+          }
+        },
+        "required": [
+          "definition"
+        ]
+      },
+      "UpdateAgentDraftRequest": {
+        "type": "object",
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/AgentDefinition"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "definition"
+        ]
+      },
+      "PublishAgentVersionRequest": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "allow_l4_autonomy": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AgentDiffResponse": {
+        "type": "object",
+        "properties": {
+          "from_version": {
+            "type": "string"
+          },
+          "to_version": {
+            "type": "string"
+          },
+          "breaking": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "added",
+                    "removed",
+                    "changed"
+                  ]
+                },
+                "before": {},
+                "after": {}
+              },
+              "required": [
+                "path",
+                "kind"
+              ]
+            }
+          }
+        },
+        "required": [
+          "from_version",
+          "to_version",
+          "breaking",
+          "changes"
+        ]
+      },
+      "RunAgentRequest": {
+        "type": "object",
+        "properties": {
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "mock_turns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "input"
+        ]
+      },
+      "UsageLedgerEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_seq": {
+            "type": "integer"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "llm_tokens",
+              "tool_call",
+              "sandbox_ms",
+              "storage"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tokens_in": {
+            "type": "integer"
+          },
+          "tokens_out": {
+            "type": "integer"
+          },
+          "cached_tokens": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "cost_micro_usd": {
+            "type": "integer"
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "environment_id",
+          "run_id",
+          "step_seq",
+          "principal_id",
+          "category",
+          "provider",
+          "model",
+          "tokens_in",
+          "tokens_out",
+          "cached_tokens",
+          "quantity",
+          "unit",
+          "cost_micro_usd",
+          "ts"
+        ]
       }
     },
     "parameters": {}
@@ -2898,6 +3744,615 @@
                   },
                   "required": [
                     "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "operationId": "models.list",
+        "summary": "List model capabilities and pricing across registered providers",
+        "tags": [
+          "Models"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModelCapability"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools": {
+      "get": {
+        "operationId": "tools.list",
+        "summary": "List built-in and workspace tool contracts",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ToolContract"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "tools.create",
+        "summary": "Register or update a custom tool contract",
+        "tags": [
+          "Tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolContract"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "agents.list",
+        "summary": "List agents in the active workspace",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "agents.create",
+        "summary": "Create a new versioned agent definition",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "get": {
+        "operationId": "agents.get",
+        "summary": "Get agent metadata and all versions",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "agents.update_draft",
+        "summary": "Save or create a new draft version of an agent definition",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAgentDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/versions/{vid}/publish": {
+      "post": {
+        "operationId": "agents.publish_version",
+        "summary": "Validate and publish an immutable agent version",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "vid",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishAgentVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/diff": {
+      "get": {
+        "operationId": "agents.diff",
+        "summary": "Compute structural diff between two versions of an agent",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDiffResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/runs": {
+      "post": {
+        "operationId": "agents.run",
+        "summary": "Execute an agent version through the ReAct runtime",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/usage-ledger": {
+      "get": {
+        "operationId": "runs.usage_ledger",
+        "summary": "List itemized usage-ledger cost records for a run",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsageLedgerEntry"
+                      }
+                    },
+                    "total_cost_micro_usd": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "total_cost_micro_usd"
                   ]
                 }
               }

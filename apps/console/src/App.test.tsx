@@ -6,11 +6,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PlatformError } from '@elshad/domain';
 import {
   PlatformClient,
+  type AgentDto,
   type ApiKeyDto,
   type DlqItemDto,
   type MeDto,
+  type ModelCapabilityDto,
   type RunDto,
   type RunStepDto,
+  type ToolContractDto,
 } from '@elshad/sdk-ts';
 import { ConsoleApp } from './App.js';
 
@@ -238,6 +241,222 @@ function createMockClient(
     return [];
   };
 
+  // S0.3 Mocks
+  const agents: AgentDto[] = [];
+  const modelsCatalog: ModelCapabilityDto[] = [
+    {
+      id: 'mock/react-default',
+      provider: 'mock',
+      displayName: 'Mock ReAct Default',
+      tier: 'standard',
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 8192,
+      supportsTools: true,
+      supportsStructuredOutput: true,
+      supportsVision: false,
+      supportsStreaming: true,
+      pricingPerMillion: { inputMicroUsd: 500_000, outputMicroUsd: 1_500_000, cachedInputMicroUsd: 125_000 },
+      status: 'active',
+    },
+  ];
+  const toolsCatalog: ToolContractDto[] = [
+    {
+      name: 'current_time',
+      version: '1.0.0',
+      description: 'Return UTC timestamp',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      sideEffectClass: 'read',
+      idempotent: true,
+      requiredPermissions: ['tool:run'],
+      dataClassificationTouched: ['public'],
+      timeoutMs: 2000,
+      implementation: 'builtin',
+    },
+    {
+      name: 'web_fetch',
+      version: '1.0.0',
+      description: 'Fetch public web page',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      sideEffectClass: 'read',
+      idempotent: true,
+      requiredPermissions: ['tool:run'],
+      dataClassificationTouched: ['public'],
+      timeoutMs: 15_000,
+      implementation: 'http',
+    },
+    {
+      name: 'http_request',
+      version: '1.0.0',
+      description: 'Send external HTTP request',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      sideEffectClass: 'external_comms',
+      idempotent: false,
+      requiredPermissions: ['tool:run'],
+      dataClassificationTouched: ['internal'],
+      timeoutMs: 15_000,
+      implementation: 'http',
+    },
+    {
+      name: 'confidential_kb_read',
+      version: '1.0.0',
+      description: 'Read confidential records',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      sideEffectClass: 'read',
+      idempotent: true,
+      requiredPermissions: ['tool:run'],
+      dataClassificationTouched: ['confidential', 'pii'],
+      timeoutMs: 5_000,
+      implementation: 'builtin',
+    },
+  ];
+
+  client.models.list = async () => [...modelsCatalog];
+  client.tools.list = async () => [...toolsCatalog];
+  client.agents.list = async () => [...agents];
+  client.agents.create = async (input) => {
+    const def = input.definition as Record<string, unknown>;
+    const agentId = `agt_${agents.length + 1}`;
+    const verId = `agv_${agents.length + 1}_1`;
+    const created: AgentDto = {
+      id: agentId,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: input.projectId ?? 'prj_1',
+      name: String(def.name ?? 'new-agent'),
+      description: def.description ? String(def.description) : null,
+      status: 'draft',
+      currentVersionId: null,
+      draftVersion: {
+        id: verId,
+        agentId,
+        semver: String(def.version ?? '1.0.0'),
+        state: 'draft',
+        definition: def,
+        definitionHash: 'hash_v1',
+        message: 'Initial draft',
+        lethalTrifecta: {
+          detected: false,
+          hasPrivateData: false,
+          hasUntrustedInput: false,
+          hasExternalComms: false,
+          reasons: [],
+        },
+        createdBy: 'prn_1',
+        createdAt: '2026-11-18T12:00:00.000Z',
+      },
+      publishedVersion: null,
+      versions: [],
+      createdAt: '2026-11-18T12:00:00.000Z',
+      updatedAt: '2026-11-18T12:00:00.000Z',
+    };
+    created.versions = [created.draftVersion!];
+    agents.push(created);
+    return structuredClone(created);
+  };
+  client.agents.publishVersion = async (id, verId) => {
+    const found = agents.find((a) => a.id === id);
+    if (!found) throw new PlatformError('RES_NOT_FOUND', 'Agent not found');
+    found.status = 'active';
+    found.currentVersionId = verId;
+    if (found.draftVersion) {
+      found.draftVersion.state = 'published';
+      found.publishedVersion = found.draftVersion;
+      found.draftVersion = null;
+    }
+    return structuredClone(found);
+  };
+  client.agents.run = async (id, input) => {
+    const runId = `run_agent_${runs.length + 1}`;
+    const run: RunDto = {
+      id: runId,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      environmentId: 'env_1',
+      rootRunId: runId,
+      parentRunId: null,
+      subjectType: 'agent_version',
+      subjectVersionId: id,
+      status: 'succeeded',
+      failureClass: null,
+      terminationReason: 'final_answer',
+      initiatorId: 'prn_1',
+      input: input.input,
+      output: { answer: 'Current UTC time is 2026-11-18T12:00:00.000Z.' },
+      usage: { steps: 2, tokensIn: 140, tokensOut: 40, toolCalls: 1 },
+      costMicroUsd: 275,
+      labels: {},
+      lastEventSeq: 3,
+      createdAt: '2026-11-18T12:00:00.000Z',
+      startedAt: '2026-11-18T12:00:00.000Z',
+      endedAt: '2026-11-18T12:00:00.200Z',
+    };
+    runs.push(run);
+    stepsByRun.set(runId, [
+      {
+        id: `${runId}_s1`,
+        runId,
+        seq: 1,
+        type: 'llm_call',
+        status: 'succeeded',
+        attempt: 1,
+        idempotencyKey: 'idem_llm_1',
+        summary: { model: 'mock/react-default' },
+        tokensIn: 140,
+        tokensOut: 40,
+        costMicroUsd: 275,
+        latencyMs: 12,
+        startedAt: '2026-11-18T12:00:00.000Z',
+        endedAt: '2026-11-18T12:00:00.012Z',
+      },
+      {
+        id: `${runId}_s2`,
+        runId,
+        seq: 2,
+        type: 'tool_call',
+        status: 'succeeded',
+        attempt: 1,
+        idempotencyKey: 'idem_tool_2',
+        summary: { toolName: 'current_time', dryRun: Boolean(input.dryRun) },
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 0,
+        latencyMs: 3,
+        startedAt: '2026-11-18T12:00:00.013Z',
+        endedAt: '2026-11-18T12:00:00.016Z',
+      },
+    ]);
+    return run;
+  };
+  client.runs.listUsageLedger = async (runId) => ({
+    data: [
+      {
+        id: 'ul_1',
+        orgId: 'org_1',
+        workspaceId: 'ws_1',
+        projectId: 'prj_1',
+        environmentId: 'env_1',
+        runId,
+        stepSeq: 1,
+        principalId: 'prn_1',
+        category: 'llm_tokens',
+        provider: 'mock',
+        model: 'mock/react-default',
+        tokensIn: 140,
+        tokensOut: 40,
+        cachedTokens: 0,
+        quantity: 180,
+        unit: 'tokens',
+        costMicroUsd: 275,
+        ts: '2026-11-18T12:00:00.012Z',
+      },
+    ],
+    totalCostMicroUsd: 275,
+  });
+
   return client;
 }
 
@@ -403,6 +622,53 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(elapsedMs).toBeLessThan(1000);
     const renderedTreeItems = screen.getAllByRole('treeitem');
     expect(renderedTreeItems.length).toBeLessThan(50);
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 15_000);
+
+  it('creates an agent in Studio, triggers Lethal Trifecta warning, runs Test Playground & passes axe [E0.3-8]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/agents" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Agents Studio' })).toBeTruthy();
+
+    // Open Create Agent dialog and submit
+    const createBtns = screen.getAllByRole('button', { name: '+ Create Agent' });
+    await user.click(createBtns[0]!);
+
+    const nameInput = await screen.findByLabelText('Agent Name (kebab-case)');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'ops-triage-agent');
+    await user.click(screen.getByRole('button', { name: 'Create Agent Draft' }));
+
+    expect(await screen.findByRole('heading', { name: 'ops-triage-agent' })).toBeTruthy();
+
+    // Switch to Tools tab and enable confidential_kb_read + web_fetch + http_request
+    await user.click(screen.getByRole('tab', { name: 'Tools' }));
+    await user.click(screen.getByLabelText('Enable tool confidential_kb_read'));
+    await user.click(screen.getByLabelText('Enable tool web_fetch'));
+    await user.click(screen.getByLabelText('Enable tool http_request'));
+    const alertBanner = await screen.findByRole('alert');
+    expect(alertBanner.textContent).toContain('Lethal Trifecta Warning');
+
+    // Publish version & run in Test Playground
+    await user.click(screen.getByRole('button', { name: 'Publish Version' }));
+    expect(await screen.findByText(/Published v1\.0\.0/)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Test Playground' }));
+    await user.click(screen.getByRole('button', { name: 'Run Test' }));
+
+    const costMatches = await screen.findAllByText(/275 micro-USD/);
+    expect(costMatches.length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText(/Execution Trace \(2 steps · 1 ledger rows\)/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Save as test case' }));
+    expect(await screen.findByText(/Saved eval test cases: 1/)).toBeTruthy();
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

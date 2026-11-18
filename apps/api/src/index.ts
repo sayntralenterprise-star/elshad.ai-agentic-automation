@@ -41,10 +41,26 @@ import {
   type TurnStepInput,
 } from '@elshad/execution';
 import {
+  MockModelProvider,
+  ModelGateway,
+  type MockTurnBehavior,
+  type ModelCapability,
+} from '@elshad/model-kit';
+import {
   InMemoryCache,
   SlidingWindowRateLimiter,
   type Cache,
 } from '@elshad/platform-kit';
+import type { AutonomyLevel } from '@elshad/policy-kit';
+import {
+  InMemoryUsageLedger,
+  diffAgentDefinitions,
+  executeReActAgentRun,
+  validateAgentDefinition,
+  type AgentDefinition,
+  type UsageLedger,
+  type UsageLedgerEntry,
+} from '@elshad/runtime-core';
 import {
   authEventsTotal,
   createLogger,
@@ -57,6 +73,13 @@ import {
   withSpan,
   type PlatformLogger,
 } from '@elshad/telemetry';
+import {
+  InMemoryToolRegistry,
+  ToolContractSchema,
+  ToolGateway,
+  type LethalTrifectaReport,
+  type ToolContract,
+} from '@elshad/tool-kit';
 import {
   InMemoryIamAuditStore,
   type AuthPrincipalContext,
@@ -75,6 +98,9 @@ export interface ApiServerOptions {
   store?: IamAuditStore;
   executionEngine?: ExecutionEngine;
   effectLedger?: EffectLedger;
+  modelGateway?: ModelGateway;
+  toolGateway?: ToolGateway;
+  usageLedger?: UsageLedger;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -116,6 +142,9 @@ export function buildApiServer(opts: ApiServerOptions): {
   app: FastifyInstance;
   store: IamAuditStore;
   executionEngine: ExecutionEngine;
+  modelGateway: ModelGateway;
+  toolGateway: ToolGateway;
+  usageLedger: UsageLedger;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -136,6 +165,46 @@ export function buildApiServer(opts: ApiServerOptions): {
   const executionEngine: ExecutionEngine =
     opts.executionEngine ?? new InMemoryExecutionEngine({ clock, idGen });
   const effectLedger: EffectLedger = opts.effectLedger ?? new InMemoryEffectLedger(clock);
+  const toolRegistry = new InMemoryToolRegistry(true);
+  const toolGateway = opts.toolGateway ?? new ToolGateway({ registry: toolRegistry, clock });
+  const modelGateway =
+    opts.modelGateway ??
+    (() => {
+      const gw = new ModelGateway({ clock });
+      gw.registerProvider(new MockModelProvider());
+      return gw;
+    })();
+  const usageLedger: UsageLedger = opts.usageLedger ?? new InMemoryUsageLedger();
+
+  interface StoredAgentVersion {
+    id: string;
+    agent_id: string;
+    semver: string;
+    state: 'draft' | 'published' | 'retired';
+    definition: AgentDefinition;
+    definition_hash: string;
+    message: string | null;
+    lethal_trifecta: LethalTrifectaReport;
+    created_by: string;
+    created_at: string;
+  }
+
+  interface StoredAgent {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    project_id: string;
+    name: string;
+    description: string | null;
+    status: 'draft' | 'active' | 'deprecated' | 'archived';
+    current_version_id: string | null;
+    versions: StoredAgentVersion[];
+    created_at: string;
+    updated_at: string;
+  }
+
+  const agentsById = new Map<string, StoredAgent>();
+  const workspaceCustomTools = new Map<string, ToolContract[]>();
 
   const rateLimitCfg = {
     public: opts.rateLimits?.public ?? 1200,
@@ -1179,5 +1248,626 @@ export function buildApiServer(opts: ApiServerOptions): {
     return responseBody;
   });
 
-  return { app, store, executionEngine };
+  // ---------- S0.3 Model Gateway, Tool Registry, Agents & Usage Ledger ----------
+
+  function getRegistryForWorkspace(orgId: string, workspaceId: string): InMemoryToolRegistry {
+    const reg = new InMemoryToolRegistry(false);
+    for (const c of toolGateway.registry.list()) {
+      reg.register(c, toolGateway.registry.getExecutor(c.name));
+    }
+    for (const c of workspaceCustomTools.get(`${orgId}::${workspaceId}`) ?? []) {
+      reg.register(c);
+    }
+    return reg;
+  }
+
+  function formatModelCap(c: ModelCapability): Record<string, unknown> {
+    return {
+      id: c.id,
+      provider: c.provider,
+      display_name: c.displayName,
+      tier: c.tier,
+      context_window_tokens: c.contextWindowTokens,
+      max_output_tokens: c.maxOutputTokens,
+      supports_tools: c.supportsTools,
+      supports_structured_output: c.supportsStructuredOutput,
+      supports_vision: c.supportsVision,
+      supports_streaming: c.supportsStreaming,
+      pricing_per_million: {
+        input_micro_usd: c.pricing.inputPerMillionMicroUsd,
+        output_micro_usd: c.pricing.outputPerMillionMicroUsd,
+        cached_input_micro_usd: c.pricing.cachedInputPerMillionMicroUsd,
+      },
+      status: c.status,
+    };
+  }
+
+  function formatLethalTrifecta(r: LethalTrifectaReport): Record<string, unknown> {
+    return {
+      detected: r.detected,
+      has_private_data: r.hasPrivateData,
+      has_untrusted_input: r.hasUntrustedInput,
+      has_external_comms: r.hasExternalComms,
+      reasons: [...r.reasons],
+    };
+  }
+
+  function formatAgentVersion(v: StoredAgentVersion): Record<string, unknown> {
+    return {
+      id: v.id,
+      agent_id: v.agent_id,
+      semver: v.semver,
+      state: v.state,
+      definition: v.definition,
+      definition_hash: v.definition_hash,
+      message: v.message,
+      lethal_trifecta: formatLethalTrifecta(v.lethal_trifecta),
+      created_by: v.created_by,
+      created_at: v.created_at,
+    };
+  }
+
+  function formatAgent(agent: StoredAgent): Record<string, unknown> {
+    const published =
+      agent.versions.find((v) => v.id === agent.current_version_id) ??
+      [...agent.versions].reverse().find((v) => v.state === 'published') ??
+      null;
+    const draft = [...agent.versions].reverse().find((v) => v.state === 'draft') ?? null;
+    return {
+      id: agent.id,
+      org_id: agent.org_id,
+      workspace_id: agent.workspace_id,
+      project_id: agent.project_id,
+      name: agent.name,
+      description: agent.description,
+      status: agent.status,
+      current_version_id: agent.current_version_id,
+      draft_version: draft ? formatAgentVersion(draft) : null,
+      published_version: published ? formatAgentVersion(published) : null,
+      versions: agent.versions.map(formatAgentVersion),
+      created_at: agent.created_at,
+      updated_at: agent.updated_at,
+    };
+  }
+
+  function formatUsageEntry(u: UsageLedgerEntry): Record<string, unknown> {
+    return {
+      id: u.id,
+      org_id: u.orgId,
+      workspace_id: u.workspaceId,
+      project_id: u.projectId,
+      environment_id: u.environmentId,
+      run_id: u.runId,
+      step_seq: u.stepSeq,
+      principal_id: u.principalId,
+      category: u.category,
+      provider: u.provider,
+      model: u.model,
+      tokens_in: u.tokensIn,
+      tokens_out: u.tokensOut,
+      cached_tokens: u.cachedTokens,
+      quantity: u.quantity,
+      unit: u.unit,
+      cost_micro_usd: u.costMicroUsd as number,
+      ts: u.ts,
+    };
+  }
+
+  function parseProjectMaxAutonomy(raw?: string): AutonomyLevel {
+    if (raw === 'L0') return 0;
+    if (raw === 'L1') return 1;
+    if (raw === 'L2') return 2;
+    if (raw === 'L4') return 4;
+    return 3;
+  }
+
+  app.get('/api/v1/models', async () => {
+    return { data: modelGateway.registry.list().map(formatModelCap) };
+  });
+
+  app.get('/api/v1/tools', async (req) => {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = state.workspaceId ?? auth.context.workspaces[0]?.id ?? 'ws_default';
+    return { data: getRegistryForWorkspace(orgId, workspaceId).list() };
+  });
+
+  app.post('/api/v1/tools', async (req, reply) => {
+    const routePath = '/api/v1/tools';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<ToolContract & { workspace_id?: string }>(
+      contract.bodySchema,
+      req.body,
+    );
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    if (!workspaceId) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible workspace found.');
+    }
+
+    const parsedContract = ToolContractSchema.parse(body);
+    const key = `${orgId}::${workspaceId}`;
+    const existing = (workspaceCustomTools.get(key) ?? []).filter(
+      (t) => t.name !== parsedContract.name,
+    );
+    existing.push(parsedContract);
+    workspaceCustomTools.set(key, existing);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'tool.create',
+      resource: { type: 'tool', name: parsedContract.name, workspace_id: workspaceId },
+      decision: 'allow',
+    });
+
+    await persistIdempotencyIfNeeded(req, routePath, 201, parsedContract);
+    return reply.status(201).send(parsedContract);
+  });
+
+  app.get('/api/v1/agents', async (req) => {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const wsFilter = state.workspaceId;
+    const data = [...agentsById.values()]
+      .filter((a) => a.org_id === orgId && (!wsFilter || a.workspace_id === wsFilter))
+      .map(formatAgent);
+    return { data };
+  });
+
+  app.post('/api/v1/agents', async (req, reply) => {
+    const routePath = '/api/v1/agents';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      project_id?: string;
+      definition: AgentDefinition;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    if (!workspaceId) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible workspace found.');
+    }
+    const ws = await store.getWorkspace(orgId, workspaceId);
+    if (!ws) {
+      throw new PlatformError('RES_NOT_FOUND', `Workspace ${workspaceId} not found.`);
+    }
+
+    const projects = await store.listProjects(orgId, workspaceId);
+    const project = body.project_id
+      ? projects.find((p) => p.id === body.project_id)
+      : projects[0];
+    if (!project) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible project found in workspace.');
+    }
+
+    const duplicate = [...agentsById.values()].find(
+      (a) =>
+        a.org_id === orgId && a.project_id === project.id && a.name === body.definition.name,
+    );
+    if (duplicate) {
+      throw new PlatformError(
+        'RES_CONFLICT',
+        `Agent "${body.definition.name}" already exists in project.`,
+      );
+    }
+
+    const reg = getRegistryForWorkspace(orgId, workspaceId);
+    const validated = validateAgentDefinition(body.definition, {
+      toolRegistry: reg,
+      projectMaxAutonomy: parseProjectMaxAutonomy(project.max_autonomy_level),
+    });
+
+    const nowIso = clock.now().toISOString();
+    const agentId = idGen.uuidv7();
+    const versionId = idGen.uuidv7();
+    const agent: StoredAgent = {
+      id: agentId,
+      org_id: orgId,
+      workspace_id: workspaceId,
+      project_id: project.id,
+      name: validated.definition.name,
+      description: validated.definition.description ?? null,
+      status: 'draft',
+      current_version_id: null,
+      versions: [
+        {
+          id: versionId,
+          agent_id: agentId,
+          semver: validated.definition.version,
+          state: 'draft',
+          definition: validated.definition,
+          definition_hash: validated.definitionHash,
+          message: 'Initial draft',
+          lethal_trifecta: validated.lethalTrifecta,
+          created_by: auth.subject.principalId,
+          created_at: nowIso,
+        },
+      ],
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    agentsById.set(agentId, agent);
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'agent.create',
+      resource: { type: 'agent', id: agentId, name: agent.name, workspace_id: workspaceId },
+      decision: 'allow',
+    });
+
+    const formatted = formatAgent(agent);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.get('/api/v1/agents/:id', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+    const agent = agentsById.get(id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${id} not found.`);
+    }
+    return formatAgent(agent);
+  });
+
+  app.patch('/api/v1/agents/:id', async (req) => {
+    const routePath = '/api/v1/agents/{id}';
+    const contract = findContract('PATCH', routePath)!;
+    const body = validateWithSchema<{ definition: AgentDefinition; message?: string }>(
+      contract.bodySchema,
+      req.body,
+    );
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const agent = agentsById.get(id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${id} not found.`);
+    }
+
+    const projects = await store.listProjects(orgId, agent.workspace_id);
+    const project = projects.find((p) => p.id === agent.project_id);
+    const reg = getRegistryForWorkspace(orgId, agent.workspace_id);
+    const validated = validateAgentDefinition(body.definition, {
+      toolRegistry: reg,
+      projectMaxAutonomy: parseProjectMaxAutonomy(project?.max_autonomy_level),
+    });
+
+    const nowIso = clock.now().toISOString();
+    const existingSameSemver = agent.versions.find(
+      (v) => v.semver === validated.definition.version,
+    );
+
+    if (existingSameSemver) {
+      if (existingSameSemver.state !== 'draft') {
+        throw new PlatformError(
+          'RES_CONFLICT',
+          `Version ${existingSameSemver.semver} is already ${existingSameSemver.state}; increment semver for a new draft.`,
+        );
+      }
+      existingSameSemver.definition = validated.definition;
+      existingSameSemver.definition_hash = validated.definitionHash;
+      existingSameSemver.lethal_trifecta = validated.lethalTrifecta;
+      existingSameSemver.message = body.message ?? existingSameSemver.message;
+    } else {
+      agent.versions.push({
+        id: idGen.uuidv7(),
+        agent_id: agent.id,
+        semver: validated.definition.version,
+        state: 'draft',
+        definition: validated.definition,
+        definition_hash: validated.definitionHash,
+        message: body.message ?? 'Draft update',
+        lethal_trifecta: validated.lethalTrifecta,
+        created_by: auth.subject.principalId,
+        created_at: nowIso,
+      });
+    }
+
+    agent.description = validated.definition.description ?? agent.description;
+    agent.updated_at = nowIso;
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'agent.update_draft',
+      resource: { type: 'agent', id: agent.id, semver: validated.definition.version },
+      decision: 'allow',
+    });
+
+    return formatAgent(agent);
+  });
+
+  app.post('/api/v1/agents/:id/versions/:vid/publish', async (req) => {
+    const routePath = '/api/v1/agents/{id}/versions/{vid}/publish';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ message?: string; allow_l4_autonomy?: boolean }>(
+      contract.bodySchema,
+      req.body ?? {},
+    );
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id, vid } = req.params as { id: string; vid: string };
+
+    const agent = agentsById.get(id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${id} not found.`);
+    }
+
+    const target = agent.versions.find((v) => v.id === vid);
+    if (!target) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent version ${vid} not found.`);
+    }
+    if (target.state !== 'draft') {
+      throw new PlatformError(
+        'RES_CONFLICT',
+        `Version ${target.semver} cannot be published from state "${target.state}".`,
+      );
+    }
+
+    const projects = await store.listProjects(orgId, agent.workspace_id);
+    const project = projects.find((p) => p.id === agent.project_id);
+    const reg = getRegistryForWorkspace(orgId, agent.workspace_id);
+    validateAgentDefinition(target.definition, {
+      toolRegistry: reg,
+      projectMaxAutonomy: parseProjectMaxAutonomy(project?.max_autonomy_level),
+      allowL4Autonomy: body.allow_l4_autonomy,
+    });
+
+    for (const v of agent.versions) {
+      if (v.state === 'published') {
+        v.state = 'retired';
+      }
+    }
+    target.state = 'published';
+    if (body.message) {
+      target.message = body.message;
+    }
+    agent.current_version_id = target.id;
+    agent.status = 'active';
+    agent.updated_at = clock.now().toISOString();
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'agent.publish',
+      resource: { type: 'agent_version', id: target.id, agent_id: agent.id, semver: target.semver },
+      decision: 'allow',
+    });
+
+    const formatted = formatAgent(agent);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.get('/api/v1/agents/:id/diff', async (req) => {
+    const contract = findContract('GET', '/api/v1/agents/{id}/diff')!;
+    const query = validateWithSchema<{ from: string; to: string }>(contract.querySchema, req.query);
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const agent = agentsById.get(id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${id} not found.`);
+    }
+
+    const fromVer = agent.versions.find((v) => v.id === query.from || v.semver === query.from);
+    const toVer = agent.versions.find((v) => v.id === query.to || v.semver === query.to);
+    if (!fromVer || !toVer) {
+      throw new PlatformError('RES_NOT_FOUND', 'Requested agent versions for diff were not found.');
+    }
+
+    const diff = diffAgentDefinitions(fromVer.definition, toVer.definition);
+    return {
+      from_version: diff.fromVersion,
+      to_version: diff.toVersion,
+      breaking: diff.breaking,
+      changes: diff.changes,
+    };
+  });
+
+  app.post('/api/v1/agents/:id/runs', async (req, reply) => {
+    const routePath = '/api/v1/agents/{id}/runs';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      environment?: EnvironmentKind;
+      version_id?: string;
+      input: string | Record<string, unknown>;
+      dry_run: boolean;
+      mock_turns?: Array<Record<string, unknown>>;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const agent = agentsById.get(id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${id} not found.`);
+    }
+
+    const targetVersion =
+      (body.version_id
+        ? agent.versions.find((v) => v.id === body.version_id)
+        : agent.versions.find((v) => v.id === agent.current_version_id) ??
+          [...agent.versions].reverse()[0]) ?? null;
+    if (!targetVersion) {
+      throw new PlatformError('RES_NOT_FOUND', 'No runnable agent version found.');
+    }
+
+    const envs = await store.listEnvironments(orgId, agent.workspace_id);
+    const envKind = body.environment ?? state.environment ?? 'dev';
+    const env = envs.find((e) => e.kind === envKind) ?? envs[0];
+    if (!env) {
+      throw new PlatformError('RES_NOT_FOUND', `Environment ${envKind} not found.`);
+    }
+
+    const tenantCtx = buildTenantContext(req, agent.workspace_id, env.id);
+    const runRecord = await executionEngine.createRun(tenantCtx, {
+      workspaceId: agent.workspace_id,
+      environmentId: env.id,
+      subjectType: 'agent_version',
+      subjectVersionId: targetVersion.id,
+      input: body.input,
+      limits: {
+        max_steps: targetVersion.definition.limits.max_steps,
+        max_tokens: targetVersion.definition.limits.max_tokens,
+        max_wall_time_ms: targetVersion.definition.limits.max_wall_time_ms,
+        max_cost_micro_usd: targetVersion.definition.limits.max_cost_micro_usd,
+      },
+      labels: {
+        agent_name: agent.name,
+        agent_version: targetVersion.semver,
+        dry_run: String(body.dry_run),
+      },
+      queue: 'default',
+      priority: 5,
+    });
+
+    const leases = await executionEngine.claim('api-agent-runtime', ['default'], 5);
+    const lease = leases.find((l) => l.runId === runRecord.id);
+
+    const reg = getRegistryForWorkspace(orgId, agent.workspace_id);
+    const reqToolGateway = new ToolGateway({ registry: reg, clock });
+
+    let effectiveModelGateway = modelGateway;
+    if (body.mock_turns && body.mock_turns.length > 0) {
+      const transientGw = new ModelGateway({ clock });
+      const transientMock = new MockModelProvider();
+      transientMock.enqueue(...(body.mock_turns as unknown as MockTurnBehavior[]));
+      transientGw.registerProvider(transientMock);
+      effectiveModelGateway = transientGw;
+    }
+
+    const userPrompt =
+      typeof body.input === 'string'
+        ? body.input
+        : String(body.input['prompt'] ?? body.input['query'] ?? JSON.stringify(body.input));
+
+    const projects = await store.listProjects(orgId, agent.workspace_id);
+    const project = projects.find((p) => p.id === agent.project_id);
+
+    const execResult = await executeReActAgentRun(
+      {
+        ctx: tenantCtx,
+        projectId: agent.project_id,
+        environmentId: env.id,
+        runId: runRecord.id,
+        agentId: agent.id,
+        definition: targetVersion.definition,
+        userInput: userPrompt,
+        dryRun: body.dry_run,
+      },
+      {
+        modelGateway: effectiveModelGateway,
+        toolGateway: reqToolGateway,
+        usageLedger,
+        clock,
+        idGen,
+        projectMaxAutonomy: parseProjectMaxAutonomy(project?.max_autonomy_level),
+      },
+    );
+
+    if (lease) {
+      if (execResult.steps.length > 0) {
+        const turnSteps: TurnStepInput[] = execResult.steps.map((s) => ({
+          seq: s.seq,
+          type: s.type,
+          agentId: s.agent_id,
+          status: s.status,
+          attempt: s.attempt,
+          summary: s.summary,
+          input: s.input,
+          output: s.output,
+          model: s.model,
+          tokensIn: s.tokens_in,
+          tokensOut: s.tokens_out,
+          costMicroUsd: s.cost_micro_usd,
+          latencyMs: s.latency_ms,
+          error: s.error,
+        }));
+        await executionEngine.commitTurn(lease, {
+          steps: turnSteps,
+          checkpoint: {
+            seq: execResult.steps.length,
+            cursor: execResult.steps.length,
+            scratchpad: {},
+            messages: [],
+            blackboard: {},
+            engine_version: '1.0.0',
+          },
+          milestone: true,
+        });
+      }
+
+      if (
+        execResult.status === 'succeeded' ||
+        execResult.status === 'timed_out' ||
+        execResult.status === 'budget_exceeded' ||
+        execResult.status === 'policy_blocked'
+      ) {
+        await executionEngine.complete(lease, {
+          status: execResult.status,
+          terminationReason: execResult.terminationReason,
+          output: execResult.output ?? (execResult.error ? { error: execResult.error } : null),
+        });
+      } else if (execResult.status === 'waiting_input' || execResult.status === 'waiting_approval') {
+        await executionEngine.suspend(lease, {
+          kind: execResult.status === 'waiting_input' ? 'input' : 'approval',
+          reason:
+            typeof execResult.output === 'object' && execResult.output !== null
+              ? JSON.stringify(execResult.output)
+              : execResult.terminationReason,
+        });
+      } else {
+        await executionEngine.retryOrFail(
+          lease,
+          new PlatformError('SYS_INTERNAL', execResult.error?.message ?? 'Agent run failed', {
+            code: execResult.error?.code,
+          }),
+        );
+      }
+    }
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'agent.run',
+      resource: {
+        type: 'run',
+        id: runRecord.id,
+        agent_id: agent.id,
+        version: targetVersion.semver,
+        dry_run: body.dry_run,
+      },
+      decision: 'allow',
+    });
+
+    const latestRun = (await executionEngine.getRun(orgId, runRecord.id)) ?? runRecord;
+    await persistIdempotencyIfNeeded(req, routePath, 201, latestRun);
+    return reply.status(201).send(latestRun);
+  });
+
+  app.get('/api/v1/runs/:id/usage-ledger', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+    const run = await executionEngine.getRun(orgId, id);
+    if (!run) {
+      throw new PlatformError('RES_NOT_FOUND', `Run ${id} not found.`);
+    }
+    const entries = await usageLedger.listByRun(orgId, id);
+    const total = (await usageLedger.sumRunCostMicroUsd(orgId, id)) as number;
+    return {
+      data: entries.map(formatUsageEntry),
+      total_cost_micro_usd: total,
+    };
+  });
+
+  return { app, store, executionEngine, modelGateway, toolGateway, usageLedger };
 }

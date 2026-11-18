@@ -280,6 +280,121 @@ export interface EffectLedgerTable {
   created_at: Date;
 }
 
+export interface AgentsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  owner_id: string;
+  status: 'draft' | 'active' | 'deprecated' | 'archived';
+  risk_tier: string;
+  identity_principal_id: string | null;
+  current_version_id: string | null;
+  labels: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface AgentVersionsTable {
+  id: string;
+  org_id: string;
+  agent_id: string;
+  semver: string;
+  state: 'draft' | 'published' | 'retired';
+  definition: Record<string, unknown>;
+  definition_hash: string;
+  message: string | null;
+  eval_status: string;
+  created_by: string;
+  created_at: Date;
+}
+
+export interface ToolsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  side_effect_class: 'read' | 'write' | 'destructive' | 'external_comms';
+  is_builtin: boolean;
+  current_version_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ToolVersionsTable {
+  id: string;
+  org_id: string;
+  tool_id: string;
+  semver: string;
+  state: 'draft' | 'published' | 'retired';
+  contract: Record<string, unknown>;
+  contract_hash: string;
+  created_by: string | null;
+  created_at: Date;
+}
+
+export interface ToolGrantsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  agent_id: string;
+  tool_id: string;
+  scope: Record<string, unknown>;
+  approval: 'never' | 'auto' | 'always';
+  created_by: string | null;
+  created_at: Date;
+}
+
+export interface ModelProviderKeysTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  provider: string;
+  label: string;
+  secret_ref: string;
+  base_url: string | null;
+  status: 'active' | 'disabled';
+  created_by: string | null;
+  created_at: Date;
+}
+
+export interface WorkspaceModelMappingsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  tier: 'fast' | 'standard' | 'reasoning' | 'embedding';
+  primary_provider: string;
+  primary_model: string;
+  fallback_chain: Array<Record<string, unknown>>;
+  routing_rules: Array<Record<string, unknown>>;
+  updated_at: Date;
+}
+
+export interface UsageLedgerTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string;
+  environment_id: string;
+  run_id: string;
+  step_seq: number | null;
+  principal_id: string | null;
+  category: 'llm_tokens' | 'tool_call' | 'sandbox_ms' | 'storage';
+  provider: string | null;
+  model: string | null;
+  tokens_in: number;
+  tokens_out: number;
+  cached_tokens: number;
+  quantity: number;
+  unit: string;
+  cost_micro_usd: number;
+  ts: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -294,6 +409,8 @@ export interface Database {
   idempotency_keys: IdempotencyKeysTable;
   outbox: OutboxTable;
   audit_events: AuditEventsTable;
+  agents: AgentsTable;
+  agent_versions: AgentVersionsTable;
   runs: RunsTable;
   run_events: RunEventsTable;
   run_steps: RunStepsTable;
@@ -301,6 +418,12 @@ export interface Database {
   work_items: WorkItemsTable;
   timers: TimersTable;
   effect_ledger: EffectLedgerTable;
+  tools: ToolsTable;
+  tool_versions: ToolVersionsTable;
+  tool_grants: ToolGrantsTable;
+  model_provider_keys: ModelProviderKeysTable;
+  workspace_model_mappings: WorkspaceModelMappingsTable;
+  usage_ledger: UsageLedgerTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {
@@ -487,6 +610,7 @@ export const DEFAULT_PARTITIONED_TABLES: readonly PartitionedTable[] = [
   'runs',
   'run_events',
   'run_steps',
+  'usage_ledger',
 ];
 
 const SAFE_TABLE_IDENT = /^[a-z_][a-z0-9_]*$/;

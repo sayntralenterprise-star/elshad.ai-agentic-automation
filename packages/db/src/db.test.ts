@@ -70,6 +70,23 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(sql03).toContain('run_steps_2026_11');
     expect(sql03).toContain('work_items_serialize_uidx');
     expect(sql03).toContain('last_event_seq');
+
+    const sql04 = readFileSync(join(migrationsDir, '0004_s03_first_agent.sql'), 'utf8');
+    const s03Tables = [
+      'tools',
+      'tool_versions',
+      'tool_grants',
+      'model_provider_keys',
+      'workspace_model_mappings',
+      'usage_ledger',
+    ];
+    for (const tbl of s03Tables) {
+      expect(sql04).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql04).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql04).toContain('usage_ledger_2026_11');
+    expect(sql04).toContain('usage_ledger_2027_02');
+    expect(sql04).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {
@@ -77,17 +94,25 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(dec.partitionName).toBe('runs_2026_12');
     expect(dec.sql).toContain("FROM ('2026-12-01 00:00:00Z') TO ('2027-01-01 00:00:00Z')");
 
-    const planned = planUpcomingPartitions(['runs', 'run_events'], new Date('2026-11-18T00:00:00Z'), 3);
-    expect(planned).toHaveLength(8);
+    const planned = planUpcomingPartitions(
+      ['runs', 'run_events', 'usage_ledger'],
+      new Date('2026-11-18T00:00:00Z'),
+      3,
+    );
+    expect(planned).toHaveLength(12);
     expect(planned.map((p) => p.partitionName)).toEqual([
       'runs_2026_11',
       'run_events_2026_11',
+      'usage_ledger_2026_11',
       'runs_2026_12',
       'run_events_2026_12',
+      'usage_ledger_2026_12',
       'runs_2027_01',
       'run_events_2027_01',
+      'usage_ledger_2027_01',
       'runs_2027_02',
       'run_events_2027_02',
+      'usage_ledger_2027_02',
     ]);
   });
 
