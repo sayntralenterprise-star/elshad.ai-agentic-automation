@@ -12,6 +12,8 @@ import {
   type ApprovalDto,
   type BudgetDto,
   type CitationChipDto,
+  type ConnectionDto,
+  type ConnectorManifestDto,
   type ConversationSessionDto,
   type CustomToolDto,
   type DatasetDto,
@@ -1942,6 +1944,126 @@ function createMockClient(
     return structuredClone(updated);
   };
 
+  const connectorsCatalog: ConnectorManifestDto[] = [
+    {
+      id: 'slack',
+      name: 'Slack',
+      version: '1.0.0',
+      category: 'communication',
+      description: 'Post interactive approval messages and read channels.',
+      authTypes: ['oauth2', 'api_key'],
+      scopes: ['channels:read', 'chat:write'],
+      egressDomains: ['api.slack.com'],
+      actions: [
+        {
+          name: 'chat.postMessage',
+          description: 'Post a message to Slack',
+          sideEffectClass: 'write',
+          idempotent: true,
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          rateLimitPerMinute: 60,
+          pagination: 'none',
+        },
+      ],
+      triggers: [
+        {
+          name: 'message.posted',
+          type: 'webhook',
+          description: 'Slack message event',
+          verifyHeader: 'X-Slack-Signature',
+        },
+      ],
+    },
+    {
+      id: 'stripe',
+      name: 'Stripe',
+      version: '1.0.0',
+      category: 'payments',
+      description: 'Inspect invoices and issue refunds via Stripe.',
+      authTypes: ['api_key'],
+      scopes: ['charges:read', 'refunds:write'],
+      egressDomains: ['api.stripe.com'],
+      actions: [
+        {
+          name: 'invoices.retrieve',
+          description: 'Retrieve a Stripe invoice',
+          sideEffectClass: 'read',
+          idempotent: true,
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          rateLimitPerMinute: 120,
+          pagination: 'cursor',
+        },
+      ],
+      triggers: [],
+    },
+  ];
+  const connectionsList: ConnectionDto[] = [];
+
+  client.connectors.list = async () => structuredClone(connectorsCatalog);
+  client.connectors.get = async (id) => structuredClone(connectorsCatalog.find((c) => c.id === id)!);
+  client.connectors.runContractTest = async (id) => ({
+    connectorId: id,
+    passed: true,
+    totalFixtures: 2,
+    passedFixtures: 2,
+    details: [
+      { fixtureName: `${id}_read_fixture`, action: 'read', passed: true, errors: [] },
+      { fixtureName: `${id}_write_fixture`, action: 'write', passed: true, errors: [] },
+    ],
+  });
+
+  client.connections.list = async () => structuredClone(connectionsList);
+  client.connections.create = async (input) => {
+    const conn: ConnectionDto = {
+      id: `conn_${connectionsList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      connectorId: input.connectorId,
+      name: input.name,
+      authType: input.authType,
+      sharingMode: input.sharingMode ?? 'shared',
+      ownerId: 'prn_1',
+      environmentMapping: input.environmentMapping ?? { dev: 'conn_1' },
+      secretVersion: 1,
+      secretMasked: 'Stored (v1, updated by prn_1 on 2026-11-19)',
+      scopes: input.scopes ?? ['chat:write'],
+      allowedAgents: input.allowedAgents ?? ['*'],
+      egressDomains: input.egressDomains ?? ['api.slack.com'],
+      status: 'healthy',
+      lastTestedAt: null,
+      lastError: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    connectionsList.push(conn);
+    return structuredClone(conn);
+  };
+  client.connections.test = async (id) => {
+    const idx = connectionsList.findIndex((c) => c.id === id);
+    const updated = { ...connectionsList[idx]!, lastTestedAt: new Date().toISOString() };
+    connectionsList[idx] = updated;
+    return {
+      connection: structuredClone(updated),
+      healthy: true,
+      scopesGranted: updated.scopes,
+      latencyMs: 14,
+    };
+  };
+  client.connections.rotateSecret = async (id) => {
+    const idx = connectionsList.findIndex((c) => c.id === id);
+    const existing = connectionsList[idx]!;
+    const updated = {
+      ...existing,
+      secretVersion: existing.secretVersion + 1,
+      secretMasked: `Stored (v${existing.secretVersion + 1}, updated by prn_1 on 2026-11-19)`,
+    };
+    connectionsList[idx] = updated;
+    return structuredClone(updated);
+  };
+
   return client;
 }
 
@@ -2556,6 +2678,49 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
 
     await user.click(screen.getByRole('button', { name: 'Approve' }));
     expect(await screen.findByText('approved')).toBeTruthy();
+
+    // Accessibility check
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Connectors Gallery & Connections: runs contract tests, creates write-only connection, tests health, rotates secret & passes axe [E1.6, FR-INT-1..6, P.4]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/tools" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /Tools, OpenAPI & MCP Registry/i })).toBeTruthy();
+
+    // 1. Switch to Connectors Gallery & run contract test
+    await user.click(screen.getByRole('tab', { name: /Connectors Gallery/i }));
+    expect(await screen.findByText('Slack')).toBeTruthy();
+    expect(await screen.findByText('Stripe')).toBeTruthy();
+
+    const contractBtns = screen.getAllByRole('button', { name: 'Contract Test' });
+    await user.click(contractBtns[0]!);
+    expect(await screen.findByText(/Contract: 2\/2 passed/i)).toBeTruthy();
+
+    // 2. Click Connect on Slack -> switches to Connections tab with Slack pre-selected
+    const connectBtns = screen.getAllByRole('button', { name: 'Connect' });
+    await user.click(connectBtns[0]!);
+    expect(await screen.findByRole('heading', { name: /New Write-Only Connection/i })).toBeTruthy();
+
+    const secretInput = screen.getByLabelText(/Credential \/ API Key \(Write-Only\)/i);
+    await user.type(secretInput, 'xoxb-secret-slack-token-123');
+    await user.click(screen.getByRole('button', { name: 'Save Connection' }));
+
+    expect((await screen.findAllByText(/Stored \(v1, updated by prn_1/i)).length).toBeGreaterThan(0);
+
+    // 3. Test Connection & Replace Secret
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
+    expect(await screen.findByText(/health: Healthy/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Replace' }));
+    expect(await screen.findByText(/Rotated secret for .* to v2/i)).toBeTruthy();
 
     // Accessibility check
     const axeRes = await axe.run(container, {

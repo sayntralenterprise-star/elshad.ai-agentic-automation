@@ -954,6 +954,43 @@ export interface McpServerToolsTable {
   updated_at: Date;
 }
 
+export interface ConnectionsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  connector_id: string;
+  name: string;
+  auth_type: 'api_key' | 'oauth2' | 'basic' | 'jwt' | 'mtls' | 'aws_sigv4' | 'custom';
+  sharing_mode: 'personal' | 'shared';
+  owner_id: string;
+  environment_mapping: Record<string, unknown>;
+  secret_ref: string;
+  secret_version: number;
+  scopes: string[];
+  allowed_agents: string[];
+  egress_domains: string[];
+  status: 'healthy' | 'expiring' | 'failed' | 'pending_approval';
+  last_tested_at: Date | null;
+  last_error: string | null;
+  expires_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ConnectionUsageLogsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  connection_id: string;
+  run_id: string | null;
+  agent_id: string | null;
+  action_name: string;
+  environment: 'dev' | 'staging' | 'prod';
+  status: 'succeeded' | 'failed' | 'blocked_egress';
+  latency_ms: number;
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -1016,6 +1053,8 @@ export interface Database {
   custom_tools: CustomToolsTable;
   mcp_servers: McpServersTable;
   mcp_server_tools: McpServerToolsTable;
+  connections: ConnectionsTable;
+  connection_usage_logs: ConnectionUsageLogsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

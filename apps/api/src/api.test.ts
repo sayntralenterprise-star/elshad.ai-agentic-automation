@@ -2646,4 +2646,114 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.6 Connectors Wave 1: lists D17 catalog, passes contract tests, stores write-only connections, and blocks egress violations [E1.6, FR-INT-1..6]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's16-admin@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    const { app } = buildApiServer({ config, store });
+    const orgId = [...store.orgs.keys()][0]!;
+    const ws = [...store.workspaces.values()].find((w) => w.org_id === orgId)!;
+
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's16-admin@elshad.local', password: 'Password123!' },
+    });
+    expect(loginRes.statusCode).toBe(200);
+    const cookie = parseCookie(loginRes.headers['set-cookie']);
+    const csrf = loginRes.json().csrf_token as string;
+    const authHeaders = { cookie, 'x-csrf-token': csrf, 'x-workspace-id': ws.id };
+
+    // 1. List D17 Wave 1 Connectors
+    const connectorsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/connectors',
+      headers: authHeaders,
+    });
+    expect(connectorsRes.statusCode).toBe(200);
+    expect(connectorsRes.json().items).toHaveLength(16);
+
+    // 2. Run Contract Test against recorded fixtures
+    const contractRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/connectors/stripe/contract-test',
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-contract-1' },
+      payload: {},
+    });
+    expect(contractRes.statusCode).toBe(200);
+    expect(contractRes.json().passed).toBe(true);
+    expect(contractRes.json().total_fixtures).toBeGreaterThanOrEqual(2);
+
+    // 3. Create write-only connection (secret never returned)
+    const rawStripeKey = 'sk_live_super_secret_stripe_key_999';
+    const createConnRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/connections',
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-conn-create-1' },
+      payload: {
+        connector_id: 'stripe',
+        name: 'Production Stripe Billing',
+        auth_type: 'api_key',
+        secret_value: rawStripeKey,
+        sharing_mode: 'shared',
+        environment_mapping: { dev: 'conn_dev', prod: 'conn_prod' },
+      },
+    });
+    expect(createConnRes.statusCode).toBe(201);
+    const connJson = createConnRes.json();
+    expect(JSON.stringify(connJson)).not.toContain(rawStripeKey);
+    expect(connJson.secret_masked).toContain('Stored (v1');
+
+    // 4. Test connection health & rotate secret
+    const testConnRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/connections/${connJson.id}/test`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-conn-test-1' },
+      payload: {},
+    });
+    expect(testConnRes.statusCode).toBe(200);
+    expect(testConnRes.json().healthy).toBe(true);
+
+    const rotateRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/connections/${connJson.id}/rotate`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-conn-rotate-1' },
+      payload: { secret_value: 'sk_live_rotated_key_888' },
+    });
+    expect(rotateRes.statusCode).toBe(200);
+    expect(rotateRes.json().secret_version).toBe(2);
+    expect(JSON.stringify(rotateRes.json())).not.toContain('sk_live_rotated_key_888');
+
+    // 5. Execute action against allowed domain & block egress violation
+    const okActionRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/connections/${connJson.id}/actions/invoices.retrieve`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-act-1' },
+      payload: {
+        args: { invoice_id: 'in_123' },
+        target_domain: 'api.stripe.com',
+      },
+    });
+    expect(okActionRes.statusCode).toBe(200);
+    expect(okActionRes.json().untrusted_source).toBe(true);
+
+    const blockedActionRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/connections/${connJson.id}/actions/invoices.retrieve`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's16-act-2' },
+      payload: {
+        args: { invoice_id: 'in_123' },
+        target_domain: 'evil-proxy.attacker.com',
+      },
+    });
+    expect(blockedActionRes.statusCode).toBe(403);
+    expect(blockedActionRes.json().error.code).toBe('TOOL_SSRF_BLOCKED');
+
+    await app.close();
+  });
 });

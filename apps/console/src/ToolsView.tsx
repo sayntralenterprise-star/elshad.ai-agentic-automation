@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { type EnvironmentKind } from '@elshad/domain';
 import {
+  type ConnectionDto,
+  type ConnectorContractTestResultDto,
+  type ConnectorManifestDto,
   type CustomToolDto,
   type McpServerDto,
   type McpServerToolDto,
@@ -12,9 +15,12 @@ import { StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import {
   CheckCircle2,
   FileJson,
+  KeyRound,
   Play,
+  Plug,
   Plus,
   RefreshCw,
+  RotateCw,
   Search,
   Server,
   ShieldAlert,
@@ -28,7 +34,7 @@ export interface ToolsViewProps {
   environment: EnvironmentKind;
 }
 
-type ToolsTab = 'registry' | 'mcp' | 'openapi';
+type ToolsTab = 'registry' | 'connectors' | 'connections' | 'mcp' | 'openapi';
 
 const SAMPLE_OPENAPI_SPEC = JSON.stringify(
   {
@@ -116,18 +122,36 @@ export function ToolsView({ client }: ToolsViewProps) {
   const [mcpEndpoint, setMcpEndpoint] = useState('https://mcp.example.com/github');
   const [registeringMcp, setRegisteringMcp] = useState(false);
 
+  // S1.6 Connectors & Connections state
+  const [connectors, setConnectors] = useState<ConnectorManifestDto[]>([]);
+  const [connections, setConnections] = useState<ConnectionDto[]>([]);
+  const [connectorSearch, setConnectorSearch] = useState('');
+  const [contractResults, setContractResults] = useState<
+    Record<string, ConnectorContractTestResultDto>
+  >({});
+  const [connConnectorId, setConnConnectorId] = useState('slack');
+  const [connName, setConnName] = useState('Production Slack Workspace');
+  const [connAuthType, setConnAuthType] = useState<ConnectionDto['authType']>('oauth2');
+  const [connSecret, setConnSecret] = useState('');
+  const [connSharing, setConnSharing] = useState<ConnectionDto['sharingMode']>('shared');
+  const [creatingConnection, setCreatingConnection] = useState(false);
+
   const loadAll = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const [builtins, customs, servers] = await Promise.all([
+      const [builtins, customs, servers, connectorList, connectionList] = await Promise.all([
         client.tools.list().catch(() => [] as ToolContractDto[]),
         client.tools.listCustom().catch(() => [] as CustomToolDto[]),
         client.mcp.listServers().catch(() => [] as McpServerDto[]),
+        client.connectors.list().catch(() => [] as ConnectorManifestDto[]),
+        client.connections.list().catch(() => [] as ConnectionDto[]),
       ]);
       setBuiltinTools(builtins);
       setCustomTools(customs);
       setMcpServers(servers);
+      setConnectors(connectorList);
+      setConnections(connectionList);
 
       const toolsMap: Record<string, McpServerToolDto[]> = {};
       for (const srv of servers) {
@@ -261,6 +285,79 @@ export function ToolsView({ client }: ToolsViewProps) {
     }
   };
 
+  const filteredConnectors = useMemo(() => {
+    if (!connectorSearch.trim()) return connectors;
+    const q = connectorSearch.toLowerCase();
+    return connectors.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.category.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q),
+    );
+  }, [connectors, connectorSearch]);
+
+  const handleRunContractTest = async (connectorId: string) => {
+    try {
+      setError(null);
+      const res = await client.connectors.runContractTest(connectorId);
+      setContractResults((prev) => ({ ...prev, [connectorId]: res }));
+      setNotice(
+        `Connector "${connectorId}" contract tests: ${res.passedFixtures}/${res.totalFixtures} fixtures passed.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleCreateConnection = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      setCreatingConnection(true);
+      setError(null);
+      const created = await client.connections.create({
+        connectorId: connConnectorId,
+        name: connName,
+        authType: connAuthType,
+        secretValue: connSecret || 'demo-write-only-secret',
+        sharingMode: connSharing,
+      });
+      setConnSecret('');
+      await loadAll();
+      setNotice(`Created connection "${created.name}" (${created.secretMasked}).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingConnection(false);
+    }
+  };
+
+  const handleTestConnection = async (connectionId: string) => {
+    try {
+      setError(null);
+      const res = await client.connections.test(connectionId);
+      await loadAll();
+      setNotice(
+        `Connection "${res.connection.name}" health: ${res.healthy ? 'Healthy' : 'Failed'} (${res.latencyMs}ms).`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleRotateConnectionSecret = async (connectionId: string) => {
+    try {
+      setError(null);
+      const rotated = await client.connections.rotateSecret(
+        connectionId,
+        `rotated_${Date.now()}`,
+      );
+      await loadAll();
+      setNotice(`Rotated secret for "${rotated.name}" to v${rotated.secretVersion}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div style={{ display: 'grid', gap: '20px' }}>
       {/* Header */}
@@ -337,6 +434,8 @@ export function ToolsView({ client }: ToolsViewProps) {
         {(
           [
             { id: 'registry', label: `Tool Registry (${combinedRegistry.length})` },
+            { id: 'connectors', label: `Connectors Gallery (${connectors.length})` },
+            { id: 'connections', label: `Connections (${connections.length})` },
             { id: 'openapi', label: 'Import OpenAPI 3.1' },
             { id: 'mcp', label: `MCP Servers (${mcpServers.length})` },
           ] as const
@@ -956,6 +1055,399 @@ export function ToolsView({ client }: ToolsViewProps) {
               <strong>FR-TL-1 Security Gate:</strong> Remote MCP tools start in <code>pending_approval</code> and are blocked from agent runtime invocation until explicitly approved.
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Tab 4: D17 Wave 1 Connectors Gallery */}
+      {activeTab === 'connectors' && (
+        <div role="tabpanel" aria-label="Connectors Gallery" style={{ display: 'grid', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Plug size={18} aria-hidden="true" style={{ color: 'var(--brand)' }} />
+            <h2 style={{ margin: 0, fontSize: '16px' }}>Wave 1 (D17) Connectors Gallery</h2>
+            <StatusChip label={`${connectors.length} First-Party Connectors`} tone="info" />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Search size={16} aria-hidden="true" style={{ color: 'var(--text-secondary)' }} />
+            <label htmlFor="connector-search-input" style={{ position: 'absolute', left: '-9999px' }}>
+              Search connectors
+            </label>
+            <input
+              id="connector-search-input"
+              type="text"
+              value={connectorSearch}
+              onChange={(e) => setConnectorSearch(e.target.value)}
+              placeholder="Filter connectors by name or category (e.g., slack, stripe, crm)..."
+              style={{
+                flex: 1,
+                minHeight: '34px',
+                padding: '6px 10px',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--surface)',
+                color: 'var(--text-primary)',
+              }}
+            />
+          </div>
+
+          {filteredConnectors.length === 0 ? (
+            <StateView
+              state="empty"
+              title="No matching connectors"
+              description="Clear your search filter to view all Wave 1 connectors."
+            />
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))',
+                gap: '14px',
+              }}
+            >
+              {filteredConnectors.map((conn) => {
+                const contractRes = contractResults[conn.id];
+                return (
+                  <div
+                    key={conn.id}
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '14px',
+                      display: 'grid',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong style={{ fontSize: '15px' }}>{conn.name}</strong>
+                      <StatusChip label={conn.category} tone="neutral" />
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {conn.description}
+                    </div>
+
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Actions: {conn.actions.length} &bull; Triggers: {conn.triggers.length} &bull; Egress:{' '}
+                      <code>{conn.egressDomains[0] ?? '*'}</code>
+                    </div>
+
+                    {contractRes && (
+                      <div style={{ fontSize: '11px' }}>
+                        <StatusChip
+                          label={`Contract: ${contractRes.passedFixtures}/${contractRes.totalFixtures} passed`}
+                          tone={contractRes.passed ? 'success' : 'danger'}
+                        />
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConnConnectorId(conn.id);
+                          setConnName(`${conn.name} Connection`);
+                          setConnAuthType(conn.authTypes[0] ?? 'api_key');
+                          setActiveTab('connections');
+                        }}
+                        style={{
+                          flex: 1,
+                          minHeight: '30px',
+                          padding: '4px 10px',
+                          border: 'none',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'var(--brand)',
+                          color: 'var(--brand-contrast)',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                        }}
+                      >
+                        Connect
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRunContractTest(conn.id)}
+                        style={{
+                          minHeight: '30px',
+                          padding: '4px 10px',
+                          border: '1px solid var(--border)',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'var(--surface-raised)',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                        }}
+                      >
+                        Contract Test
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 5: Write-Only Connections Vault (PRD P.4) */}
+      {activeTab === 'connections' && (
+        <div role="tabpanel" aria-label="Connections" style={{ display: 'grid', gap: '20px' }}>
+          <form
+            onSubmit={(e) => void handleCreateConnection(e)}
+            style={{
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+              display: 'grid',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <KeyRound size={16} aria-hidden="true" style={{ color: 'var(--brand)' }} />
+              <h2 style={{ margin: 0, fontSize: '15px' }}>
+                New Write-Only Connection (FR-INT-3 / PRD P.4)
+              </h2>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '12px',
+              }}
+            >
+              <div>
+                <label htmlFor="conn-connector-select" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  Connector
+                </label>
+                <select
+                  id="conn-connector-select"
+                  value={connConnectorId}
+                  onChange={(e) => setConnConnectorId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    minHeight: '34px',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg)',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {connectors.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                  {connectors.length === 0 && <option value="slack">Slack</option>}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="conn-name-input" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  Connection Name
+                </label>
+                <input
+                  id="conn-name-input"
+                  type="text"
+                  value={connName}
+                  onChange={(e) => setConnName(e.target.value)}
+                  style={{
+                    width: '100%',
+                    minHeight: '34px',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="conn-auth-select" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  Auth Method
+                </label>
+                <select
+                  id="conn-auth-select"
+                  value={connAuthType}
+                  onChange={(e) => setConnAuthType(e.target.value as ConnectionDto['authType'])}
+                  style={{
+                    width: '100%',
+                    minHeight: '34px',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg)',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  <option value="oauth2">OAuth2</option>
+                  <option value="api_key">API Key</option>
+                  <option value="basic">Basic</option>
+                  <option value="jwt">JWT</option>
+                  <option value="aws_sigv4">AWS SigV4</option>
+                  <option value="mtls">mTLS</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="conn-sharing-select" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  Sharing Mode
+                </label>
+                <select
+                  id="conn-sharing-select"
+                  value={connSharing}
+                  onChange={(e) => setConnSharing(e.target.value as ConnectionDto['sharingMode'])}
+                  style={{
+                    width: '100%',
+                    minHeight: '34px',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg)',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  <option value="shared">Shared Service</option>
+                  <option value="personal">Personal</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="conn-secret-input" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  Credential / API Key (Write-Only)
+                </label>
+                <input
+                  id="conn-secret-input"
+                  type="password"
+                  value={connSecret}
+                  onChange={(e) => setConnSecret(e.target.value)}
+                  placeholder="Masked & encrypted on save"
+                  style={{
+                    width: '100%',
+                    minHeight: '34px',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                disabled={creatingConnection}
+                style={{
+                  minHeight: '34px',
+                  padding: '6px 16px',
+                  border: 'none',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--brand)',
+                  color: 'var(--brand-contrast)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {creatingConnection ? 'Saving...' : 'Save Connection'}
+              </button>
+            </div>
+          </form>
+
+          {connections.length === 0 ? (
+            <StateView
+              state="empty"
+              title="No Connections Configured"
+              description="Create a write-only connection above or choose a connector from the Gallery."
+            />
+          ) : (
+            <div
+              style={{
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+                overflowX: 'auto',
+              }}
+            >
+              <table
+                aria-label="Workspace Connections Table"
+                style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}
+              >
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '10px' }}>Connection</th>
+                    <th style={{ padding: '10px' }}>Status</th>
+                    <th style={{ padding: '10px' }}>Secret Vault</th>
+                    <th style={{ padding: '10px' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {connections.map((c) => (
+                    <tr key={c.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '10px' }}>
+                        <div style={{ fontWeight: 600 }}>{c.name}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          {c.connectorId} &bull; {c.authType} &bull; {c.sharingMode}
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px' }}>
+                        <StatusChip
+                          label={c.status}
+                          tone={c.status === 'healthy' ? 'success' : c.status === 'expiring' ? 'warning' : 'danger'}
+                        />
+                      </td>
+                      <td style={{ padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                        {c.secretMasked}
+                      </td>
+                      <td style={{ padding: '10px', display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => void handleTestConnection(c.id)}
+                          style={{
+                            minHeight: '28px',
+                            padding: '4px 10px',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--surface-raised)',
+                            color: 'var(--text-primary)',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                          }}
+                        >
+                          Test Connection
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleRotateConnectionSecret(c.id)}
+                          style={{
+                            minHeight: '28px',
+                            padding: '4px 10px',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--surface-raised)',
+                            color: 'var(--text-primary)',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <RotateCw size={12} aria-hidden="true" />
+                          Replace
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

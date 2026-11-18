@@ -142,13 +142,21 @@ import {
   type PlatformLogger,
 } from '@elshad/telemetry';
 import {
+  ConnectionManager,
   InMemoryToolRegistry,
   McpClientManager,
   ToolContractSchema,
   ToolGateway,
+  WAVE_1_CONNECTORS,
+  getConnectorManifest,
   importOpenApiSpec,
+  runConnectorContractTests,
   sanitizeAndWrapToolResult,
   validateJsonSchema,
+  type ConnectionRecord,
+  type ConnectionSharingMode,
+  type ConnectorAuthType,
+  type ConnectorManifest,
   type LethalTrifectaReport,
   type McpDiscoveryFixtureTool,
   type McpServerRecord,
@@ -6346,6 +6354,264 @@ export function buildApiServer(opts: ApiServerOptions): {
     const response = {
       tool_name: result.toolName,
       dry_run: result.dryRun,
+      valid_args: true,
+      raw_result: result.rawResult,
+      sanitized_text: result.sanitized.sanitizedText,
+      wrapped_observation: result.sanitized.wrappedObservation,
+      untrusted_source: result.sanitized.untrustedSource,
+      injection_suspected: result.sanitized.injectionSuspected,
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  // ---------- S1.6 Connectors Wave 1 (D17 Catalog, Contract Tests & Write-Only Connections) ----------
+
+  const connectionManager = new ConnectionManager();
+
+  const mapConnectorWire = (m: ConnectorManifest) => ({
+    id: m.id,
+    name: m.name,
+    version: m.version,
+    category: m.category,
+    description: m.description,
+    auth_types: [...m.authTypes],
+    scopes: [...m.scopes],
+    egress_domains: [...m.egressDomains],
+    actions: m.actions.map((a) => ({
+      name: a.name,
+      description: a.description,
+      side_effect_class: a.sideEffectClass,
+      idempotent: a.idempotent,
+      input_schema: a.inputSchema,
+      output_schema: a.outputSchema,
+      rate_limit_per_minute: a.rateLimitPerMinute,
+      pagination: a.pagination,
+    })),
+    triggers: m.triggers.map((t) => ({
+      name: t.name,
+      type: t.type,
+      description: t.description,
+      verify_header: t.verifyHeader,
+    })),
+  });
+
+  const mapConnectionWire = (c: ConnectionRecord) => ({
+    id: c.id,
+    org_id: c.orgId,
+    workspace_id: c.workspaceId,
+    connector_id: c.connectorId,
+    name: c.name,
+    auth_type: c.authType,
+    sharing_mode: c.sharingMode,
+    owner_id: c.ownerId,
+    environment_mapping: c.environmentMapping,
+    secret_version: c.secretVersion,
+    secret_masked: c.secretMasked,
+    scopes: [...c.scopes],
+    allowed_agents: [...c.allowedAgents],
+    egress_domains: [...c.egressDomains],
+    status: c.status,
+    last_tested_at: c.lastTestedAt,
+    last_error: c.lastError,
+    expires_at: c.expiresAt,
+    created_at: c.createdAt,
+    updated_at: c.updatedAt,
+  });
+
+  app.get('/api/v1/connectors', async () => {
+    return { items: WAVE_1_CONNECTORS.map(mapConnectorWire) };
+  });
+
+  app.get('/api/v1/connectors/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const manifest = getConnectorManifest(id);
+    return mapConnectorWire(manifest);
+  });
+
+  app.post('/api/v1/connectors/:id/contract-test', async (req, reply) => {
+    const routePath = '/api/v1/connectors/{id}/contract-test';
+    const { id } = req.params as { id: string };
+    const result = runConnectorContractTests(id);
+
+    const response = {
+      connector_id: result.connectorId,
+      passed: result.passed,
+      total_fixtures: result.totalFixtures,
+      passed_fixtures: result.passedFixtures,
+      details: result.details.map((d) => ({
+        fixture_name: d.fixtureName,
+        action: d.action,
+        passed: d.passed,
+        errors: [...d.errors],
+      })),
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  app.get('/api/v1/connections', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+    const items = connectionManager.listConnections({
+      orgId: orgId as OrgId,
+      workspaceId: workspaceId as WorkspaceId | undefined,
+    });
+    return { items: items.map(mapConnectionWire) };
+  });
+
+  app.post('/api/v1/connections', async (req, reply) => {
+    const routePath = '/api/v1/connections';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      connector_id: string;
+      name: string;
+      auth_type: ConnectorAuthType;
+      secret_value: string;
+      sharing_mode: ConnectionSharingMode;
+      environment_mapping?: Record<string, string>;
+      scopes?: string[];
+      allowed_agents?: string[];
+      egress_domains?: string[];
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = ((req.headers['x-workspace-id'] as string) || 'ws_default') as WorkspaceId;
+
+    const created = connectionManager.createConnection(
+      {
+        orgId: orgId as OrgId,
+        workspaceId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      {
+        connectorId: body.connector_id,
+        name: body.name,
+        authType: body.auth_type,
+        secretValue: body.secret_value,
+        sharingMode: body.sharing_mode,
+        environmentMapping: body.environment_mapping as Partial<Record<EnvironmentKind, string>>,
+        scopes: body.scopes,
+        allowedAgents: body.allowed_agents,
+        egressDomains: body.egress_domains,
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'connection.create',
+      resource: { type: 'connection', id: created.id, connector_id: created.connectorId },
+      decision: 'allow',
+      context: { auth_type: created.authType, sharing_mode: created.sharingMode },
+    });
+
+    const wire = mapConnectionWire(created);
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, wire);
+    return wire;
+  });
+
+  app.post('/api/v1/connections/:id/test', async (req, reply) => {
+    const routePath = '/api/v1/connections/{id}/test';
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const result = connectionManager.testConnection({ orgId: orgId as OrgId }, id);
+    const response = {
+      connection: mapConnectionWire(result.connection),
+      healthy: result.healthy,
+      scopes_granted: [...result.scopesGranted],
+      latency_ms: result.latencyMs,
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  app.post('/api/v1/connections/:id/rotate', async (req, reply) => {
+    const routePath = '/api/v1/connections/{id}/rotate';
+    const contract = findContract('POST', routePath)!;
+    const { id } = req.params as { id: string };
+    const body = validateWithSchema<{ secret_value: string }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const updated = connectionManager.rotateSecret(
+      {
+        orgId: orgId as OrgId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      id,
+      body.secret_value,
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'connection.rotate_secret',
+      resource: { type: 'connection', id: updated.id },
+      decision: 'allow',
+      context: { secret_version: updated.secretVersion },
+    });
+
+    const wire = mapConnectionWire(updated);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.post('/api/v1/connections/:id/actions/:action', async (req, reply) => {
+    const routePath = '/api/v1/connections/{id}/actions/{action}';
+    const contract = findContract('POST', routePath)!;
+    const { id, action } = req.params as { id: string; action: string };
+    const body = validateWithSchema<{
+      args: Record<string, unknown>;
+      environment?: EnvironmentKind;
+      agent_id?: string;
+      target_domain?: string;
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = ((req.headers['x-workspace-id'] as string) || 'ws_default') as WorkspaceId;
+
+    const result = connectionManager.executeAction(
+      { orgId: orgId as OrgId, workspaceId },
+      {
+        connectionId: id,
+        action,
+        args: body.args,
+        environment: body.environment,
+        agentId: body.agent_id,
+        targetDomain: body.target_domain,
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'connection.execute_action',
+      resource: { type: 'connection', id, action },
+      decision: 'allow',
+      context: { connector_id: result.connectorId, environment: result.environment },
+    });
+
+    const response = {
+      tool_name: `${result.connectorId}.${result.action}`,
+      dry_run: false,
       valid_args: true,
       raw_result: result.rawResult,
       sanitized_text: result.sanitized.sanitizedText,

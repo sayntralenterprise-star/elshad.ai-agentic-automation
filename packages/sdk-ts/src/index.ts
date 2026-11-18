@@ -1043,6 +1043,76 @@ export interface McpServerToolDto {
   updatedAt: string;
 }
 
+export interface ConnectorManifestDto {
+  id: string;
+  name: string;
+  version: string;
+  category: string;
+  description: string;
+  authTypes: Array<'api_key' | 'oauth2' | 'basic' | 'jwt' | 'mtls' | 'aws_sigv4' | 'custom'>;
+  scopes: string[];
+  egressDomains: string[];
+  actions: Array<{
+    name: string;
+    description: string;
+    sideEffectClass: 'read' | 'write' | 'destructive' | 'external_comms';
+    idempotent: boolean;
+    inputSchema: Record<string, unknown>;
+    outputSchema: Record<string, unknown>;
+    rateLimitPerMinute: number;
+    pagination: 'none' | 'cursor' | 'offset' | 'page';
+  }>;
+  triggers: Array<{
+    name: string;
+    type: 'webhook' | 'polling';
+    description: string;
+    verifyHeader?: string;
+  }>;
+}
+
+export interface ConnectorContractTestResultDto {
+  connectorId: string;
+  passed: boolean;
+  totalFixtures: number;
+  passedFixtures: number;
+  details: Array<{
+    fixtureName: string;
+    action: string;
+    passed: boolean;
+    errors: string[];
+  }>;
+}
+
+export interface ConnectionDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  connectorId: string;
+  name: string;
+  authType: 'api_key' | 'oauth2' | 'basic' | 'jwt' | 'mtls' | 'aws_sigv4' | 'custom';
+  sharingMode: 'personal' | 'shared';
+  ownerId: string;
+  environmentMapping: Record<string, string>;
+  secretVersion: number;
+  secretMasked: string;
+  scopes: string[];
+  allowedAgents: string[];
+  egressDomains: string[];
+  status: 'healthy' | 'expiring' | 'failed' | 'pending_approval';
+  lastTestedAt: string | null;
+  lastError: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectionTestResponseDto {
+  connection: ConnectionDto;
+  healthy: boolean;
+  scopesGranted: string[];
+  latencyMs: number;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -1932,6 +2002,120 @@ export class PlatformClient {
             args: input.args ?? {},
             dry_run: input.dryRun ?? false,
             simulated_raw_result: input.simulatedRawResult,
+          },
+        },
+      );
+      return mapTestToolResult(res);
+    },
+  };
+
+  readonly connectors = {
+    list: async (): Promise<ConnectorManifestDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/connectors',
+      );
+      return res.items.map(mapConnectorManifest);
+    },
+    get: async (id: string): Promise<ConnectorManifestDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/connectors/${encodeURIComponent(id)}`,
+      );
+      return mapConnectorManifest(res);
+    },
+    runContractTest: async (id: string): Promise<ConnectorContractTestResultDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/connectors/${encodeURIComponent(id)}/contract-test`,
+        { idempotencyKey: `conn-contract-${id}-${Date.now()}`, body: {} },
+      );
+      return mapConnectorContractTestResult(res);
+    },
+  };
+
+  readonly connections = {
+    list: async (): Promise<ConnectionDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/connections',
+      );
+      return res.items.map(mapConnection);
+    },
+    create: async (
+      input: {
+        connectorId: string;
+        name: string;
+        authType: ConnectionDto['authType'];
+        secretValue: string;
+        sharingMode?: ConnectionDto['sharingMode'];
+        environmentMapping?: Record<string, string>;
+        scopes?: string[];
+        allowedAgents?: string[];
+        egressDomains?: string[];
+      },
+      idempotencyKey?: string,
+    ): Promise<ConnectionDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/connections', {
+        idempotencyKey: idempotencyKey ?? `conn-create-${Date.now()}`,
+        body: {
+          connector_id: input.connectorId,
+          name: input.name,
+          auth_type: input.authType,
+          secret_value: input.secretValue,
+          sharing_mode: input.sharingMode ?? 'shared',
+          environment_mapping: input.environmentMapping,
+          scopes: input.scopes,
+          allowed_agents: input.allowedAgents,
+          egress_domains: input.egressDomains,
+        },
+      });
+      return mapConnection(res);
+    },
+    test: async (id: string): Promise<ConnectionTestResponseDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/connections/${id}/test`,
+        { idempotencyKey: `conn-test-${id}-${Date.now()}`, body: {} },
+      );
+      return {
+        connection: mapConnection(res.connection as Record<string, unknown>),
+        healthy: Boolean(res.healthy),
+        scopesGranted: Array.isArray(res.scopes_granted) ? (res.scopes_granted as string[]) : [],
+        latencyMs: Number(res.latency_ms ?? 0),
+      };
+    },
+    rotateSecret: async (id: string, secretValue: string): Promise<ConnectionDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/connections/${id}/rotate`,
+        {
+          idempotencyKey: `conn-rotate-${id}-${Date.now()}`,
+          body: { secret_value: secretValue },
+        },
+      );
+      return mapConnection(res);
+    },
+    executeAction: async (
+      id: string,
+      action: string,
+      input: {
+        args?: Record<string, unknown>;
+        environment?: 'dev' | 'staging' | 'prod';
+        agentId?: string;
+        targetDomain?: string;
+      },
+    ): Promise<TestToolResultDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/connections/${id}/actions/${encodeURIComponent(action)}`,
+        {
+          idempotencyKey: `conn-act-${id}-${Date.now()}`,
+          body: {
+            args: input.args ?? {},
+            environment: input.environment,
+            agent_id: input.agentId,
+            target_domain: input.targetDomain,
           },
         },
       );
@@ -4087,6 +4271,7 @@ function mapTestCase(t: Record<string, unknown>): TestCaseDto {
   };
 }
 
+
 function mapGrader(g: Record<string, unknown>): GraderDto {
   return {
     id: String(g.id),
@@ -4188,6 +4373,7 @@ function mapTeam(t: Record<string, unknown>): TeamDto {
   };
 }
 
+
 function mapBlackboard(b: Record<string, unknown>): BlackboardDto {
   return {
     id: String(b.id),
@@ -4270,6 +4456,7 @@ function mapCustomTool(t: Record<string, unknown>): CustomToolDto {
   };
 }
 
+
 function mapTestToolResult(r: Record<string, unknown>): TestToolResultDto {
   return {
     toolName: String(r.tool_name),
@@ -4314,5 +4501,86 @@ function mapMcpServerTool(t: Record<string, unknown>): McpServerToolDto {
     approvedAt: t.approved_at ? String(t.approved_at) : null,
     createdAt: String(t.created_at),
     updatedAt: String(t.updated_at),
+  };
+}
+
+function mapConnectorManifest(c: Record<string, unknown>): ConnectorManifestDto {
+  const actions = Array.isArray(c.actions)
+    ? (c.actions as Record<string, unknown>[]).map((a) => ({
+        name: String(a.name),
+        description: String(a.description ?? ''),
+        sideEffectClass: (a.side_effect_class ?? 'read') as ConnectorManifestDto['actions'][number]['sideEffectClass'],
+        idempotent: Boolean(a.idempotent),
+        inputSchema: (a.input_schema ?? {}) as Record<string, unknown>,
+        outputSchema: (a.output_schema ?? {}) as Record<string, unknown>,
+        rateLimitPerMinute: Number(a.rate_limit_per_minute ?? 60),
+        pagination: (a.pagination ?? 'none') as ConnectorManifestDto['actions'][number]['pagination'],
+      }))
+    : [];
+
+  const triggers = Array.isArray(c.triggers)
+    ? (c.triggers as Record<string, unknown>[]).map((t) => ({
+        name: String(t.name),
+        type: (t.type ?? 'webhook') as 'webhook' | 'polling',
+        description: String(t.description ?? ''),
+        verifyHeader: t.verify_header ? String(t.verify_header) : undefined,
+      }))
+    : [];
+
+  return {
+    id: String(c.id),
+    name: String(c.name),
+    version: String(c.version ?? '1.0.0'),
+    category: String(c.category ?? 'http'),
+    description: String(c.description ?? ''),
+    authTypes: Array.isArray(c.auth_types)
+      ? (c.auth_types as ConnectorManifestDto['authTypes'])
+      : [],
+    scopes: Array.isArray(c.scopes) ? (c.scopes as string[]) : [],
+    egressDomains: Array.isArray(c.egress_domains) ? (c.egress_domains as string[]) : [],
+    actions,
+    triggers,
+  };
+}
+
+function mapConnectorContractTestResult(r: Record<string, unknown>): ConnectorContractTestResultDto {
+  return {
+    connectorId: String(r.connector_id),
+    passed: Boolean(r.passed),
+    totalFixtures: Number(r.total_fixtures ?? 0),
+    passedFixtures: Number(r.passed_fixtures ?? 0),
+    details: Array.isArray(r.details)
+      ? (r.details as Record<string, unknown>[]).map((d) => ({
+          fixtureName: String(d.fixture_name),
+          action: String(d.action),
+          passed: Boolean(d.passed),
+          errors: Array.isArray(d.errors) ? (d.errors as string[]) : [],
+        }))
+      : [],
+  };
+}
+
+function mapConnection(c: Record<string, unknown>): ConnectionDto {
+  return {
+    id: String(c.id),
+    orgId: String(c.org_id),
+    workspaceId: String(c.workspace_id),
+    connectorId: String(c.connector_id),
+    name: String(c.name),
+    authType: c.auth_type as ConnectionDto['authType'],
+    sharingMode: (c.sharing_mode ?? 'shared') as ConnectionDto['sharingMode'],
+    ownerId: String(c.owner_id),
+    environmentMapping: (c.environment_mapping ?? {}) as Record<string, string>,
+    secretVersion: Number(c.secret_version ?? 1),
+    secretMasked: String(c.secret_masked ?? 'Stored (write-only)'),
+    scopes: Array.isArray(c.scopes) ? (c.scopes as string[]) : [],
+    allowedAgents: Array.isArray(c.allowed_agents) ? (c.allowed_agents as string[]) : ['*'],
+    egressDomains: Array.isArray(c.egress_domains) ? (c.egress_domains as string[]) : [],
+    status: (c.status ?? 'healthy') as ConnectionDto['status'],
+    lastTestedAt: c.last_tested_at ? String(c.last_tested_at) : null,
+    lastError: c.last_error ? String(c.last_error) : null,
+    expiresAt: c.expires_at ? String(c.expires_at) : null,
+    createdAt: String(c.created_at),
+    updatedAt: String(c.updated_at),
   };
 }

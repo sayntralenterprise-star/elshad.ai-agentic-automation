@@ -7774,6 +7774,460 @@
           },
           "simulated_raw_result": {}
         }
+      },
+      "ConnectorManifest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "auth_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "api_key",
+                "oauth2",
+                "basic",
+                "jwt",
+                "mtls",
+                "aws_sigv4",
+                "custom"
+              ]
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "egress_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "side_effect_class": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "destructive",
+                    "external_comms"
+                  ]
+                },
+                "idempotent": {
+                  "type": "boolean"
+                },
+                "input_schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "output_schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "rate_limit_per_minute": {
+                  "type": "number"
+                },
+                "pagination": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "cursor",
+                    "offset",
+                    "page"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "side_effect_class",
+                "idempotent",
+                "input_schema",
+                "output_schema",
+                "rate_limit_per_minute",
+                "pagination"
+              ]
+            }
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "webhook",
+                    "polling"
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                },
+                "verify_header": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "description"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "category",
+          "description",
+          "auth_types",
+          "scopes",
+          "egress_domains",
+          "actions",
+          "triggers"
+        ]
+      },
+      "ConnectorContractTestResult": {
+        "type": "object",
+        "properties": {
+          "connector_id": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "total_fixtures": {
+            "type": "number"
+          },
+          "passed_fixtures": {
+            "type": "number"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fixture_name": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "fixture_name",
+                "action",
+                "passed",
+                "errors"
+              ]
+            }
+          }
+        },
+        "required": [
+          "connector_id",
+          "passed",
+          "total_fixtures",
+          "passed_fixtures",
+          "details"
+        ]
+      },
+      "Connection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "connector_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "auth_type": {
+            "type": "string",
+            "enum": [
+              "api_key",
+              "oauth2",
+              "basic",
+              "jwt",
+              "mtls",
+              "aws_sigv4",
+              "custom"
+            ]
+          },
+          "sharing_mode": {
+            "type": "string",
+            "enum": [
+              "personal",
+              "shared"
+            ]
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "environment_mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "secret_version": {
+            "type": "number"
+          },
+          "secret_masked": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "egress_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "expiring",
+              "failed",
+              "pending_approval"
+            ]
+          },
+          "last_tested_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "connector_id",
+          "name",
+          "auth_type",
+          "sharing_mode",
+          "owner_id",
+          "environment_mapping",
+          "secret_version",
+          "secret_masked",
+          "scopes",
+          "allowed_agents",
+          "egress_domains",
+          "status",
+          "last_tested_at",
+          "last_error",
+          "expires_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateConnectionRequest": {
+        "type": "object",
+        "properties": {
+          "connector_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "auth_type": {
+            "type": "string",
+            "enum": [
+              "api_key",
+              "oauth2",
+              "basic",
+              "jwt",
+              "mtls",
+              "aws_sigv4",
+              "custom"
+            ]
+          },
+          "secret_value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sharing_mode": {
+            "type": "string",
+            "enum": [
+              "personal",
+              "shared"
+            ],
+            "default": "shared"
+          },
+          "environment_mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "egress_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "connector_id",
+          "name",
+          "auth_type",
+          "secret_value"
+        ]
+      },
+      "ConnectionTestResponse": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/Connection"
+          },
+          "healthy": {
+            "type": "boolean"
+          },
+          "scopes_granted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "latency_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "connection",
+          "healthy",
+          "scopes_granted",
+          "latency_ms"
+        ]
+      },
+      "RotateConnectionSecretRequest": {
+        "type": "object",
+        "properties": {
+          "secret_value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "secret_value"
+        ]
+      },
+      "ExecuteConnectionActionRequest": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "target_domain": {
+            "type": "string"
+          }
+        }
       }
     },
     "parameters": {}
@@ -14799,6 +15253,427 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/InvokeMcpToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestToolResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connectors": {
+      "get": {
+        "operationId": "connectors.list",
+        "summary": "List Wave 1 (D17) Connector SDK manifests (FR-INT-1, FR-INT-6)",
+        "tags": [
+          "Connectors"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConnectorManifest"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connectors/{id}": {
+      "get": {
+        "operationId": "connectors.get",
+        "summary": "Get a specific connector manifest, actions, and triggers",
+        "tags": [
+          "Connectors"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorManifest"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connectors/{id}/contract-test": {
+      "post": {
+        "operationId": "connectors.test_contract",
+        "summary": "Run connector contract tests against recorded fixtures (D.2)",
+        "tags": [
+          "Connectors"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorContractTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections": {
+      "get": {
+        "operationId": "connections.list",
+        "summary": "List workspace connections with write-only masked secrets (FR-INT-3)",
+        "tags": [
+          "Connections"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Connection"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "connections.create",
+        "summary": "Create a new connection with write-only secret storage & env mapping (FR-INT-2..4)",
+        "tags": [
+          "Connections"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/test": {
+      "post": {
+        "operationId": "connections.test",
+        "summary": "Test connection health, granted scopes, and latency (P.4)",
+        "tags": [
+          "Connections"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/rotate": {
+      "post": {
+        "operationId": "connections.rotate_secret",
+        "summary": "Rotate/replace write-only connection secret (FR-INT-3, P.4)",
+        "tags": [
+          "Connections"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateConnectionSecretRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/actions/{action}": {
+      "post": {
+        "operationId": "connections.execute_action",
+        "summary": "Execute a connector action with egress allowlist & credential injection (FR-INT-3..5)",
+        "tags": [
+          "Connections"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "action",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteConnectionActionRequest"
               }
             }
           }

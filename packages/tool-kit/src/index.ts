@@ -958,3 +958,4 @@ export function computeContractHash(contract: ToolContract): string {
 export type { SideEffectClass };
 export * from './openapi-importer.js';
 export * from './mcp-client.js';
+export * from './connectors.js';

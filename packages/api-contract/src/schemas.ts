@@ -2196,3 +2196,120 @@ export const InvokeMcpToolRequestSchema = z
     simulated_raw_result: z.unknown().optional(),
   })
   .openapi('InvokeMcpToolRequest');
+
+// ---------- S1.6 Connectors Wave 1 (Connector SDK, D17 Catalog & Write-Only Connections) ----------
+
+export const ConnectorActionSpecWireSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']),
+  idempotent: z.boolean(),
+  input_schema: z.record(z.string(), z.unknown()),
+  output_schema: z.record(z.string(), z.unknown()),
+  rate_limit_per_minute: z.number(),
+  pagination: z.enum(['none', 'cursor', 'offset', 'page']),
+});
+
+export const ConnectorTriggerSpecWireSchema = z.object({
+  name: z.string(),
+  type: z.enum(['webhook', 'polling']),
+  description: z.string(),
+  verify_header: z.string().optional(),
+});
+
+export const ConnectorManifestWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    version: z.string(),
+    category: z.string(),
+    description: z.string(),
+    auth_types: z.array(
+      z.enum(['api_key', 'oauth2', 'basic', 'jwt', 'mtls', 'aws_sigv4', 'custom']),
+    ),
+    scopes: z.array(z.string()),
+    egress_domains: z.array(z.string()),
+    actions: z.array(ConnectorActionSpecWireSchema),
+    triggers: z.array(ConnectorTriggerSpecWireSchema),
+  })
+  .openapi('ConnectorManifest');
+
+export const ConnectorContractTestResultWireSchema = z
+  .object({
+    connector_id: z.string(),
+    passed: z.boolean(),
+    total_fixtures: z.number(),
+    passed_fixtures: z.number(),
+    details: z.array(
+      z.object({
+        fixture_name: z.string(),
+        action: z.string(),
+        passed: z.boolean(),
+        errors: z.array(z.string()),
+      }),
+    ),
+  })
+  .openapi('ConnectorContractTestResult');
+
+export const ConnectionWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    connector_id: z.string(),
+    name: z.string(),
+    auth_type: z.enum(['api_key', 'oauth2', 'basic', 'jwt', 'mtls', 'aws_sigv4', 'custom']),
+    sharing_mode: z.enum(['personal', 'shared']),
+    owner_id: z.string(),
+    environment_mapping: z.record(z.string(), z.string()),
+    secret_version: z.number(),
+    secret_masked: z.string(),
+    scopes: z.array(z.string()),
+    allowed_agents: z.array(z.string()),
+    egress_domains: z.array(z.string()),
+    status: z.enum(['healthy', 'expiring', 'failed', 'pending_approval']),
+    last_tested_at: z.string().nullable(),
+    last_error: z.string().nullable(),
+    expires_at: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Connection');
+
+export const CreateConnectionRequestSchema = z
+  .object({
+    connector_id: z.string().min(1),
+    name: z.string().min(1).max(120),
+    auth_type: z.enum(['api_key', 'oauth2', 'basic', 'jwt', 'mtls', 'aws_sigv4', 'custom']),
+    secret_value: z.string().min(1),
+    sharing_mode: z.enum(['personal', 'shared']).default('shared'),
+    environment_mapping: z.record(z.string(), z.string()).optional(),
+    scopes: z.array(z.string()).optional(),
+    allowed_agents: z.array(z.string()).optional(),
+    egress_domains: z.array(z.string()).optional(),
+  })
+  .openapi('CreateConnectionRequest');
+
+export const RotateConnectionSecretRequestSchema = z
+  .object({
+    secret_value: z.string().min(1),
+  })
+  .openapi('RotateConnectionSecretRequest');
+
+export const ConnectionTestResponseSchema = z
+  .object({
+    connection: ConnectionWireSchema,
+    healthy: z.boolean(),
+    scopes_granted: z.array(z.string()),
+    latency_ms: z.number(),
+  })
+  .openapi('ConnectionTestResponse');
+
+export const ExecuteConnectionActionRequestSchema = z
+  .object({
+    args: z.record(z.string(), z.unknown()).default({}),
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    agent_id: z.string().optional(),
+    target_domain: z.string().optional(),
+  })
+  .openapi('ExecuteConnectionActionRequest');

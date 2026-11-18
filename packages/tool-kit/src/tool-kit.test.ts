@@ -8,12 +8,15 @@ import {
   type WorkspaceId,
 } from '@elshad/domain';
 import {
+  ConnectionManager,
   McpClientManager,
   SandboxRunner,
   ToolGateway,
+  WAVE_1_CONNECTORS,
   assertSafeOutboundUrl,
   detectLethalTrifecta,
   importOpenApiSpec,
+  runConnectorContractTests,
   sanitizeAndWrapToolResult,
   type ToolContract,
 } from './index.js';
@@ -333,5 +336,73 @@ describe('@elshad/tool-kit security, SSRF, sandbox, injection & dry-run [E0.3-5,
       expect(sanitized.wrappedObservation).toContain('[SECURITY NOTICE:');
       expect(sanitized.wrappedObservation).toContain('injection_suspected="true"');
     }
+  });
+
+  it('passes contract tests against recorded fixtures for all 16 D17 Wave 1 connectors [E1.6, FR-INT-1, FR-INT-6, D17]', () => {
+    expect(WAVE_1_CONNECTORS).toHaveLength(16);
+    for (const connector of WAVE_1_CONNECTORS) {
+      const report = runConnectorContractTests(connector.id);
+      expect(report.passed).toBe(true);
+      expect(report.totalFixtures).toBeGreaterThanOrEqual(2);
+      expect(report.passedFixtures).toBe(report.totalFixtures);
+    }
+  });
+
+  it('enforces write-only secrets, rotation, agent allowlists, and egress domain controls on connections [E1.6, FR-INT-2..5]', () => {
+    const mgr = new ConnectionManager();
+    const rawSecret = 'xoxb-secret-slack-token-123456';
+    const conn = mgr.createConnection(ctx, {
+      connectorId: 'slack',
+      name: 'Ops Slack Workspace',
+      authType: 'oauth2',
+      secretValue: rawSecret,
+      allowedAgents: ['agt_triage'],
+    });
+
+    // Write-only secret: never exposed in record
+    expect(JSON.stringify(conn)).not.toContain(rawSecret);
+    expect(conn.secretMasked).toContain('Stored (v1');
+    expect(conn.secretVersion).toBe(1);
+
+    // Health check succeeds
+    const health = mgr.testConnection(ctx, conn.id);
+    expect(health.healthy).toBe(true);
+    expect(health.scopesGranted).toContain('chat:write');
+
+    // Secret rotation bumps version
+    const rotated = mgr.rotateSecret(ctx, conn.id, 'xoxb-rotated-token-999999');
+    expect(rotated.secretVersion).toBe(2);
+    expect(JSON.stringify(rotated)).not.toContain('999999');
+
+    // Allowed agent executes against allowed domain
+    const okRes = mgr.executeAction(ctx, {
+      connectionId: conn.id,
+      action: 'chat.postMessage',
+      args: { text: 'Deployment succeeded' },
+      agentId: 'agt_triage',
+      targetDomain: 'api.slack.com',
+    });
+    expect(okRes.sanitized.provenance).toBe('untrusted_external');
+
+    // Unauthorized agent blocked
+    expect(() =>
+      mgr.executeAction(ctx, {
+        connectionId: conn.id,
+        action: 'chat.postMessage',
+        args: { text: 'hi' },
+        agentId: 'agt_rogue',
+      }),
+    ).toThrowError(/not authorized/);
+
+    // Egress violation blocked
+    expect(() =>
+      mgr.executeAction(ctx, {
+        connectionId: conn.id,
+        action: 'chat.postMessage',
+        args: { text: 'hi' },
+        agentId: 'agt_triage',
+        targetDomain: 'evil-exfil.example.org',
+      }),
+    ).toThrowError(/egress allowlist/);
   });
 });
