@@ -1539,3 +1539,191 @@ export const EvidencePackWireSchema = z
     digest_sha256: z.string(),
   })
   .openapi('EvidencePack');
+
+// ---------- S1.1 Human-in-the-Loop Approvals & Notifications ----------
+
+export const ApprovalTargetWireSchema = z.object({
+  type: z.enum(['role', 'user']),
+  id: z.string().min(1),
+});
+
+export const ApprovalPayloadWireSchema = z
+  .object({
+    title: z.string().min(1),
+    summary: z.string().min(1),
+    proposed_action: z.object({
+      tool: z.string().optional(),
+      args: z.record(z.string(), z.unknown()).default({}),
+    }),
+    diff: z
+      .object({
+        before: z.record(z.string(), z.unknown()),
+        after: z.record(z.string(), z.unknown()),
+      })
+      .optional(),
+    risk: z.enum(['low', 'medium', 'high']).default('medium'),
+    amount: z
+      .object({
+        value: z.number(),
+        currency: z.string(),
+      })
+      .optional(),
+    evidence: z
+      .array(
+        z.object({
+          type: z.string(),
+          step_id: z.string().optional(),
+          doc_id: z.string().optional(),
+          summary: z.string().optional(),
+        }),
+      )
+      .default([]),
+    confidence: z.number().nullable().optional(),
+    policy_reason: z.string().optional(),
+    edit_schema: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('ApprovalPayload');
+
+export const ApprovalDecisionWireSchema = z
+  .object({
+    id: z.string(),
+    approval_id: z.string(),
+    org_id: z.string(),
+    decided_by: z.string(),
+    decision: z.enum([
+      'approve',
+      'reject',
+      'approve_with_edit',
+      'request_info',
+      'provide_info',
+      'delegate',
+    ]),
+    reason: z.string().nullable(),
+    edited_payload: z.record(z.string(), z.unknown()).nullable(),
+    channel: z.enum(['console', 'slack', 'email', 'api']),
+    created_at: z.string(),
+  })
+  .openapi('ApprovalDecision');
+
+export const ApprovalWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    run_id: z.string(),
+    step_id: z.string(),
+    type: z.enum([
+      'tool_call',
+      'promotion',
+      'write_grant',
+      'policy_enforce',
+      'workflow_gate',
+      'custom',
+    ]),
+    status: z.enum(['pending', 'approved', 'rejected', 'expired', 'cancelled', 'info_requested']),
+    payload: ApprovalPayloadWireSchema,
+    requested_from: z.array(ApprovalTargetWireSchema),
+    required_decisions: z.number().int(),
+    separation_of_duties: z.boolean(),
+    initiated_by: z.string(),
+    delegated_to: z.string().nullable(),
+    expires_at: z.string().nullable(),
+    on_timeout: z.enum(['reject', 'escalate', 'approve']),
+    auto_approve_on_timeout: z.boolean(),
+    escalated_at: z.string().nullable(),
+    snoozed_until: z.string().nullable(),
+    info_request_question: z.string().nullable(),
+    info_request_answer: z.string().nullable(),
+    allowed_actions: z.array(
+      z.enum(['approve', 'reject', 'approve_with_edit', 'request_info']),
+    ),
+    decisions: z.array(ApprovalDecisionWireSchema),
+    created_at: z.string(),
+    decided_at: z.string().nullable(),
+  })
+  .openapi('Approval');
+
+export const CreateApprovalRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    run_id: z.string().min(1),
+    step_id: z.string().min(1),
+    type: z
+      .enum(['tool_call', 'promotion', 'write_grant', 'policy_enforce', 'workflow_gate', 'custom'])
+      .default('tool_call'),
+    payload: ApprovalPayloadWireSchema,
+    requested_from: z.array(ApprovalTargetWireSchema).optional(),
+    required_decisions: z.number().int().min(1).max(10).default(1),
+    separation_of_duties: z.boolean().default(true),
+    ttl_ms: z.number().int().min(1000).optional(),
+    on_timeout: z.enum(['reject', 'escalate', 'approve']).default('escalate'),
+    auto_approve_on_timeout: z.boolean().default(false),
+    escalation: z
+      .array(
+        z.object({
+          after_ms: z.number().int().min(1000),
+          to: ApprovalTargetWireSchema,
+        }),
+      )
+      .optional(),
+  })
+  .openapi('CreateApprovalRequest');
+
+export const DecideApprovalRequestSchema = z
+  .object({
+    decision: z.enum(['approve', 'reject', 'approve_with_edit']),
+    reason: z.string().max(1000).optional(),
+    edited_payload: z.record(z.string(), z.unknown()).optional(),
+    channel: z.enum(['console', 'slack', 'email', 'api']).default('console'),
+    confirm_keyword: z.string().optional(),
+  })
+  .openapi('DecideApprovalRequest');
+
+export const RequestApprovalInfoSchema = z
+  .object({
+    question: z.string().min(3).max(1000),
+  })
+  .openapi('RequestApprovalInfoRequest');
+
+export const ProvideApprovalInfoSchema = z
+  .object({
+    answer: z.string().min(1).max(2000),
+  })
+  .openapi('ProvideApprovalInfoRequest');
+
+export const DelegateApprovalRequestSchema = z
+  .object({
+    delegate_to_principal_id: z.string().min(1),
+  })
+  .openapi('DelegateApprovalRequest');
+
+export const SnoozeApprovalRequestSchema = z
+  .object({
+    snooze_until: z.string().min(1),
+  })
+  .openapi('SnoozeApprovalRequest');
+
+export const SlackApprovalActionRequestSchema = z
+  .object({
+    token: z.string().min(1),
+    actor_id: z.string().min(1),
+    reason: z.string().optional(),
+    confirm_keyword: z.string().optional(),
+  })
+  .openapi('SlackApprovalActionRequest');
+
+export const NotificationWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string().nullable(),
+    approval_id: z.string().nullable(),
+    channel: z.enum(['slack', 'email', 'in_app', 'webhook']),
+    recipient: z.string(),
+    subject: z.string(),
+    body: z.string(),
+    action_links: z.record(z.string(), z.unknown()),
+    status: z.enum(['pending', 'sent', 'failed']),
+    created_at: z.string(),
+  })
+  .openapi('Notification');

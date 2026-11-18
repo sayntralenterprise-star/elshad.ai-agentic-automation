@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -92,6 +92,7 @@ import {
   type SideEffectClass,
 } from '@elshad/policy-kit';
 import {
+  ApprovalService,
   BudgetManager,
   InMemoryUsageLedger,
   KillSwitchService,
@@ -99,12 +100,18 @@ import {
   executeReActAgentRun,
   validateAgentDefinition,
   type AgentDefinition,
+  type ApprovalChannel,
+  type ApprovalRecord,
+  type ApprovalStatus,
+  type ApprovalTimeoutAction,
+  type ApprovalType,
   type BudgetActionOnBreach,
   type BudgetPeriod,
   type BudgetRecord,
   type BudgetScopeType,
   type KillSwitchRecord,
   type KillSwitchScopeType,
+  type NotificationRecord,
   type UsageLedger,
   type UsageLedgerEntry,
 } from '@elshad/runtime-core';
@@ -168,6 +175,8 @@ export interface ApiServerOptions {
   secretsProvider?: SecretsProvider;
   budgetManager?: BudgetManager;
   killSwitchService?: KillSwitchService;
+  approvalService?: ApprovalService;
+  slackSigningSecret?: string;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -219,6 +228,7 @@ export function buildApiServer(opts: ApiServerOptions): {
   secretsProvider: SecretsProvider;
   budgetManager: BudgetManager;
   killSwitchService: KillSwitchService;
+  approvalService: ApprovalService;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -253,6 +263,15 @@ export function buildApiServer(opts: ApiServerOptions): {
     opts.secretsProvider ?? new EnvelopeSecretsProvider(opts.config.PLATFORM_MASTER_KEY, clock);
   const budgetManager = opts.budgetManager ?? new BudgetManager({ clock, idGen });
   const killSwitchService = opts.killSwitchService ?? new KillSwitchService({ clock, idGen });
+  const slackSigningSecret = opts.slackSigningSecret ?? 'dev-slack-approval-secret';
+  const approvalService =
+    opts.approvalService ??
+    new ApprovalService({
+      clock,
+      idGen,
+      executionEngine,
+      signingSecret: slackSigningSecret,
+    });
   const modelGateway =
     opts.modelGateway ??
     (() => {
@@ -2158,8 +2177,46 @@ export function buildApiServer(opts: ApiServerOptions): {
           output: execResult.output ?? (execResult.error ? { error: execResult.error } : null),
         });
       } else if (execResult.status === 'waiting_input' || execResult.status === 'waiting_approval') {
+        let approvalRef: string | undefined;
+        if (execResult.status === 'waiting_approval') {
+          const pendingOut =
+            typeof execResult.output === 'object' && execResult.output !== null
+              ? (execResult.output as Record<string, unknown>)
+              : {};
+          const pendingTool = String(pendingOut['pending_tool'] ?? 'tool_call');
+          const pendingArgs =
+            typeof pendingOut['arguments'] === 'object' && pendingOut['arguments'] !== null
+              ? (pendingOut['arguments'] as Record<string, unknown>)
+              : {};
+          const reason = String(pendingOut['reason'] ?? 'Policy requires human approval');
+          const lastStep = execResult.steps[execResult.steps.length - 1];
+          const createdApr = approvalService.createApproval(tenantCtx, {
+            workspaceId: agent.workspace_id,
+            runId: runRecord.id,
+            stepId: lastStep?.id ?? idGen.uuidv7(),
+            type: 'tool_call',
+            payload: {
+              title: `Approve ${pendingTool} on agent ${agent.name}`,
+              summary: reason,
+              proposedAction: { tool: pendingTool, args: pendingArgs },
+              diff: { before: {}, after: pendingArgs },
+              risk: 'medium',
+              evidence: [
+                {
+                  type: 'agent_run',
+                  stepId: lastStep?.id,
+                  summary: `Run ${runRecord.id} paused at step ${lastStep?.seq ?? 0}`,
+                },
+              ],
+              confidence: execResult.confidence ?? null,
+              policyReason: reason,
+            },
+          });
+          approvalRef = createdApr.approval.id;
+        }
         await executionEngine.suspend(lease, {
           kind: execResult.status === 'waiting_input' ? 'input' : 'approval',
+          ref: approvalRef,
           reason:
             typeof execResult.output === 'object' && execResult.output !== null
               ? JSON.stringify(execResult.output)
@@ -4476,6 +4533,375 @@ export function buildApiServer(opts: ApiServerOptions): {
     return reply.status(201).send(pack);
   });
 
+  // ---------- S1.1 Human-in-the-Loop Approvals & Notifications ----------
+
+  function formatApprovalWire(a: ApprovalRecord) {
+    return {
+      id: a.id,
+      org_id: a.orgId,
+      workspace_id: a.workspaceId,
+      run_id: a.runId,
+      step_id: a.stepId,
+      type: a.type,
+      status: a.status,
+      payload: {
+        title: a.payload.title,
+        summary: a.payload.summary,
+        proposed_action: {
+          ...(a.payload.proposedAction.tool ? { tool: a.payload.proposedAction.tool } : {}),
+          args: a.payload.proposedAction.args,
+        },
+        ...(a.payload.diff ? { diff: a.payload.diff } : {}),
+        risk: a.payload.risk,
+        ...(a.payload.amount ? { amount: a.payload.amount } : {}),
+        evidence: a.payload.evidence.map((ev) => ({
+          type: ev.type,
+          ...(ev.stepId ? { step_id: ev.stepId } : {}),
+          ...(ev.docId ? { doc_id: ev.docId } : {}),
+          ...(ev.summary ? { summary: ev.summary } : {}),
+        })),
+        confidence: a.payload.confidence ?? null,
+        ...(a.payload.policyReason ? { policy_reason: a.payload.policyReason } : {}),
+        ...(a.payload.editSchema ? { edit_schema: a.payload.editSchema } : {}),
+      },
+      requested_from: a.requestedFrom,
+      required_decisions: a.requiredDecisions,
+      separation_of_duties: a.separationOfDuties,
+      initiated_by: a.initiatedBy,
+      delegated_to: a.delegatedTo,
+      expires_at: a.expiresAt,
+      on_timeout: a.onTimeout,
+      auto_approve_on_timeout: a.autoApproveOnTimeout,
+      escalated_at: a.escalatedAt,
+      snoozed_until: a.snoozedUntil,
+      info_request_question: a.infoRequestQuestion,
+      info_request_answer: a.infoRequestAnswer,
+      allowed_actions: [...a.allowedActions],
+      decisions: a.decisions.map((d) => ({
+        id: d.id,
+        approval_id: d.approvalId,
+        org_id: d.orgId,
+        decided_by: d.decidedBy,
+        decision: d.decision,
+        reason: d.reason,
+        edited_payload: d.editedPayload,
+        channel: d.channel,
+        created_at: d.createdAt,
+      })),
+      created_at: a.createdAt,
+      decided_at: a.decidedAt,
+    };
+  }
+
+  function formatNotificationWire(n: NotificationRecord) {
+    return {
+      id: n.id,
+      org_id: n.orgId,
+      workspace_id: n.workspaceId,
+      approval_id: n.approvalId,
+      channel: n.channel,
+      recipient: n.recipient,
+      subject: n.subject,
+      body: n.body,
+      action_links: n.actionLinks,
+      status: n.status,
+      created_at: n.createdAt,
+    };
+  }
+
+  app.get('/api/v1/approvals', async (req) => {
+    const contract = findContract('GET', '/api/v1/approvals')!;
+    const query = validateWithSchema<{ status?: ApprovalStatus }>(
+      contract.querySchema,
+      req.query,
+    );
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = approvalService
+      .listApprovals(orgId, { workspaceId: state.workspaceId, status: query.status })
+      .map(formatApprovalWire);
+    return { data };
+  });
+
+  app.post('/api/v1/approvals', async (req, reply) => {
+    const routePath = '/api/v1/approvals';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      run_id: string;
+      step_id: string;
+      type: ApprovalType;
+      payload: {
+        title: string;
+        summary: string;
+        proposed_action: { tool?: string; args: Record<string, unknown> };
+        diff?: { before: Record<string, unknown>; after: Record<string, unknown> };
+        risk: 'low' | 'medium' | 'high';
+        amount?: { value: number; currency: string };
+        evidence: Array<{ type: string; step_id?: string; doc_id?: string; summary?: string }>;
+        confidence?: number | null;
+        policy_reason?: string;
+        edit_schema?: Record<string, unknown>;
+      };
+      requested_from?: Array<{ type: 'role' | 'user'; id: string }>;
+      required_decisions: number;
+      separation_of_duties: boolean;
+      ttl_ms?: number;
+      on_timeout: ApprovalTimeoutAction;
+      auto_approve_on_timeout: boolean;
+      escalation?: Array<{ after_ms: number; to: { type: 'role' | 'user'; id: string } }>;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId;
+    const created = approvalService.createApproval(buildTenantContext(req, workspaceId), {
+      workspaceId,
+      runId: body.run_id,
+      stepId: body.step_id,
+      type: body.type,
+      payload: {
+        title: body.payload.title,
+        summary: body.payload.summary,
+        proposedAction: body.payload.proposed_action,
+        diff: body.payload.diff,
+        risk: body.payload.risk,
+        amount: body.payload.amount,
+        evidence: body.payload.evidence.map((e) => ({
+          type: e.type,
+          stepId: e.step_id,
+          docId: e.doc_id,
+          summary: e.summary,
+        })),
+        confidence: body.payload.confidence,
+        policyReason: body.payload.policy_reason,
+        editSchema: body.payload.edit_schema,
+      },
+      requestedFrom: body.requested_from,
+      requiredDecisions: body.required_decisions,
+      separationOfDuties: body.separation_of_duties,
+      ttlMs: body.ttl_ms,
+      onTimeout: body.on_timeout,
+      autoApproveOnTimeout: body.auto_approve_on_timeout,
+      escalation: body.escalation?.map((esc) => ({ afterMs: esc.after_ms, to: esc.to })),
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'approval.create',
+      resource: { type: 'approval', id: created.approval.id, run_id: created.approval.runId },
+      decision: 'allow',
+      context: { risk: created.approval.payload.risk, required_decisions: created.approval.requiredDecisions },
+    });
+
+    const formatted = formatApprovalWire(created.approval);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.get('/api/v1/approvals/:id', async (req) => {
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+    const approval = approvalService.getApproval(auth.context.org.id, id);
+    if (!approval) {
+      throw new PlatformError('RES_NOT_FOUND', `Approval ${id} not found.`);
+    }
+    return formatApprovalWire(approval);
+  });
+
+  app.post('/api/v1/approvals/:id/decide', async (req) => {
+    const routePath = '/api/v1/approvals/{id}/decide';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      decision: 'approve' | 'reject' | 'approve_with_edit';
+      reason?: string;
+      edited_payload?: Record<string, unknown>;
+      channel: ApprovalChannel;
+      confirm_keyword?: string;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+    const existing = approvalService.getApproval(orgId, id);
+    if (!existing) {
+      throw new PlatformError('RES_NOT_FOUND', `Approval ${id} not found.`);
+    }
+    if (existing.separationOfDuties) {
+      assertSeparationOfDuties({
+        action: 'approval_decide',
+        actorId: auth.subject.principalId,
+        initiatorId: existing.initiatedBy,
+      });
+    }
+
+    const updated = await approvalService.decideApproval(buildTenantContext(req, existing.workspaceId), id, {
+      decision: body.decision,
+      reason: body.reason,
+      editedPayload: body.edited_payload,
+      channel: body.channel,
+      confirmKeyword: body.confirm_keyword,
+    });
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: `approval.${body.decision}`,
+      resource: { type: 'approval', id: updated.id, run_id: updated.runId },
+      decision: body.decision === 'reject' ? 'deny' : 'allow',
+      context: { channel: body.channel, status: updated.status },
+    });
+
+    const formatted = formatApprovalWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/approvals/:id/request-info', async (req) => {
+    const routePath = '/api/v1/approvals/{id}/request-info';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ question: string }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+    const updated = approvalService.requestInfo(buildTenantContext(req), id, body.question);
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'approval.request_info',
+      resource: { type: 'approval', id: updated.id },
+      decision: 'allow',
+    });
+
+    const formatted = formatApprovalWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/approvals/:id/provide-info', async (req) => {
+    const routePath = '/api/v1/approvals/{id}/provide-info';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ answer: string }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+    const updated = approvalService.provideInfo(buildTenantContext(req), id, body.answer);
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'approval.provide_info',
+      resource: { type: 'approval', id: updated.id },
+      decision: 'allow',
+    });
+
+    const formatted = formatApprovalWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/approvals/:id/delegate', async (req) => {
+    const routePath = '/api/v1/approvals/{id}/delegate';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ delegate_to_principal_id: string }>(
+      contract.bodySchema,
+      req.body,
+    );
+
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+    const updated = approvalService.delegateApproval(
+      buildTenantContext(req),
+      id,
+      body.delegate_to_principal_id,
+    );
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'approval.delegate',
+      resource: { type: 'approval', id: updated.id },
+      decision: 'allow',
+      context: { delegated_to: body.delegate_to_principal_id },
+    });
+
+    const formatted = formatApprovalWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/approvals/:id/snooze', async (req) => {
+    const routePath = '/api/v1/approvals/{id}/snooze';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ snooze_until: string }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const updated = approvalService.snoozeApproval(buildTenantContext(req), id, body.snooze_until);
+
+    const formatted = formatApprovalWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/approvals/process-timeouts', async (req) => {
+    const routePath = '/api/v1/approvals/process-timeouts';
+    const auth = req.platformState!.auth!;
+    const processed = await approvalService.processExpiredApprovals();
+    const out = {
+      processed: processed
+        .filter((p) => p.orgId === auth.context.org.id)
+        .map(formatApprovalWire),
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 200, out);
+    return out;
+  });
+
+  app.post('/api/v1/approvals/slack/action', async (req) => {
+    const routePath = '/api/v1/approvals/slack/action';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      token: string;
+      actor_id: string;
+      reason?: string;
+      confirm_keyword?: string;
+    }>(contract.bodySchema, req.body);
+
+    const slackSigHeader = req.headers['x-slack-signature'];
+    const slackTsHeader = req.headers['x-slack-request-timestamp'];
+    if (typeof slackSigHeader === 'string' && typeof slackTsHeader === 'string') {
+      const rawBodyText = (req as FastifyRequest & { rawBodyText?: string }).rawBodyText ?? JSON.stringify(req.body);
+      const expectedSig = `v0=${createHmac('sha256', slackSigningSecret)
+        .update(`v0:${slackTsHeader}:${rawBodyText}`, 'utf8')
+        .digest('hex')}`;
+      const actualBuf = Buffer.from(slackSigHeader, 'utf8');
+      const expectedBuf = Buffer.from(expectedSig, 'utf8');
+      if (actualBuf.length !== expectedBuf.length || !timingSafeEqual(actualBuf, expectedBuf)) {
+        throw new PlatformError('AUTH_FORBIDDEN', 'Invalid Slack request signature.');
+      }
+    }
+
+    const updated = await approvalService.decideWithSignedToken({
+      token: body.token,
+      actorId: body.actor_id,
+      channel: 'slack',
+      reason: body.reason,
+      confirmKeyword: body.confirm_keyword,
+    });
+
+    await store.appendAudit(updated.orgId, {
+      actor: { id: body.actor_id, type: 'user' },
+      action: 'approval.slack_action',
+      resource: { type: 'approval', id: updated.id, run_id: updated.runId },
+      decision: updated.status === 'rejected' ? 'deny' : 'allow',
+      context: { status: updated.status },
+    });
+
+    return formatApprovalWire(updated);
+  });
+
+  app.get('/api/v1/notifications', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const data = approvalService.notifications.listByOrg(orgId).map(formatNotificationWire);
+    return { data };
+  });
+
   return {
     app,
     store,
@@ -4490,5 +4916,6 @@ export function buildApiServer(opts: ApiServerOptions): {
     secretsProvider,
     budgetManager,
     killSwitchService,
+    approvalService,
   };
 }

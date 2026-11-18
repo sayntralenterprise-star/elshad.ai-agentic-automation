@@ -739,6 +739,70 @@ export interface EvidencePackDto {
   digestSha256: string;
 }
 
+export interface ApprovalDecisionDto {
+  id: string;
+  approvalId: string;
+  orgId: string;
+  decidedBy: string;
+  decision: 'approve' | 'reject' | 'approve_with_edit' | 'request_info' | 'provide_info' | 'delegate';
+  reason: string | null;
+  editedPayload: Record<string, unknown> | null;
+  channel: 'console' | 'slack' | 'email' | 'api';
+  createdAt: string;
+}
+
+export interface ApprovalDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  runId: string;
+  stepId: string;
+  type: 'tool_call' | 'promotion' | 'write_grant' | 'policy_enforce' | 'workflow_gate' | 'custom';
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | 'info_requested';
+  payload: {
+    title: string;
+    summary: string;
+    proposedAction: { tool?: string; args: Record<string, unknown> };
+    diff?: { before: Record<string, unknown>; after: Record<string, unknown> };
+    risk: 'low' | 'medium' | 'high';
+    amount?: { value: number; currency: string };
+    evidence: Array<{ type: string; stepId?: string; docId?: string; summary?: string }>;
+    confidence?: number | null;
+    policyReason?: string;
+    editSchema?: Record<string, unknown>;
+  };
+  requestedFrom: Array<{ type: 'role' | 'user'; id: string }>;
+  requiredDecisions: number;
+  separationOfDuties: boolean;
+  initiatedBy: string;
+  delegatedTo: string | null;
+  expiresAt: string | null;
+  onTimeout: 'reject' | 'escalate' | 'approve';
+  autoApproveOnTimeout: boolean;
+  escalatedAt: string | null;
+  snoozedUntil: string | null;
+  infoRequestQuestion: string | null;
+  infoRequestAnswer: string | null;
+  allowedActions: Array<'approve' | 'reject' | 'approve_with_edit' | 'request_info'>;
+  decisions: ApprovalDecisionDto[];
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface NotificationDto {
+  id: string;
+  orgId: string;
+  workspaceId: string | null;
+  approvalId: string | null;
+  channel: 'slack' | 'email' | 'in_app' | 'webhook';
+  recipient: string;
+  subject: string;
+  body: string;
+  actionLinks: Record<string, unknown>;
+  status: 'pending' | 'sent' | 'failed';
+  createdAt: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -2374,6 +2438,162 @@ export class PlatformClient {
       return mapPolicySimulationReport(res);
     },
   };
+
+  readonly approvals = {
+    list: async (status?: ApprovalDto['status']): Promise<ApprovalDto[]> => {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/approvals${qs}`,
+      );
+      return res.data.map(mapApproval);
+    },
+    get: async (id: string): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>('GET', `/api/v1/approvals/${id}`);
+      return mapApproval(res);
+    },
+    create: async (
+      input: {
+        workspaceId?: string;
+        runId: string;
+        stepId: string;
+        type?: ApprovalDto['type'];
+        payload: ApprovalDto['payload'];
+        requestedFrom?: Array<{ type: 'role' | 'user'; id: string }>;
+        requiredDecisions?: number;
+        separationOfDuties?: boolean;
+        ttlMs?: number;
+        onTimeout?: ApprovalDto['onTimeout'];
+      },
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/approvals', {
+        body: {
+          workspace_id: input.workspaceId,
+          run_id: input.runId,
+          step_id: input.stepId,
+          type: input.type ?? 'tool_call',
+          payload: {
+            title: input.payload.title,
+            summary: input.payload.summary,
+            proposed_action: input.payload.proposedAction,
+            diff: input.payload.diff,
+            risk: input.payload.risk,
+            amount: input.payload.amount,
+            evidence: input.payload.evidence.map((e) => ({
+              type: e.type,
+              step_id: e.stepId,
+              doc_id: e.docId,
+              summary: e.summary,
+            })),
+            confidence: input.payload.confidence,
+            policy_reason: input.payload.policyReason,
+            edit_schema: input.payload.editSchema,
+          },
+          requested_from: input.requestedFrom,
+          required_decisions: input.requiredDecisions,
+          separation_of_duties: input.separationOfDuties,
+          ttl_ms: input.ttlMs,
+          on_timeout: input.onTimeout,
+        },
+        idempotencyKey,
+      });
+      return mapApproval(res);
+    },
+    decide: async (
+      id: string,
+      input: {
+        decision: 'approve' | 'reject' | 'approve_with_edit';
+        reason?: string;
+        editedPayload?: Record<string, unknown>;
+        channel?: 'console' | 'slack' | 'email' | 'api';
+        confirmKeyword?: string;
+      },
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/approvals/${id}/decide`,
+        {
+          body: {
+            decision: input.decision,
+            reason: input.reason,
+            edited_payload: input.editedPayload,
+            channel: input.channel ?? 'console',
+            confirm_keyword: input.confirmKeyword,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapApproval(res);
+    },
+    requestInfo: async (
+      id: string,
+      question: string,
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/approvals/${id}/request-info`,
+        { body: { question }, idempotencyKey },
+      );
+      return mapApproval(res);
+    },
+    provideInfo: async (
+      id: string,
+      answer: string,
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/approvals/${id}/provide-info`,
+        { body: { answer }, idempotencyKey },
+      );
+      return mapApproval(res);
+    },
+    delegate: async (
+      id: string,
+      delegateToPrincipalId: string,
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/approvals/${id}/delegate`,
+        { body: { delegate_to_principal_id: delegateToPrincipalId }, idempotencyKey },
+      );
+      return mapApproval(res);
+    },
+    snooze: async (
+      id: string,
+      snoozeUntilIso: string,
+      idempotencyKey?: string,
+    ): Promise<ApprovalDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/approvals/${id}/snooze`,
+        { body: { snooze_until: snoozeUntilIso }, idempotencyKey },
+      );
+      return mapApproval(res);
+    },
+    processTimeouts: async (idempotencyKey?: string): Promise<ApprovalDto[]> => {
+      const res = await this.request<{ processed: Record<string, unknown>[] }>(
+        'POST',
+        '/api/v1/approvals/process-timeouts',
+        { body: {}, idempotencyKey },
+      );
+      return res.processed.map(mapApproval);
+    },
+  };
+
+  readonly notifications = {
+    list: async (): Promise<NotificationDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/notifications',
+      );
+      return res.data.map(mapNotification);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -2968,5 +3188,108 @@ function mapEvidencePack(e: Record<string, unknown>): EvidencePackDto {
       ? e.audit_sample.map((evt) => mapAudit(evt as Record<string, unknown>))
       : [],
     digestSha256: String(e.digest_sha256 ?? ''),
+  };
+}
+
+function mapApproval(a: Record<string, unknown>): ApprovalDto {
+  const payload = (a.payload ?? {}) as Record<string, unknown>;
+  const proposed = (payload.proposed_action ?? {}) as Record<string, unknown>;
+  const rawDiff = payload.diff as Record<string, unknown> | undefined;
+  const rawAmt = payload.amount as Record<string, unknown> | undefined;
+
+  return {
+    id: String(a.id),
+    orgId: String(a.org_id),
+    workspaceId: String(a.workspace_id),
+    runId: String(a.run_id),
+    stepId: String(a.step_id),
+    type: a.type as ApprovalDto['type'],
+    status: a.status as ApprovalDto['status'],
+    payload: {
+      title: String(payload.title ?? ''),
+      summary: String(payload.summary ?? ''),
+      proposedAction: {
+        tool: proposed.tool ? String(proposed.tool) : undefined,
+        args: (proposed.args ?? {}) as Record<string, unknown>,
+      },
+      diff: rawDiff
+        ? {
+            before: (rawDiff.before ?? {}) as Record<string, unknown>,
+            after: (rawDiff.after ?? {}) as Record<string, unknown>,
+          }
+        : undefined,
+      risk: (payload.risk as 'low' | 'medium' | 'high') ?? 'medium',
+      amount: rawAmt
+        ? { value: Number(rawAmt.value ?? 0), currency: String(rawAmt.currency ?? 'USD') }
+        : undefined,
+      evidence: Array.isArray(payload.evidence)
+        ? payload.evidence.map((ev) => {
+            const item = ev as Record<string, unknown>;
+            return {
+              type: String(item.type ?? 'step'),
+              stepId: item.step_id ? String(item.step_id) : undefined,
+              docId: item.doc_id ? String(item.doc_id) : undefined,
+              summary: item.summary ? String(item.summary) : undefined,
+            };
+          })
+        : [],
+      confidence:
+        payload.confidence !== undefined && payload.confidence !== null
+          ? Number(payload.confidence)
+          : null,
+      policyReason: payload.policy_reason ? String(payload.policy_reason) : undefined,
+      editSchema: payload.edit_schema as Record<string, unknown> | undefined,
+    },
+    requestedFrom: Array.isArray(a.requested_from)
+      ? (a.requested_from as ApprovalDto['requestedFrom'])
+      : [],
+    requiredDecisions: Number(a.required_decisions ?? 1),
+    separationOfDuties: Boolean(a.separation_of_duties ?? true),
+    initiatedBy: String(a.initiated_by),
+    delegatedTo: a.delegated_to ? String(a.delegated_to) : null,
+    expiresAt: a.expires_at ? String(a.expires_at) : null,
+    onTimeout: (a.on_timeout as ApprovalDto['onTimeout']) ?? 'escalate',
+    autoApproveOnTimeout: Boolean(a.auto_approve_on_timeout),
+    escalatedAt: a.escalated_at ? String(a.escalated_at) : null,
+    snoozedUntil: a.snoozed_until ? String(a.snoozed_until) : null,
+    infoRequestQuestion: a.info_request_question ? String(a.info_request_question) : null,
+    infoRequestAnswer: a.info_request_answer ? String(a.info_request_answer) : null,
+    allowedActions: Array.isArray(a.allowed_actions)
+      ? (a.allowed_actions as ApprovalDto['allowedActions'])
+      : ['approve', 'reject'],
+    decisions: Array.isArray(a.decisions)
+      ? a.decisions.map((d) => {
+          const item = d as Record<string, unknown>;
+          return {
+            id: String(item.id),
+            approvalId: String(item.approval_id),
+            orgId: String(item.org_id),
+            decidedBy: String(item.decided_by),
+            decision: item.decision as ApprovalDecisionDto['decision'],
+            reason: item.reason ? String(item.reason) : null,
+            editedPayload: (item.edited_payload as Record<string, unknown> | null) ?? null,
+            channel: item.channel as ApprovalDecisionDto['channel'],
+            createdAt: String(item.created_at),
+          };
+        })
+      : [],
+    createdAt: String(a.created_at),
+    decidedAt: a.decided_at ? String(a.decided_at) : null,
+  };
+}
+
+function mapNotification(n: Record<string, unknown>): NotificationDto {
+  return {
+    id: String(n.id),
+    orgId: String(n.org_id),
+    workspaceId: n.workspace_id ? String(n.workspace_id) : null,
+    approvalId: n.approval_id ? String(n.approval_id) : null,
+    channel: n.channel as NotificationDto['channel'],
+    recipient: String(n.recipient),
+    subject: String(n.subject),
+    body: String(n.body),
+    actionLinks: (n.action_links ?? {}) as Record<string, unknown>,
+    status: (n.status as NotificationDto['status']) ?? 'sent',
+    createdAt: String(n.created_at),
   };
 }

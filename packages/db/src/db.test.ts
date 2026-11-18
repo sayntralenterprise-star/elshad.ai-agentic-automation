@@ -135,6 +135,14 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(sql08).toContain('policy_decisions_default');
     expect(sql08).toContain('REVOKE UPDATE, DELETE, TRUNCATE ON policy_decisions FROM PUBLIC');
     expect(sql08).toContain('TO platform_app');
+
+    const sql09 = readFileSync(join(migrationsDir, '0009_s11_approvals.sql'), 'utf8');
+    const s11Tables = ['approvals', 'approval_decisions', 'notifications'];
+    for (const tbl of s11Tables) {
+      expect(sql09).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql09).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql09).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {

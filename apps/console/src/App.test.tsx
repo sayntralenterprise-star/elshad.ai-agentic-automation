@@ -9,6 +9,7 @@ import {
   type AgentDto,
   type AgentIdentityDto,
   type ApiKeyDto,
+  type ApprovalDto,
   type BudgetDto,
   type CitationChipDto,
   type ConversationSessionDto,
@@ -22,6 +23,7 @@ import {
   type MeDto,
   type MemoryItemDto,
   type ModelCapabilityDto,
+  type NotificationDto,
   type PolicyDto,
   type RunDto,
   type RunStepDto,
@@ -1139,6 +1141,140 @@ function createMockClient(
     digestSha256: 'a'.repeat(64),
   });
 
+  const approvalList: ApprovalDto[] = [
+    {
+      id: 'apr_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      runId: 'run_paused_1',
+      stepId: 'stp_apr_1',
+      type: 'tool_call',
+      status: 'pending',
+      payload: {
+        title: 'Refund $45.00 USD to order O-9',
+        summary: 'Agent proposes refunding duplicate payment on order O-9.',
+        proposedAction: { tool: 'refund_order', args: { order_id: 'O-9', amount: 45 } },
+        diff: { before: { refunded: 0 }, after: { refunded: 45 } },
+        risk: 'high',
+        amount: { value: 45, currency: 'USD' },
+        evidence: [{ type: 'tool_result', stepId: 'stp_0', summary: 'Duplicate charge confirmed' }],
+        confidence: 0.86,
+        policyReason: 'pol-refund-threshold',
+      },
+      requestedFrom: [{ type: 'role', id: 'reviewer' }],
+      requiredDecisions: 1,
+      separationOfDuties: true,
+      initiatedBy: 'prn_other_requester',
+      delegatedTo: null,
+      expiresAt: '2026-11-25T12:00:00.000Z',
+      onTimeout: 'escalate',
+      autoApproveOnTimeout: false,
+      escalatedAt: null,
+      snoozedUntil: null,
+      infoRequestQuestion: null,
+      infoRequestAnswer: null,
+      allowedActions: ['approve', 'reject', 'approve_with_edit', 'request_info'],
+      decisions: [],
+      createdAt: '2026-11-18T12:00:00.000Z',
+      decidedAt: null,
+    },
+  ];
+  const notificationList: NotificationDto[] = [
+    {
+      id: 'ntf_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      approvalId: 'apr_mock_1',
+      channel: 'slack',
+      recipient: 'role:reviewer',
+      subject: '[Approval] Refund $45.00 USD to order O-9',
+      body: 'Approve or reject in Slack.',
+      actionLinks: { consoleUrl: 'http://localhost:5173/approvals/apr_mock_1' },
+      status: 'sent',
+      createdAt: '2026-11-18T12:00:01.000Z',
+    },
+  ];
+
+  client.approvals.list = async (status) =>
+    structuredClone(status ? approvalList.filter((a) => a.status === status) : approvalList);
+  client.approvals.get = async (id) => {
+    const found = approvalList.find((a) => a.id === id);
+    if (!found) throw new Error('approval not found');
+    return structuredClone(found);
+  };
+  client.approvals.decide = async (id, input) => {
+    const idx = approvalList.findIndex((a) => a.id === id);
+    if (idx < 0) throw new Error('approval not found');
+    const rec = approvalList[idx]!;
+    if (rec.payload.risk === 'high' && input.decision !== 'reject' && input.confirmKeyword !== 'APPROVE') {
+      throw new PlatformError('VAL_SCHEMA_MISMATCH', 'High-risk approval requires APPROVE.');
+    }
+    const nextStatus = input.decision === 'reject' ? 'rejected' : 'approved';
+    const updated: ApprovalDto = {
+      ...rec,
+      status: nextStatus,
+      decidedAt: '2026-11-18T12:10:00.000Z',
+      payload:
+        input.decision === 'approve_with_edit' && input.editedPayload
+          ? {
+              ...rec.payload,
+              proposedAction: {
+                ...rec.payload.proposedAction,
+                args: { ...rec.payload.proposedAction.args, ...input.editedPayload },
+              },
+            }
+          : rec.payload,
+      decisions: [
+        ...rec.decisions,
+        {
+          id: `dec_${rec.decisions.length + 1}`,
+          approvalId: rec.id,
+          orgId: rec.orgId,
+          decidedBy: 'prn_1',
+          decision: input.decision,
+          reason: input.reason ?? null,
+          editedPayload: input.editedPayload ?? null,
+          channel: input.channel ?? 'console',
+          createdAt: '2026-11-18T12:10:00.000Z',
+        },
+      ],
+    };
+    approvalList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.approvals.requestInfo = async (id, question) => {
+    const idx = approvalList.findIndex((a) => a.id === id);
+    if (idx < 0) throw new Error('approval not found');
+    const updated: ApprovalDto = {
+      ...approvalList[idx]!,
+      status: 'info_requested',
+      infoRequestQuestion: question,
+    };
+    approvalList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.approvals.delegate = async (id, delegateToPrincipalId) => {
+    const idx = approvalList.findIndex((a) => a.id === id);
+    if (idx < 0) throw new Error('approval not found');
+    const updated: ApprovalDto = {
+      ...approvalList[idx]!,
+      delegatedTo: delegateToPrincipalId,
+    };
+    approvalList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.approvals.snooze = async (id, snoozeUntilIso) => {
+    const idx = approvalList.findIndex((a) => a.id === id);
+    if (idx < 0) throw new Error('approval not found');
+    const updated: ApprovalDto = {
+      ...approvalList[idx]!,
+      snoozedUntil: snoozeUntilIso,
+    };
+    approvalList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.notifications.list = async () => structuredClone(notificationList);
+
   return client;
 }
 
@@ -1579,6 +1715,38 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(packBanner.textContent).toContain('Policies: 1');
     expect(packBanner.textContent).toContain('Grants: 1');
     expect(packBanner.textContent).toContain('Agent Identities: 1');
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Approvals Inbox split queue, diff, evidence, high-risk APPROVE confirm, request info & edit-and-approve [E1.1]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/approvals" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Approvals Inbox' })).toBeTruthy();
+    const detail = await screen.findByTestId('approval-detail-card');
+    expect(detail.textContent).toContain('Refund $45.00 USD to order O-9');
+    expect(detail.textContent).toContain('Duplicate charge confirmed');
+    expect(await screen.findByText(/Dispatched Slack & Email Notifications/i)).toBeTruthy();
+
+    // Request info & Snooze
+    await user.type(screen.getByLabelText('Request Additional Info'), 'Confirm order ID');
+    await user.click(screen.getByRole('button', { name: 'Request Info' }));
+    expect(await screen.findByText(/Requested more info on/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Snooze +1h' }));
+    expect(await screen.findByText(/Snoozed/)).toBeTruthy();
+
+    // High-risk confirmation + Edit & Approve
+    await user.type(screen.getByLabelText(/High-Risk Confirmation/i), 'APPROVE');
+    await user.click(screen.getByRole('button', { name: 'Edit & Approve' }));
+    expect(await screen.findByText(/updated to status: approved/i)).toBeTruthy();
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

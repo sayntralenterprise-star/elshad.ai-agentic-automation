@@ -705,6 +705,64 @@ export interface PolicyDecisionsTable {
   created_at: Date;
 }
 
+export interface ApprovalsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  run_id: string;
+  step_id: string;
+  type: 'tool_call' | 'promotion' | 'write_grant' | 'policy_enforce' | 'workflow_gate' | 'custom';
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | 'info_requested';
+  payload: Record<string, unknown>;
+  requested_from: unknown[];
+  required_decisions: number;
+  separation_of_duties: boolean;
+  initiated_by: string;
+  delegated_to: string | null;
+  expires_at: Date | null;
+  on_timeout: 'reject' | 'escalate' | 'approve';
+  auto_approve_on_timeout: boolean;
+  escalation: unknown[];
+  escalated_at: Date | null;
+  snoozed_until: Date | null;
+  info_request_question: string | null;
+  info_request_answer: string | null;
+  created_at: Date;
+  decided_at: Date | null;
+}
+
+export interface ApprovalDecisionsTable {
+  id: string;
+  org_id: string;
+  approval_id: string;
+  decided_by: string;
+  decision:
+    | 'approve'
+    | 'reject'
+    | 'approve_with_edit'
+    | 'request_info'
+    | 'provide_info'
+    | 'delegate';
+  reason: string | null;
+  edited_payload: Record<string, unknown> | null;
+  channel: 'console' | 'slack' | 'email' | 'api';
+  created_at: Date;
+}
+
+export interface NotificationsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string | null;
+  approval_id: string | null;
+  channel: 'slack' | 'email' | 'in_app' | 'webhook';
+  recipient: string;
+  subject: string;
+  body: string;
+  action_links: Record<string, unknown>;
+  status: 'pending' | 'sent' | 'failed';
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -751,6 +809,9 @@ export interface Database {
   policies: PoliciesTable;
   policy_versions: PolicyVersionsTable;
   policy_decisions: PolicyDecisionsTable;
+  approvals: ApprovalsTable;
+  approval_decisions: ApprovalDecisionsTable;
+  notifications: NotificationsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

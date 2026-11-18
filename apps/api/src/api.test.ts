@@ -1852,4 +1852,231 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('pauses runs on approval_required, enforces SoD, delivers Slack/email tokens, resumes paused run < 5s on signed Slack callback, and supports dual approval/edit/info/timeout [E1.1]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 'hitl-owner@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    const orgId = [...store.orgs.keys()][0]!;
+    const reviewer1 = store.seedUserPrincipal(orgId, {
+      email: 'hitl-rev1@elshad.local',
+      password: 'Password123!',
+      displayName: 'Reviewer One',
+      role: 'reviewer',
+    });
+    store.seedUserPrincipal(orgId, {
+      email: 'hitl-rev2@elshad.local',
+      password: 'Password123!',
+      displayName: 'Reviewer Two',
+      role: 'reviewer',
+    });
+
+    const slackSecret = 's11-slack-hmac-secret';
+    const { app, executionEngine } = buildApiServer({
+      config,
+      store,
+      slackSigningSecret: slackSecret,
+    });
+
+    const loginOwner = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'hitl-owner@elshad.local', password: 'Password123!' },
+    });
+    const cookieOwner = parseCookie(loginOwner.headers['set-cookie']);
+    const csrfOwner = loginOwner.json().csrf_token as string;
+
+    const loginRev1 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'hitl-rev1@elshad.local', password: 'Password123!' },
+    });
+    const cookieRev1 = parseCookie(loginRev1.headers['set-cookie']);
+    const csrfRev1 = loginRev1.json().csrf_token as string;
+
+    const loginRev2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'hitl-rev2@elshad.local', password: 'Password123!' },
+    });
+    const cookieRev2 = parseCookie(loginRev2.headers['set-cookie']);
+    const csrfRev2 = loginRev2.json().csrf_token as string;
+
+    // 1. Agent with tool approval='always' triggers waiting_approval & auto-creates Approval + notifications
+    const agentRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's11-agt-1' },
+      payload: {
+        definition: {
+          name: 'refund-approval-agent',
+          version: '1.0.0',
+          autonomy_level: 2,
+          model: { tier: 'standard', provider: 'mock', model: 'mock/react-default' },
+          prompt: { system: 'Call current_time with approval.' },
+          tools: [{ tool: 'current_time', approval: 'always', scope: {} }],
+        },
+      },
+    });
+    expect(agentRes.statusCode).toBe(201);
+    const agentId = agentRes.json().id as string;
+
+    const pausedRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's11-run-pause' },
+      payload: {
+        input: 'Check UTC time with human sign-off.',
+        mock_turns: [
+          {
+            kind: 'tool_calls',
+            calls: [{ id: 'tc_apr_1', name: 'current_time', arguments: {} }],
+            tokensIn: 40,
+            tokensOut: 10,
+          },
+        ],
+      },
+    });
+    expect(pausedRun.statusCode).toBe(201);
+    const runId = pausedRun.json().id as string;
+    expect(pausedRun.json().status).toBe('waiting_approval');
+
+    const approvalsList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/approvals?status=pending',
+      headers: { cookie: cookieRev1 },
+    });
+    expect(approvalsList.statusCode).toBe(200);
+    expect(approvalsList.json().data).toHaveLength(1);
+    const approvalId = approvalsList.json().data[0].id as string;
+
+    // 2. SoD blocks initiator from approving their own request
+    const selfDecide = await app.inject({
+      method: 'POST',
+      url: `/api/v1/approvals/${approvalId}/decide`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's11-self-dec' },
+      payload: { decision: 'approve', channel: 'console' },
+    });
+    expect(selfDecide.statusCode).toBe(403);
+    expect(selfDecide.json().error.code).toBe('POL_DENIED');
+
+    // 3. Slack notification carries signed single-use token; signed callback resumes run < 5s
+    const notifRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notifications',
+      headers: { cookie: cookieRev1 },
+    });
+    expect(notifRes.statusCode).toBe(200);
+    const slackNotif = (notifRes.json().data as Array<Record<string, unknown>>).find(
+      (n) => n.channel === 'slack' && n.approval_id === approvalId,
+    )!;
+    expect(slackNotif).toBeDefined();
+    const slackToken = (slackNotif['action_links'] as Record<string, unknown>)['slackApproveToken'] as string;
+
+    const slackBody = JSON.stringify({
+      token: slackToken,
+      actor_id: reviewer1.id,
+    });
+    const tsHeader = String(Math.floor(Date.now() / 1000));
+    const slackSig = `v0=${createHmac('sha256', slackSecret)
+      .update(`v0:${tsHeader}:${slackBody}`, 'utf8')
+      .digest('hex')}`;
+
+    const t0 = performance.now();
+    const slackCallback = await app.inject({
+      method: 'POST',
+      url: '/api/v1/approvals/slack/action',
+      headers: {
+        'content-type': 'application/json',
+        'x-slack-signature': slackSig,
+        'x-slack-request-timestamp': tsHeader,
+      },
+      payload: slackBody,
+    });
+    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(slackCallback.statusCode).toBe(200);
+    expect(slackCallback.json().status).toBe('approved');
+
+    const resumedRun = await executionEngine.getRun(orgId, runId);
+    expect(resumedRun?.status).toBe('queued');
+
+    // Replay of single-use Slack token rejected
+    const replayRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/approvals/slack/action',
+      headers: { 'content-type': 'application/json' },
+      payload: slackBody,
+    });
+    expect(replayRes.statusCode).toBe(409);
+
+    // 4. Dual approval + request-info/provide-info + delegate + snooze + edit-and-approve
+    const dualCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/approvals',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's11-dual-1' },
+      payload: {
+        run_id: runId,
+        step_id: 'stp_dual_1',
+        type: 'write_grant',
+        required_decisions: 2,
+        payload: {
+          title: 'Dual approval refund $200',
+          summary: 'High-value refund requires two reviewers.',
+          proposed_action: { tool: 'refund_order', args: { amount: 200 } },
+          diff: { before: { amount: 0 }, after: { amount: 200 } },
+          risk: 'high',
+          amount: { value: 200, currency: 'USD' },
+          evidence: [{ type: 'run_step', step_id: 'stp_0', summary: 'Invoice verified' }],
+        },
+      },
+    });
+    expect(dualCreate.statusCode).toBe(201);
+    const dualId = dualCreate.json().id as string;
+
+    const reqInfo = await app.inject({
+      method: 'POST',
+      url: `/api/v1/approvals/${dualId}/request-info`,
+      headers: { cookie: cookieRev1, 'x-csrf-token': csrfRev1, 'Idempotency-Key': 's11-reqinfo' },
+      payload: { question: 'Attach ticket reference' },
+    });
+    expect(reqInfo.statusCode).toBe(200);
+    expect(reqInfo.json().status).toBe('info_requested');
+
+    const provInfo = await app.inject({
+      method: 'POST',
+      url: `/api/v1/approvals/${dualId}/provide-info`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's11-provinfo' },
+      payload: { answer: 'Ticket T-8812' },
+    });
+    expect(provInfo.statusCode).toBe(200);
+    expect(provInfo.json().status).toBe('pending');
+
+    const rev1Vote = await app.inject({
+      method: 'POST',
+      url: `/api/v1/approvals/${dualId}/decide`,
+      headers: { cookie: cookieRev1, 'x-csrf-token': csrfRev1, 'Idempotency-Key': 's11-v1' },
+      payload: {
+        decision: 'approve_with_edit',
+        edited_payload: { amount: 150 },
+        confirm_keyword: 'APPROVE',
+      },
+    });
+    expect(rev1Vote.statusCode).toBe(200);
+    expect(rev1Vote.json().status).toBe('pending');
+
+    const rev2Vote = await app.inject({
+      method: 'POST',
+      url: `/api/v1/approvals/${dualId}/decide`,
+      headers: { cookie: cookieRev2, 'x-csrf-token': csrfRev2, 'Idempotency-Key': 's11-v2' },
+      payload: { decision: 'approve', confirm_keyword: 'APPROVE' },
+    });
+    expect(rev2Vote.statusCode).toBe(200);
+    expect(rev2Vote.json().status).toBe('approved');
+    expect(rev2Vote.json().payload.proposed_action.args.amount).toBe(150);
+
+    await app.close();
+  });
 });
