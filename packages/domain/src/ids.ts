@@ -21,6 +21,7 @@ export type PolicyId = Brand<string, 'PolicyId'>;
 export type BudgetId = Brand<string, 'BudgetId'>;
 export type DatasetId = Brand<string, 'DatasetId'>;
 export type TestCaseId = Brand<string, 'TestCaseId'>;
+export type GraderId = Brand<string, 'GraderId'>;
 export type ExperimentId = Brand<string, 'ExperimentId'>;
 export type AuditId = Brand<string, 'AuditId'>;
 export type WebhookId = Brand<string, 'WebhookId'>;
@@ -56,6 +57,7 @@ export const ExternalPrefix = {
   budget: 'bud_',
   dataset: 'ds_',
   testCase: 'tc_',
+  grader: 'grd_',
   experiment: 'exp_',
   audit: 'aud_',
   webhook: 'whk_',

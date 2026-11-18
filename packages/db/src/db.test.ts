@@ -143,6 +143,14 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
       expect(sql09).toContain(`enable_tenant_rls('${tbl}')`);
     }
     expect(sql09).toContain('TO platform_app');
+
+    const sql10 = readFileSync(join(migrationsDir, '0010_s13_evaluation.sql'), 'utf8');
+    const s13Tables = ['datasets', 'test_cases', 'graders', 'experiments', 'experiment_results'];
+    for (const tbl of s13Tables) {
+      expect(sql10).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql10).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql10).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {

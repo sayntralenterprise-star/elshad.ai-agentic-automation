@@ -96,8 +96,10 @@ import {
   BudgetManager,
   InMemoryUsageLedger,
   KillSwitchService,
+  buildTestCaseFromRun,
   diffAgentDefinitions,
   executeReActAgentRun,
+  runExperiment,
   validateAgentDefinition,
   type AgentDefinition,
   type ApprovalChannel,
@@ -109,9 +111,12 @@ import {
   type BudgetPeriod,
   type BudgetRecord,
   type BudgetScopeType,
+  type GraderRecord,
   type KillSwitchRecord,
   type KillSwitchScopeType,
   type NotificationRecord,
+  type ReleaseGateConfig,
+  type TestCaseRecord,
   type UsageLedger,
   type UsageLedgerEntry,
 } from '@elshad/runtime-core';
@@ -388,6 +393,128 @@ export function buildApiServer(opts: ApiServerOptions): {
   const agentIdentitiesById = new Map<string, StoredAgentIdentity>();
   const toolGrantsById = new Map<string, StoredToolGrant>();
   const policiesById = new Map<string, StoredDeclarativePolicy>();
+
+  // --- S1.3 Evaluation v1 State (Datasets, Test Cases, Graders, Experiments, Results) ---
+  interface StoredDataset {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    name: string;
+    description: string | null;
+    tags: string[];
+    metadata: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredTestCase {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    dataset_id: string;
+    name: string;
+    inputs: Record<string, unknown>;
+    expected_output: Record<string, unknown> | null;
+    rubric: Record<string, unknown>;
+    tags: string[];
+    difficulty: 'easy' | 'medium' | 'hard' | 'adversarial';
+    weight: number;
+    source_run_id: string | null;
+    source_step_id: string | null;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredGrader {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    name: string;
+    description: string | null;
+    type: 'exact_match' | 'json_schema' | 'code_assertion' | 'llm_judge';
+    config: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredExperiment {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    name: string;
+    dataset_id: string;
+    agent_version_id: string;
+    baseline_version_id: string | null;
+    grader_ids: string[];
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+    release_gate_config: Record<string, unknown>;
+    gate_verdict: 'passed' | 'failed' | 'warning' | null;
+    metrics: Record<string, unknown>;
+    created_at: string;
+    started_at: string | null;
+    completed_at: string | null;
+  }
+
+  interface StoredExperimentResult {
+    id: string;
+    org_id: string;
+    experiment_id: string;
+    test_case_id: string;
+    run_id: string | null;
+    actual_output: Record<string, unknown> | null;
+    grader_results: Record<string, unknown>[];
+    passed: boolean;
+    score: number;
+    duration_ms: number;
+    cost_micro_usd: number;
+    is_regression: boolean;
+    diff: Record<string, unknown> | null;
+    created_at: string;
+  }
+
+  const datasetsById = new Map<string, StoredDataset>();
+  const testCasesById = new Map<string, StoredTestCase>();
+  const gradersById = new Map<string, StoredGrader>();
+  const experimentsById = new Map<string, StoredExperiment>();
+  const experimentResultsByExperimentId = new Map<string, StoredExperimentResult[]>();
+
+  // Default seeded graders
+  const defaultExactGrader: StoredGrader = {
+    id: 'grd_exact_default',
+    org_id: 'default',
+    workspace_id: 'default',
+    name: 'Exact Match Grader',
+    description: 'Case-insensitive exact match with whitespace trimming',
+    type: 'exact_match',
+    config: { case_sensitive: false, trim: true },
+    created_at: clock.now().toISOString(),
+    updated_at: clock.now().toISOString(),
+  };
+  const defaultSchemaGrader: StoredGrader = {
+    id: 'grd_schema_default',
+    org_id: 'default',
+    workspace_id: 'default',
+    name: 'JSON Schema Grader',
+    description: 'Validates that actual output conforms to expected JSON schema',
+    type: 'json_schema',
+    config: { strict: true },
+    created_at: clock.now().toISOString(),
+    updated_at: clock.now().toISOString(),
+  };
+  const defaultJudgeGrader: StoredGrader = {
+    id: 'grd_judge_default',
+    org_id: 'default',
+    workspace_id: 'default',
+    name: 'LLM Rubric Judge',
+    description: 'Multi-criteria rubric evaluator with 1..5 scales per PRD N.4',
+    type: 'llm_judge',
+    config: { pass_threshold: 3.5 },
+    created_at: clock.now().toISOString(),
+    updated_at: clock.now().toISOString(),
+  };
+  gradersById.set(defaultExactGrader.id, defaultExactGrader);
+  gradersById.set(defaultSchemaGrader.id, defaultSchemaGrader);
+  gradersById.set(defaultJudgeGrader.id, defaultJudgeGrader);
 
   function fromWirePolicyCondition(
     raw?: {
@@ -4900,6 +5027,453 @@ export function buildApiServer(opts: ApiServerOptions): {
     const orgId = req.platformState!.auth!.context.org.id;
     const data = approvalService.notifications.listByOrg(orgId).map(formatNotificationWire);
     return { data };
+  });
+
+  // ---------- S1.3 Evaluation v1 (Datasets, Test Cases, Graders, Experiments, Release Gates) ----------
+
+  app.get('/api/v1/eval/datasets', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const wsId = req.platformState!.workspaceId;
+    const items = Array.from(datasetsById.values()).filter(
+      (d) => d.org_id === orgId && (!wsId || d.workspace_id === wsId),
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/eval/datasets', async (req, reply) => {
+    const routePath = '/api/v1/eval/datasets';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      description?: string;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const wsId = req.platformState!.workspaceId ?? (await store.listWorkspaces(orgId))[0]?.id ?? 'ws_default';
+
+    const datasetId = `ds_${idGen.uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const now = clock.now().toISOString();
+    const dataset: StoredDataset = {
+      id: datasetId,
+      org_id: orgId,
+      workspace_id: wsId,
+      name: body.name,
+      description: body.description ?? null,
+      tags: body.tags ?? [],
+      metadata: body.metadata ?? {},
+      created_at: now,
+      updated_at: now,
+    };
+    datasetsById.set(datasetId, dataset);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'dataset.create',
+      resource: { type: 'dataset', id: datasetId },
+      decision: 'allow',
+      context: { name: dataset.name, tags: dataset.tags },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, dataset);
+    return dataset;
+  });
+
+  app.get('/api/v1/eval/datasets/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const orgId = req.platformState!.auth!.context.org.id;
+    const dataset = datasetsById.get(id);
+    if (!dataset || dataset.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Dataset ${id} not found.`);
+    }
+    return dataset;
+  });
+
+  app.get('/api/v1/eval/datasets/:id/test-cases', async (req) => {
+    const { id } = req.params as { id: string };
+    const orgId = req.platformState!.auth!.context.org.id;
+    const dataset = datasetsById.get(id);
+    if (!dataset || dataset.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Dataset ${id} not found.`);
+    }
+    const items = Array.from(testCasesById.values()).filter(
+      (tc) => tc.org_id === orgId && tc.dataset_id === id,
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/eval/datasets/:id/test-cases', async (req, reply) => {
+    const routePath = '/api/v1/eval/datasets/{id}/test-cases';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      inputs: Record<string, unknown>;
+      expected_output?: Record<string, unknown>;
+      rubric?: Record<string, unknown>;
+      tags?: string[];
+      difficulty?: 'easy' | 'medium' | 'hard' | 'adversarial';
+      weight?: number;
+      source_run_id?: string;
+      source_step_id?: string;
+    }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const dataset = datasetsById.get(id);
+    if (!dataset || dataset.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Dataset ${id} not found.`);
+    }
+
+    const tcId = `tc_${idGen.uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const now = clock.now().toISOString();
+    const testCase: StoredTestCase = {
+      id: tcId,
+      org_id: orgId,
+      workspace_id: dataset.workspace_id,
+      dataset_id: id,
+      name: body.name,
+      inputs: body.inputs,
+      expected_output: body.expected_output ?? null,
+      rubric: body.rubric ?? {},
+      tags: body.tags ?? [],
+      difficulty: body.difficulty ?? 'medium',
+      weight: body.weight ?? 1.0,
+      source_run_id: body.source_run_id ?? null,
+      source_step_id: body.source_step_id ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    testCasesById.set(tcId, testCase);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'test_case.create',
+      resource: { type: 'test_case', id: tcId, dataset_id: id },
+      decision: 'allow',
+      context: { name: testCase.name, difficulty: testCase.difficulty },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, testCase);
+    return testCase;
+  });
+
+  app.get('/api/v1/eval/graders', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const wsId = req.platformState!.workspaceId;
+    const items = Array.from(gradersById.values()).filter(
+      (g) =>
+        g.org_id === 'default' ||
+        (g.org_id === orgId && (!wsId || g.workspace_id === 'default' || g.workspace_id === wsId)),
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/eval/graders', async (req, reply) => {
+    const routePath = '/api/v1/eval/graders';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      description?: string;
+      type: 'exact_match' | 'json_schema' | 'code_assertion' | 'llm_judge';
+      config: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const wsId = req.platformState!.workspaceId ?? (await store.listWorkspaces(orgId))[0]?.id ?? 'ws_default';
+
+    const graderId = `grd_${idGen.uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const now = clock.now().toISOString();
+    const grader: StoredGrader = {
+      id: graderId,
+      org_id: orgId,
+      workspace_id: wsId,
+      name: body.name,
+      description: body.description ?? null,
+      type: body.type,
+      config: body.config,
+      created_at: now,
+      updated_at: now,
+    };
+    gradersById.set(graderId, grader);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'grader.create',
+      resource: { type: 'grader', id: graderId },
+      decision: 'allow',
+      context: { name: grader.name, type: grader.type },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, grader);
+    return grader;
+  });
+
+  app.get('/api/v1/eval/experiments', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const wsId = req.platformState!.workspaceId;
+    const items = Array.from(experimentsById.values()).filter(
+      (e) => e.org_id === orgId && (!wsId || e.workspace_id === wsId),
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/eval/experiments', async (req, reply) => {
+    const routePath = '/api/v1/eval/experiments';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      dataset_id: string;
+      agent_version_id: string;
+      baseline_version_id?: string;
+      grader_ids: string[];
+      release_gate_config?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const wsId = req.platformState!.workspaceId ?? (await store.listWorkspaces(orgId))[0]?.id ?? 'ws_default';
+
+    const expId = `exp_${idGen.uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const now = clock.now().toISOString();
+    const experiment: StoredExperiment = {
+      id: expId,
+      org_id: orgId,
+      workspace_id: wsId,
+      name: body.name,
+      dataset_id: body.dataset_id,
+      agent_version_id: body.agent_version_id,
+      baseline_version_id: body.baseline_version_id ?? null,
+      grader_ids: body.grader_ids.length > 0 ? body.grader_ids : ['grd_exact_default'],
+      status: 'pending',
+      release_gate_config: body.release_gate_config ?? { min_pass_rate: 0.95 },
+      gate_verdict: null,
+      metrics: {},
+      created_at: now,
+      started_at: null,
+      completed_at: null,
+    };
+    experimentsById.set(expId, experiment);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'experiment.create',
+      resource: { type: 'experiment', id: expId },
+      decision: 'allow',
+      context: { name: experiment.name, dataset_id: experiment.dataset_id },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, experiment);
+    return experiment;
+  });
+
+  app.get('/api/v1/eval/experiments/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const orgId = req.platformState!.auth!.context.org.id;
+    const exp = experimentsById.get(id);
+    if (!exp || exp.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Experiment ${id} not found.`);
+    }
+    return exp;
+  });
+
+  app.get('/api/v1/eval/experiments/:id/results', async (req) => {
+    const { id } = req.params as { id: string };
+    const orgId = req.platformState!.auth!.context.org.id;
+    const exp = experimentsById.get(id);
+    if (!exp || exp.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Experiment ${id} not found.`);
+    }
+    const items = experimentResultsByExperimentId.get(id) ?? [];
+    return { items };
+  });
+
+  app.post('/api/v1/eval/experiments/:id/run', async (req) => {
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const exp = experimentsById.get(id);
+    if (!exp || exp.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Experiment ${id} not found.`);
+    }
+
+    const dataset = datasetsById.get(exp.dataset_id);
+    if (!dataset) {
+      throw new PlatformError('RES_NOT_FOUND', `Dataset ${exp.dataset_id} not found.`);
+    }
+
+    const testCases: TestCaseRecord[] = Array.from(testCasesById.values()).filter(
+      (tc) => tc.dataset_id === exp.dataset_id,
+    );
+
+    const graders: GraderRecord[] = exp.grader_ids
+      .map((gid) => gradersById.get(gid))
+      .filter((g): g is StoredGrader => g !== undefined);
+
+    exp.status = 'running';
+    exp.started_at = clock.now().toISOString();
+
+    const agentRunner = async (versionId: string, inputs: Record<string, unknown>) => {
+      let matchedVersion: StoredAgentVersion | undefined;
+      let parentAgent: StoredAgent | undefined;
+      for (const a of agentsById.values()) {
+        const found = a.versions.find((v) => v.id === versionId);
+        if (found) {
+          matchedVersion = found;
+          parentAgent = a;
+          break;
+        }
+      }
+
+      if (matchedVersion && parentAgent) {
+        const prompt =
+          typeof inputs['prompt'] === 'string'
+            ? inputs['prompt']
+            : typeof inputs['query'] === 'string'
+            ? inputs['query']
+            : typeof inputs['message'] === 'string'
+            ? inputs['message']
+            : JSON.stringify(inputs);
+
+        const systemPrompt = matchedVersion.definition.prompt.system;
+        const answer = `Processed "${prompt}" by ${parentAgent.name} (system: ${systemPrompt.slice(0, 40)})`;
+        return {
+          output: { answer, result: answer, status: 'success' },
+          costMicroUsd: 1200,
+          durationMs: 35,
+        };
+      }
+
+      // If version not in local agentsById map, produce simulated output
+      return {
+        output: { result: inputs['prompt'] ? `Handled: ${String(inputs['prompt'])}` : 'Completed successfully' },
+        costMicroUsd: 1500,
+        durationMs: 45,
+      };
+    };
+
+    const runOutcome = await runExperiment(
+      buildTenantContext(req, exp.workspace_id),
+      {
+        experimentId: exp.id,
+        datasetId: exp.dataset_id,
+        agentVersionId: exp.agent_version_id,
+        baselineVersionId: exp.baseline_version_id,
+        graders,
+        testCases,
+        releaseGateConfig: exp.release_gate_config as ReleaseGateConfig,
+        runner: agentRunner,
+      },
+    );
+
+    const storedResults: StoredExperimentResult[] = runOutcome.results.map((r) => ({
+      id: r.id,
+      org_id: r.org_id,
+      experiment_id: r.experiment_id,
+      test_case_id: r.test_case_id,
+      run_id: r.run_id ?? null,
+      actual_output: r.actual_output ?? null,
+      grader_results: r.grader_results as unknown as Record<string, unknown>[],
+      passed: r.passed,
+      score: r.score,
+      duration_ms: r.duration_ms,
+      cost_micro_usd: r.cost_micro_usd,
+      is_regression: r.is_regression,
+      diff: r.diff ?? null,
+      created_at: clock.now().toISOString(),
+    }));
+
+    experimentResultsByExperimentId.set(exp.id, storedResults);
+
+    exp.status = 'completed';
+    exp.completed_at = clock.now().toISOString();
+    exp.metrics = runOutcome.metrics as unknown as Record<string, unknown>;
+    exp.gate_verdict = runOutcome.gateVerdict.verdict;
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'experiment.run',
+      resource: { type: 'experiment', id: exp.id },
+      decision: exp.gate_verdict === 'failed' ? 'deny' : 'allow',
+      context: {
+        pass_rate: runOutcome.metrics.pass_rate,
+        gate_verdict: exp.gate_verdict,
+        total_cases: runOutcome.metrics.total_cases,
+      },
+    });
+
+    return exp;
+  });
+
+  app.post('/api/v1/runs/:id/save-test-case', async (req, reply) => {
+    const routePath = '/api/v1/runs/{id}/save-test-case';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      dataset_id: string;
+      name: string;
+      step_id?: string;
+      expected_output?: Record<string, unknown>;
+      rubric?: Record<string, unknown>;
+      tags?: string[];
+      difficulty?: 'easy' | 'medium' | 'hard' | 'adversarial';
+      weight?: number;
+    }>(contract.bodySchema, req.body);
+
+    const { id: runId } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const dataset = datasetsById.get(body.dataset_id);
+    if (!dataset || dataset.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Dataset ${body.dataset_id} not found.`);
+    }
+
+    const run = await executionEngine.getRun(orgId, runId);
+    if (!run) {
+      throw new PlatformError('RES_NOT_FOUND', `Run ${runId} not found.`);
+    }
+
+    const tc = buildTestCaseFromRun({
+      orgId,
+      workspaceId: dataset.workspace_id,
+      datasetId: body.dataset_id,
+      name: body.name,
+      runId: run.id,
+      stepId: body.step_id,
+      runInputs: (run.input as Record<string, unknown>) ?? {},
+      runOutput: (run.output as Record<string, unknown>) ?? null,
+      expectedOutput: body.expected_output,
+      rubric: body.rubric,
+      tags: body.tags,
+      difficulty: body.difficulty,
+      weight: body.weight,
+    });
+
+    const stored: StoredTestCase = {
+      ...tc,
+      created_at: tc.created_at.toISOString(),
+      updated_at: tc.updated_at.toISOString(),
+    };
+    testCasesById.set(tc.id, stored);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'test_case.save_from_run',
+      resource: { type: 'test_case', id: tc.id, run_id: runId, dataset_id: body.dataset_id },
+      decision: 'allow',
+      context: { name: stored.name, source_run_id: runId },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, stored);
+    return stored;
   });
 
   return {

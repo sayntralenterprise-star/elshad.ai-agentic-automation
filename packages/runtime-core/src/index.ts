@@ -1649,3 +1649,4 @@ export async function executeReActAgentRun(
 }
 
 export * from './approvals.js';
+export * from './eval.js';

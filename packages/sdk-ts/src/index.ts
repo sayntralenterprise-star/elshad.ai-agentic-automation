@@ -803,6 +803,83 @@ export interface NotificationDto {
   createdAt: string;
 }
 
+export interface DatasetDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestCaseDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  datasetId: string;
+  name: string;
+  inputs: Record<string, unknown>;
+  expectedOutput: Record<string, unknown> | null;
+  rubric: Record<string, unknown>;
+  tags: string[];
+  difficulty: 'easy' | 'medium' | 'hard' | 'adversarial';
+  weight: number;
+  sourceRunId: string | null;
+  sourceStepId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GraderDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  type: 'exact_match' | 'json_schema' | 'code_assertion' | 'llm_judge';
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExperimentDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  datasetId: string;
+  agentVersionId: string;
+  baselineVersionId: string | null;
+  graderIds: string[];
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  releaseGateConfig: Record<string, unknown>;
+  gateVerdict: 'passed' | 'failed' | 'warning' | null;
+  metrics: Record<string, unknown>;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ExperimentResultDto {
+  id: string;
+  orgId: string;
+  experimentId: string;
+  testCaseId: string;
+  runId: string | null;
+  actualOutput: Record<string, unknown> | null;
+  graderResults: Record<string, unknown>[];
+  passed: boolean;
+  score: number;
+  durationMs: number;
+  costMicroUsd: number;
+  isRegression: boolean;
+  diff: Record<string, unknown> | null;
+  createdAt: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -2594,6 +2671,186 @@ export class PlatformClient {
       return res.data.map(mapNotification);
     },
   };
+
+  readonly evaluations = {
+    datasets: {
+      list: async (): Promise<DatasetDto[]> => {
+        const res = await this.request<{ items: Record<string, unknown>[] }>(
+          'GET',
+          '/api/v1/eval/datasets',
+        );
+        return res.items.map(mapDataset);
+      },
+      create: async (input: {
+        name: string;
+        description?: string;
+        tags?: string[];
+        metadata?: Record<string, unknown>;
+      }): Promise<DatasetDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'POST',
+          '/api/v1/eval/datasets',
+          { body: input },
+        );
+        return mapDataset(res);
+      },
+      get: async (id: string): Promise<DatasetDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'GET',
+          `/api/v1/eval/datasets/${id}`,
+        );
+        return mapDataset(res);
+      },
+      listTestCases: async (datasetId: string): Promise<TestCaseDto[]> => {
+        const res = await this.request<{ items: Record<string, unknown>[] }>(
+          'GET',
+          `/api/v1/eval/datasets/${datasetId}/test-cases`,
+        );
+        return res.items.map(mapTestCase);
+      },
+      createTestCase: async (
+        datasetId: string,
+        input: {
+          name: string;
+          inputs: Record<string, unknown>;
+          expectedOutput?: Record<string, unknown>;
+          rubric?: Record<string, unknown>;
+          tags?: string[];
+          difficulty?: 'easy' | 'medium' | 'hard' | 'adversarial';
+          weight?: number;
+          sourceRunId?: string;
+          sourceStepId?: string;
+        },
+      ): Promise<TestCaseDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'POST',
+          `/api/v1/eval/datasets/${datasetId}/test-cases`,
+          {
+            body: {
+              name: input.name,
+              inputs: input.inputs,
+              expected_output: input.expectedOutput,
+              rubric: input.rubric,
+              tags: input.tags,
+              difficulty: input.difficulty,
+              weight: input.weight,
+              source_run_id: input.sourceRunId,
+              source_step_id: input.sourceStepId,
+            },
+          },
+        );
+        return mapTestCase(res);
+      },
+    },
+    graders: {
+      list: async (): Promise<GraderDto[]> => {
+        const res = await this.request<{ items: Record<string, unknown>[] }>(
+          'GET',
+          '/api/v1/eval/graders',
+        );
+        return res.items.map(mapGrader);
+      },
+      create: async (input: {
+        name: string;
+        description?: string;
+        type: 'exact_match' | 'json_schema' | 'code_assertion' | 'llm_judge';
+        config?: Record<string, unknown>;
+      }): Promise<GraderDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'POST',
+          '/api/v1/eval/graders',
+          { body: input },
+        );
+        return mapGrader(res);
+      },
+    },
+    experiments: {
+      list: async (): Promise<ExperimentDto[]> => {
+        const res = await this.request<{ items: Record<string, unknown>[] }>(
+          'GET',
+          '/api/v1/eval/experiments',
+        );
+        return res.items.map(mapExperiment);
+      },
+      create: async (input: {
+        name: string;
+        datasetId: string;
+        agentVersionId: string;
+        baselineVersionId?: string;
+        graderIds?: string[];
+        releaseGateConfig?: Record<string, unknown>;
+      }): Promise<ExperimentDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'POST',
+          '/api/v1/eval/experiments',
+          {
+            body: {
+              name: input.name,
+              dataset_id: input.datasetId,
+              agent_version_id: input.agentVersionId,
+              baseline_version_id: input.baselineVersionId,
+              grader_ids: input.graderIds ?? [],
+              release_gate_config: input.releaseGateConfig,
+            },
+          },
+        );
+        return mapExperiment(res);
+      },
+      get: async (id: string): Promise<ExperimentDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'GET',
+          `/api/v1/eval/experiments/${id}`,
+        );
+        return mapExperiment(res);
+      },
+      results: async (id: string): Promise<ExperimentResultDto[]> => {
+        const res = await this.request<{ items: Record<string, unknown>[] }>(
+          'GET',
+          `/api/v1/eval/experiments/${id}/results`,
+        );
+        return res.items.map(mapExperimentResult);
+      },
+      run: async (id: string): Promise<ExperimentDto> => {
+        const res = await this.request<Record<string, unknown>>(
+          'POST',
+          `/api/v1/eval/experiments/${id}/run`,
+          { body: {} },
+        );
+        return mapExperiment(res);
+      },
+    },
+    saveRunAsTestCase: async (
+      runId: string,
+      input: {
+        datasetId: string;
+        name: string;
+        stepId?: string;
+        expectedOutput?: Record<string, unknown>;
+        rubric?: Record<string, unknown>;
+        tags?: string[];
+        difficulty?: 'easy' | 'medium' | 'hard' | 'adversarial';
+        weight?: number;
+      },
+    ): Promise<TestCaseDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/runs/${runId}/save-test-case`,
+        {
+          body: {
+            dataset_id: input.datasetId,
+            name: input.name,
+            step_id: input.stepId,
+            expected_output: input.expectedOutput,
+            rubric: input.rubric,
+            tags: input.tags,
+            difficulty: input.difficulty,
+            weight: input.weight,
+          },
+        },
+      );
+      return mapTestCase(res);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -3291,5 +3548,92 @@ function mapNotification(n: Record<string, unknown>): NotificationDto {
     actionLinks: (n.action_links ?? {}) as Record<string, unknown>,
     status: (n.status as NotificationDto['status']) ?? 'sent',
     createdAt: String(n.created_at),
+  };
+}
+
+function mapDataset(d: Record<string, unknown>): DatasetDto {
+  return {
+    id: String(d.id),
+    orgId: String(d.org_id),
+    workspaceId: String(d.workspace_id),
+    name: String(d.name),
+    description: d.description ? String(d.description) : null,
+    tags: Array.isArray(d.tags) ? (d.tags as string[]) : [],
+    metadata: (d.metadata ?? {}) as Record<string, unknown>,
+    createdAt: String(d.created_at),
+    updatedAt: String(d.updated_at),
+  };
+}
+
+function mapTestCase(t: Record<string, unknown>): TestCaseDto {
+  return {
+    id: String(t.id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    datasetId: String(t.dataset_id),
+    name: String(t.name),
+    inputs: (t.inputs ?? {}) as Record<string, unknown>,
+    expectedOutput: (t.expected_output as Record<string, unknown> | null) ?? null,
+    rubric: (t.rubric ?? {}) as Record<string, unknown>,
+    tags: Array.isArray(t.tags) ? (t.tags as string[]) : [],
+    difficulty: (t.difficulty as TestCaseDto['difficulty']) ?? 'medium',
+    weight: Number(t.weight ?? 1.0),
+    sourceRunId: t.source_run_id ? String(t.source_run_id) : null,
+    sourceStepId: t.source_step_id ? String(t.source_step_id) : null,
+    createdAt: String(t.created_at),
+    updatedAt: String(t.updated_at),
+  };
+}
+
+function mapGrader(g: Record<string, unknown>): GraderDto {
+  return {
+    id: String(g.id),
+    orgId: String(g.org_id),
+    workspaceId: String(g.workspace_id),
+    name: String(g.name),
+    description: g.description ? String(g.description) : null,
+    type: g.type as GraderDto['type'],
+    config: (g.config ?? {}) as Record<string, unknown>,
+    createdAt: String(g.created_at),
+    updatedAt: String(g.updated_at),
+  };
+}
+
+function mapExperiment(e: Record<string, unknown>): ExperimentDto {
+  return {
+    id: String(e.id),
+    orgId: String(e.org_id),
+    workspaceId: String(e.workspace_id),
+    name: String(e.name),
+    datasetId: String(e.dataset_id),
+    agentVersionId: String(e.agent_version_id),
+    baselineVersionId: e.baseline_version_id ? String(e.baseline_version_id) : null,
+    graderIds: Array.isArray(e.grader_ids) ? (e.grader_ids as string[]) : [],
+    status: (e.status as ExperimentDto['status']) ?? 'pending',
+    releaseGateConfig: (e.release_gate_config ?? {}) as Record<string, unknown>,
+    gateVerdict: (e.gate_verdict as ExperimentDto['gateVerdict']) ?? null,
+    metrics: (e.metrics ?? {}) as Record<string, unknown>,
+    createdAt: String(e.created_at),
+    startedAt: e.started_at ? String(e.started_at) : null,
+    completedAt: e.completed_at ? String(e.completed_at) : null,
+  };
+}
+
+function mapExperimentResult(r: Record<string, unknown>): ExperimentResultDto {
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    experimentId: String(r.experiment_id),
+    testCaseId: String(r.test_case_id),
+    runId: r.run_id ? String(r.run_id) : null,
+    actualOutput: (r.actual_output as Record<string, unknown> | null) ?? null,
+    graderResults: Array.isArray(r.grader_results) ? (r.grader_results as Record<string, unknown>[]) : [],
+    passed: Boolean(r.passed),
+    score: Number(r.score ?? 0),
+    durationMs: Number(r.duration_ms ?? 0),
+    costMicroUsd: Number(r.cost_micro_usd ?? 0),
+    isRegression: Boolean(r.is_regression),
+    diff: (r.diff as Record<string, unknown> | null) ?? null,
+    createdAt: String(r.created_at),
   };
 }

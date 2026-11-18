@@ -151,6 +151,7 @@ export interface RunsViewProps {
   onSelectStep: (step: RunStepDto) => void;
   onCancelRun: (runId: string) => void;
   onRedriveRun: (runId: string) => void;
+  onSaveAsTestCase?: (run: RunDto) => void;
 }
 
 export function RunsView({
@@ -168,6 +169,7 @@ export function RunsView({
   onSelectStep,
   onCancelRun,
   onRedriveRun,
+  onSaveAsTestCase,
 }: RunsViewProps) {
   const [tab, setTab] = useState<'runs' | 'dlq'>('runs');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -451,6 +453,24 @@ export function RunsView({
                   Run Trace: <code>{selectedRun.id}</code>
                 </h2>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  {onSaveAsTestCase && (
+                    <button
+                      type="button"
+                      onClick={() => onSaveAsTestCase(selectedRun)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--brand)',
+                        color: 'var(--brand-contrast)',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Save as Test Case
+                    </button>
+                  )}
                   <StatusChip label={`${selectedEvents.length} events`} tone="info" />
                   <StatusChip label={selectedRun.status} tone={statusTone(selectedRun.status)} />
                 </div>

@@ -36,6 +36,7 @@ import {
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import { AgentStudioView } from './AgentStudioView.js';
 import { ApprovalsView } from './ApprovalsView.js';
+import { EvaluationsView } from './EvaluationsView.js';
 import { GovernanceHardeningView } from './GovernanceHardeningView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
@@ -888,6 +889,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     <li>Envelope secrets vault, 1-step budgets &amp; emergency kill switches — available under Governance</li>
                     <li>Governance v1: O.1 RBAC, agent identities, scoped tool grants, declarative policies &amp; evidence packs — available under Governance</li>
                     <li>Human-in-the-loop Approvals Inbox, Slack/email notifications &amp; edit-and-approve — available under Approvals</li>
+                    <li>Evaluation v1: Golden datasets, test cases, automated graders, experiments matrix &amp; release gates — available under Evaluations</li>
                   </ul>
                 </section>
               </div>
@@ -1225,11 +1227,18 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     await loadRuns();
                   })();
                 }}
+                onSaveAsTestCase={() => {
+                  setSection('evaluations');
+                }}
               />
             )}
 
             {section === 'approvals' && (
               <ApprovalsView client={client} workspaceId={activeWorkspace?.id} />
+            )}
+
+            {section === 'evaluations' && (
+              <EvaluationsView client={client} workspaceId={activeWorkspace?.id} />
             )}
 
             {section !== 'home' &&
@@ -1239,7 +1248,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'agents' &&
               section !== 'workflows' &&
               section !== 'knowledge' &&
-              section !== 'approvals' && (
+              section !== 'approvals' &&
+              section !== 'evaluations' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}

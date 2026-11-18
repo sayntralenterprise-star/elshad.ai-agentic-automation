@@ -2079,4 +2079,247 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.3 Evaluation v1: End-to-end journey from failed run to saved test case and passing regression experiment [E1.3, FR-EV-1..4, FR-EV-8]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 'engineer@s13.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    const { app } = buildApiServer({ config, store });
+    const orgId = [...store.orgs.keys()][0]!;
+    const ws = [...store.workspaces.values()].find((w) => w.org_id === orgId)!;
+    const prj = [...store.projects.values()].find((p) => p.org_id === orgId)!;
+
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'engineer@s13.local', password: 'Password123!' },
+    });
+    expect(loginRes.statusCode).toBe(200);
+    const cookie = parseCookie(loginRes.headers['set-cookie']);
+    const csrf = loginRes.json().csrf_token as string;
+    const authHeaders = { cookie, 'x-csrf-token': csrf, 'x-workspace-id': ws.id };
+
+    // 1. Create Golden Evaluation Dataset (FR-EV-1)
+    const dsRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/eval/datasets',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-ds-1' },
+      payload: {
+        name: 'Billing & Refund Golden Set',
+        description: 'Regression dataset for billing policies and extraction',
+        tags: ['billing', 'golden', 'regression'],
+      },
+    });
+    expect(dsRes.statusCode).toBe(201);
+    const dataset = dsRes.json();
+    expect(dataset.id).toMatch(/^ds_/);
+    expect(dataset.name).toBe('Billing & Refund Golden Set');
+
+    // 2. Register Pluggable Graders (FR-EV-2)
+    const exactGraderRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/eval/graders',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-grd-1' },
+      payload: {
+        name: 'Refund Exact Grader',
+        type: 'exact_match',
+        config: { field_path: 'status', trim: true, case_sensitive: false },
+      },
+    });
+    expect(exactGraderRes.statusCode).toBe(201);
+    const exactGrader = exactGraderRes.json();
+
+    const codeGraderRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/eval/graders',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-grd-2' },
+      payload: {
+        name: 'Amount Range Assertion',
+        type: 'code_assertion',
+        config: {
+          code: 'return typeof actual === "object" && actual !== null;',
+        },
+      },
+    });
+    expect(codeGraderRes.statusCode).toBe(201);
+    const codeGrader = codeGraderRes.json();
+
+    const judgeGraderRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/eval/graders',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-grd-3' },
+      payload: {
+        name: 'Safety & Rubric Judge',
+        type: 'llm_judge',
+        config: { pass_threshold: 3.5 },
+      },
+    });
+    expect(judgeGraderRes.statusCode).toBe(201);
+    const judgeGrader = judgeGraderRes.json();
+
+    // 3. Create Agent version v1.0.0 (Flawed Agent)
+    const v1Def = {
+      name: 'refund-agent',
+      version: '1.0.0',
+      autonomy_level: 1,
+      model: { tier: 'standard' as const, provider: 'mock', model: 'mock/react-default' },
+      prompt: { system: 'Old flawed prompt: deny all requests' },
+      tools: [],
+    };
+    const agentCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-agent-1' },
+      payload: {
+        project_id: prj.id,
+        definition: v1Def,
+      },
+    });
+    expect(agentCreate.statusCode).toBe(201);
+    const agent = agentCreate.json();
+    const version1Id = agent.versions[0].id as string;
+
+    const pubV1Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions/${version1Id}/publish`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-agent-pub-v1' },
+      payload: { message: 'Initial flawed release' },
+    });
+    expect(pubV1Res.statusCode).toBe(200);
+
+    // 4. Execute a production run that fails / produces flawed output
+    const runCreate = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/runs`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-run-flawed' },
+      payload: {
+        input: 'User requests refund for Order #9912 within 14 days',
+      },
+    });
+    expect(runCreate.statusCode).toBe(201);
+    const flawedRun = runCreate.json();
+
+    // 5. From the failed production run, Save as Test Case in < 5 min (FR-EV-8, §5.6 446)
+    const saveCaseRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${flawedRun.id}/save-test-case`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-save-case' },
+      payload: {
+        dataset_id: dataset.id,
+        name: 'Refund eligibility within 14 days regression',
+        expected_output: {
+          status: 'success',
+          result: 'Eligible for refund: Order #9912 is within the 30-day window.',
+        },
+        difficulty: 'hard',
+        tags: ['production_regression', 'billing'],
+      },
+    });
+    expect(saveCaseRes.statusCode).toBe(201);
+    const savedTestCase = saveCaseRes.json();
+    expect(savedTestCase.id).toMatch(/^tc_/);
+    expect(savedTestCase.source_run_id).toBe(flawedRun.id);
+    expect(savedTestCase.tags).toContain('captured_from_run');
+
+    // 6. Fix the prompt: publish Agent version v1.0.1 (Fixed Agent)
+    const updateAgent = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/agents/${agent.id}`,
+      headers: { ...authHeaders },
+      payload: {
+        message: 'Fix refund eligibility check',
+        definition: {
+          ...v1Def,
+          version: '1.0.1',
+          prompt: {
+            system: 'Fixed prompt: approve refunds within 30 days and provide clear explanation',
+          },
+        },
+      },
+    });
+    expect(updateAgent.statusCode).toBe(200);
+    const patchedAgent = updateAgent.json();
+    const version2Id = patchedAgent.versions[patchedAgent.versions.length - 1].id as string;
+    expect(version2Id).not.toBe(version1Id);
+
+    const publishAgent = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions/${version2Id}/publish`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-agent-pub-v2' },
+      payload: { message: 'Fix refund eligibility check' },
+    });
+    expect(publishAgent.statusCode).toBe(200);
+
+    // 7. Create Evaluation Experiment comparing candidate v1.0.1 against baseline v1.0.0
+    const expCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/eval/experiments',
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-exp-create' },
+      payload: {
+        name: 'v1.0.1 vs v1.0.0 Refund Regression Experiment',
+        dataset_id: dataset.id,
+        agent_version_id: version2Id,
+        baseline_version_id: version1Id,
+        grader_ids: [exactGrader.id, codeGrader.id, judgeGrader.id],
+        release_gate_config: {
+          min_pass_rate: 0.9,
+          min_score: 3.5,
+          fail_on_critical_regression: true,
+        },
+      },
+    });
+    expect(expCreate.statusCode).toBe(201);
+    const experiment = expCreate.json();
+    expect(experiment.status).toBe('pending');
+
+    // 8. Execute the Experiment Run (FR-EV-3)
+    const runExpRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/eval/experiments/${experiment.id}/run`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's13-exp-run' },
+      payload: {},
+    });
+    expect(runExpRes.statusCode).toBe(200);
+    const executedExp = runExpRes.json();
+    expect(executedExp.status).toBe('completed');
+    expect(executedExp.metrics.total_cases).toBe(1);
+    expect(executedExp.metrics.passed_cases).toBe(1);
+    expect(executedExp.metrics.pass_rate).toBe(1.0);
+    expect(executedExp.metrics.regression_count).toBe(0);
+    expect(executedExp.metrics.total_cost_micro_usd).toBeGreaterThan(0);
+
+    // 9. Inspect the Experiment Results Matrix (FR-EV-3, §7.3.9)
+    const matrixRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/eval/experiments/${experiment.id}/results`,
+      headers: authHeaders,
+    });
+    expect(matrixRes.statusCode).toBe(200);
+    const matrix = matrixRes.json();
+    expect(matrix.items).toHaveLength(1);
+    const caseResult = matrix.items[0];
+    expect(caseResult.test_case_id).toBe(savedTestCase.id);
+    expect(caseResult.passed).toBe(true);
+    expect(caseResult.grader_results).toHaveLength(3);
+    expect(caseResult.duration_ms).toBeGreaterThanOrEqual(0);
+
+    // 10. Verify audit event chain recorded dataset, test case from run, and experiment execution (FR-GOV-17)
+    const auditRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit-events',
+      headers: authHeaders,
+    });
+    expect(auditRes.statusCode).toBe(200);
+    const events = auditRes.json().data as Array<{ action: string }>;
+    const actions = events.map((e) => e.action);
+    expect(actions).toContain('dataset.create');
+    expect(actions).toContain('test_case.save_from_run');
+    expect(actions).toContain('experiment.create');
+    expect(actions).toContain('experiment.run');
+
+    await app.close();
+  });
 });

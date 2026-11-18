@@ -1727,3 +1727,150 @@ export const NotificationWireSchema = z
     created_at: z.string(),
   })
   .openapi('Notification');
+
+// ============================================================================
+// Slice S1.3: Evaluation v1 Schemas (FR-EV-1..4, FR-EV-8, §5.6, §7.3.9, N.4)
+// ============================================================================
+
+export const DatasetWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string().min(2).max(100),
+    description: z.string().nullable().optional(),
+    tags: z.array(z.string()).default([]),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Dataset');
+
+export const CreateDatasetRequestSchema = z
+  .object({
+    name: z.string().min(2).max(100),
+    description: z.string().max(1000).optional(),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('CreateDatasetRequest');
+
+export const TestCaseWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    dataset_id: z.string(),
+    name: z.string().min(2).max(120),
+    inputs: z.record(z.string(), z.unknown()),
+    expected_output: z.record(z.string(), z.unknown()).nullable().optional(),
+    rubric: z.record(z.string(), z.unknown()).default({}),
+    tags: z.array(z.string()).default([]),
+    difficulty: z.enum(['easy', 'medium', 'hard', 'adversarial']).default('medium'),
+    weight: z.number().positive().default(1.0),
+    source_run_id: z.string().nullable().optional(),
+    source_step_id: z.string().nullable().optional(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('TestCase');
+
+export const CreateTestCaseRequestSchema = z
+  .object({
+    name: z.string().min(2).max(120),
+    inputs: z.record(z.string(), z.unknown()),
+    expected_output: z.record(z.string(), z.unknown()).optional(),
+    rubric: z.record(z.string(), z.unknown()).optional(),
+    tags: z.array(z.string()).optional(),
+    difficulty: z.enum(['easy', 'medium', 'hard', 'adversarial']).default('medium'),
+    weight: z.number().positive().default(1.0),
+    source_run_id: z.string().optional(),
+    source_step_id: z.string().optional(),
+  })
+  .openapi('CreateTestCaseRequest');
+
+export const SaveRunAsTestCaseRequestSchema = z
+  .object({
+    dataset_id: z.string(),
+    name: z.string().min(2).max(120),
+    step_id: z.string().optional(),
+    expected_output: z.record(z.string(), z.unknown()).optional(),
+    rubric: z.record(z.string(), z.unknown()).optional(),
+    tags: z.array(z.string()).optional(),
+    difficulty: z.enum(['easy', 'medium', 'hard', 'adversarial']).default('medium'),
+    weight: z.number().positive().default(1.0),
+  })
+  .openapi('SaveRunAsTestCaseRequest');
+
+export const GraderWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string().min(2).max(100),
+    description: z.string().nullable().optional(),
+    type: z.enum(['exact_match', 'json_schema', 'code_assertion', 'llm_judge']),
+    config: z.record(z.string(), z.unknown()).default({}),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Grader');
+
+export const CreateGraderRequestSchema = z
+  .object({
+    name: z.string().min(2).max(100),
+    description: z.string().max(1000).optional(),
+    type: z.enum(['exact_match', 'json_schema', 'code_assertion', 'llm_judge']),
+    config: z.record(z.string(), z.unknown()).default({}),
+  })
+  .openapi('CreateGraderRequest');
+
+export const ExperimentWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string().min(2).max(100),
+    dataset_id: z.string(),
+    agent_version_id: z.string(),
+    baseline_version_id: z.string().nullable().optional(),
+    grader_ids: z.array(z.string()).default([]),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+    release_gate_config: z.record(z.string(), z.unknown()).default({}),
+    gate_verdict: z.enum(['passed', 'failed', 'warning']).nullable().optional(),
+    metrics: z.record(z.string(), z.unknown()).default({}),
+    created_at: z.string(),
+    started_at: z.string().nullable().optional(),
+    completed_at: z.string().nullable().optional(),
+  })
+  .openapi('Experiment');
+
+export const CreateExperimentRequestSchema = z
+  .object({
+    name: z.string().min(2).max(100),
+    dataset_id: z.string(),
+    agent_version_id: z.string(),
+    baseline_version_id: z.string().optional(),
+    grader_ids: z.array(z.string()).default([]),
+    release_gate_config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('CreateExperimentRequest');
+
+export const ExperimentResultWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    experiment_id: z.string(),
+    test_case_id: z.string(),
+    run_id: z.string().nullable().optional(),
+    actual_output: z.record(z.string(), z.unknown()).nullable().optional(),
+    grader_results: z.array(z.record(z.string(), z.unknown())).default([]),
+    passed: z.boolean(),
+    score: z.number(),
+    duration_ms: z.number(),
+    cost_micro_usd: z.union([z.number(), z.string()]),
+    is_regression: z.boolean().default(false),
+    diff: z.record(z.string(), z.unknown()).nullable().optional(),
+    created_at: z.string(),
+  })
+  .openapi('ExperimentResult');

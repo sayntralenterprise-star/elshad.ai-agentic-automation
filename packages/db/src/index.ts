@@ -763,6 +763,83 @@ export interface NotificationsTable {
   created_at: Date;
 }
 
+export interface DatasetsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface TestCasesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  dataset_id: string;
+  name: string;
+  inputs: Record<string, unknown>;
+  expected_output: Record<string, unknown> | null;
+  rubric: Record<string, unknown>;
+  tags: string[];
+  difficulty: 'easy' | 'medium' | 'hard' | 'adversarial';
+  weight: number;
+  source_run_id: string | null;
+  source_step_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface GradersTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  type: 'exact_match' | 'json_schema' | 'code_assertion' | 'llm_judge';
+  config: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ExperimentsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  dataset_id: string;
+  agent_version_id: string;
+  baseline_version_id: string | null;
+  grader_ids: string[];
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  release_gate_config: Record<string, unknown>;
+  gate_verdict: 'passed' | 'failed' | 'warning' | null;
+  metrics: Record<string, unknown>;
+  created_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+}
+
+export interface ExperimentResultsTable {
+  id: string;
+  org_id: string;
+  experiment_id: string;
+  test_case_id: string;
+  run_id: string | null;
+  actual_output: Record<string, unknown> | null;
+  grader_results: Record<string, unknown>[];
+  passed: boolean;
+  score: number;
+  duration_ms: number;
+  cost_micro_usd: number | string;
+  is_regression: boolean;
+  diff: Record<string, unknown> | null;
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -812,6 +889,11 @@ export interface Database {
   approvals: ApprovalsTable;
   approval_decisions: ApprovalDecisionsTable;
   notifications: NotificationsTable;
+  datasets: DatasetsTable;
+  test_cases: TestCasesTable;
+  graders: GradersTable;
+  experiments: ExperimentsTable;
+  experiment_results: ExperimentResultsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

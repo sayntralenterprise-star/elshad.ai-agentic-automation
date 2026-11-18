@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,7 +13,11 @@ import {
   type BudgetDto,
   type CitationChipDto,
   type ConversationSessionDto,
+  type DatasetDto,
   type DlqItemDto,
+  type ExperimentDto,
+  type ExperimentResultDto,
+  type GraderDto,
   type KbChunkDto,
   type KbDocumentDto,
   type KbSourceDto,
@@ -28,6 +32,7 @@ import {
   type RunDto,
   type RunStepDto,
   type SecretMetadataDto,
+  type TestCaseDto,
   type ToolContractDto,
   type ToolGrantDto,
   type TriggerDto,
@@ -1275,6 +1280,240 @@ function createMockClient(
   };
   client.notifications.list = async () => structuredClone(notificationList);
 
+  const datasetList: DatasetDto[] = [
+    {
+      id: 'ds_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: 'Billing Regression Set',
+      description: 'Refund & invoice test cases',
+      tags: ['billing', 'regression'],
+      metadata: {},
+      createdAt: '2026-11-18T12:00:00.000Z',
+      updatedAt: '2026-11-18T12:00:00.000Z',
+    },
+  ];
+  const testCaseList: TestCaseDto[] = [
+    {
+      id: 'tc_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      datasetId: 'ds_mock_1',
+      name: 'Standard 14-day refund',
+      inputs: { prompt: 'Request refund for order 123' },
+      expectedOutput: { result: 'Refund approved' },
+      rubric: { criteria: 'Accurate and safe response' },
+      tags: ['billing'],
+      difficulty: 'medium',
+      weight: 1.0,
+      sourceRunId: null,
+      sourceStepId: null,
+      createdAt: '2026-11-18T12:00:00.000Z',
+      updatedAt: '2026-11-18T12:00:00.000Z',
+    },
+  ];
+  const graderList: GraderDto[] = [
+    {
+      id: 'grd_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: 'Exact Match Grader',
+      description: 'Exact string match with trimming',
+      type: 'exact_match',
+      config: { trim: true },
+      createdAt: '2026-11-18T12:00:00.000Z',
+      updatedAt: '2026-11-18T12:00:00.000Z',
+    },
+  ];
+  const expList: ExperimentDto[] = [
+    {
+      id: 'exp_mock_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: 'Candidate v1.0.1 Regression Check',
+      datasetId: 'ds_mock_1',
+      agentVersionId: 'agv_2',
+      baselineVersionId: 'agv_1',
+      graderIds: ['grd_mock_1'],
+      status: 'completed',
+      releaseGateConfig: { min_pass_rate: 0.95 },
+      gateVerdict: 'passed',
+      metrics: {
+        total_cases: 1,
+        passed_cases: 1,
+        failed_cases: 0,
+        pass_rate: 1.0,
+        avg_score: 5.0,
+        total_cost_micro_usd: 1200,
+        avg_duration_ms: 35,
+        regression_count: 0,
+      },
+      createdAt: '2026-11-18T12:00:00.000Z',
+      startedAt: '2026-11-18T12:00:01.000Z',
+      completedAt: '2026-11-18T12:00:02.000Z',
+    },
+  ];
+  const expResults: ExperimentResultDto[] = [
+    {
+      id: 'res_mock_1',
+      orgId: 'org_1',
+      experimentId: 'exp_mock_1',
+      testCaseId: 'tc_mock_1',
+      runId: 'run_123',
+      actualOutput: { result: 'Refund approved' },
+      graderResults: [
+        {
+          grader_id: 'grd_mock_1',
+          grader_name: 'Exact Match Grader',
+          type: 'exact_match',
+          passed: true,
+          score: 1.0,
+          rationale: 'Exact string match succeeded',
+        },
+      ],
+      passed: true,
+      score: 1.0,
+      durationMs: 35,
+      costMicroUsd: 1200,
+      isRegression: false,
+      diff: null,
+      createdAt: '2026-11-18T12:00:02.000Z',
+    },
+  ];
+
+  client.evaluations.datasets.list = async () => structuredClone(datasetList);
+  client.evaluations.datasets.create = async (input) => {
+    const ds: DatasetDto = {
+      id: `ds_mock_${datasetList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: input.name,
+      description: input.description ?? null,
+      tags: input.tags ?? [],
+      metadata: input.metadata ?? {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    datasetList.push(ds);
+    return structuredClone(ds);
+  };
+  client.evaluations.datasets.get = async (id) => {
+    const found = datasetList.find((d) => d.id === id);
+    if (!found) throw new Error('dataset not found');
+    return structuredClone(found);
+  };
+  client.evaluations.datasets.listTestCases = async (dsId) =>
+    structuredClone(testCaseList.filter((tc) => tc.datasetId === dsId));
+  client.evaluations.datasets.createTestCase = async (dsId, input) => {
+    const tc: TestCaseDto = {
+      id: `tc_mock_${testCaseList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      datasetId: dsId,
+      name: input.name,
+      inputs: input.inputs,
+      expectedOutput: input.expectedOutput ?? null,
+      rubric: input.rubric ?? {},
+      tags: input.tags ?? [],
+      difficulty: input.difficulty ?? 'medium',
+      weight: input.weight ?? 1.0,
+      sourceRunId: input.sourceRunId ?? null,
+      sourceStepId: input.sourceStepId ?? null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    testCaseList.push(tc);
+    return structuredClone(tc);
+  };
+  client.evaluations.graders.list = async () => structuredClone(graderList);
+  client.evaluations.graders.create = async (input) => {
+    const grd: GraderDto = {
+      id: `grd_mock_${graderList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: input.name,
+      description: input.description ?? null,
+      type: input.type,
+      config: input.config ?? {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    graderList.push(grd);
+    return structuredClone(grd);
+  };
+  client.evaluations.experiments.list = async () => structuredClone(expList);
+  client.evaluations.experiments.create = async (input) => {
+    const exp: ExperimentDto = {
+      id: `exp_mock_${expList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: input.name,
+      datasetId: input.datasetId,
+      agentVersionId: input.agentVersionId,
+      baselineVersionId: input.baselineVersionId ?? null,
+      graderIds: input.graderIds ?? [],
+      status: 'pending',
+      releaseGateConfig: input.releaseGateConfig ?? {},
+      gateVerdict: null,
+      metrics: {},
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+    };
+    expList.push(exp);
+    return structuredClone(exp);
+  };
+  client.evaluations.experiments.get = async (id) => {
+    const found = expList.find((e) => e.id === id);
+    if (!found) throw new Error('exp not found');
+    return structuredClone(found);
+  };
+  client.evaluations.experiments.results = async (id) =>
+    structuredClone(expResults.filter((r) => r.experimentId === id));
+  client.evaluations.experiments.run = async (id) => {
+    const idx = expList.findIndex((e) => e.id === id);
+    if (idx < 0) throw new Error('exp not found');
+    const updated: ExperimentDto = {
+      ...expList[idx]!,
+      status: 'completed',
+      gateVerdict: 'passed',
+      metrics: {
+        total_cases: 1,
+        passed_cases: 1,
+        failed_cases: 0,
+        pass_rate: 1.0,
+        avg_score: 5.0,
+        total_cost_micro_usd: 1200,
+        avg_duration_ms: 35,
+        regression_count: 0,
+      },
+      completedAt: new Date().toISOString(),
+    };
+    expList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.evaluations.saveRunAsTestCase = async (runId, input) => {
+    const tc: TestCaseDto = {
+      id: `tc_from_run_${runId}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      datasetId: input.datasetId,
+      name: input.name,
+      inputs: { prompt: 'Extracted run input' },
+      expectedOutput: input.expectedOutput ?? null,
+      rubric: input.rubric ?? {},
+      tags: [...(input.tags ?? []), 'captured_from_run'],
+      difficulty: input.difficulty ?? 'medium',
+      weight: input.weight ?? 1.0,
+      sourceRunId: runId,
+      sourceStepId: input.stepId ?? null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    testCaseList.push(tc);
+    return structuredClone(tc);
+  };
+
   return client;
 }
 
@@ -1748,6 +1987,60 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     await user.click(screen.getByRole('button', { name: 'Edit & Approve' }));
     expect(await screen.findByText(/updated to status: approved/i)).toBeTruthy();
 
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Evaluations view: datasets, graders, experiments matrix, diff inspector & passes axe [E1.3, FR-EV-1..4, §7.3.9]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/evaluations" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /Evaluations & Release Gates/i })).toBeTruthy();
+    expect((await screen.findAllByText('Billing Regression Set')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('Standard 14-day refund')).toBeTruthy();
+
+    // 1. Create a new golden dataset via modal
+    await user.click(screen.getByRole('button', { name: /New Set/i }));
+    expect(await screen.findByRole('dialog', { name: 'New Dataset Dialog' })).toBeTruthy();
+    const dsNameInput = screen.getByPlaceholderText(/e\.g\. Support Triage Regression Set/i);
+    await user.type(dsNameInput, 'Customer Support Golden Set');
+    await user.click(screen.getByRole('button', { name: 'Create Dataset' }));
+    expect(await screen.findByText(/Created evaluation dataset "Customer Support Golden Set"/i)).toBeTruthy();
+
+    // 2. Add test case to dataset
+    await user.click(screen.getByRole('button', { name: /Add Test Case/i }));
+    const tcDialog = await screen.findByRole('dialog', { name: 'New Test Case Dialog' });
+    expect(tcDialog).toBeTruthy();
+    const tcNameInput = screen.getByPlaceholderText(/e\.g\. Standard refund within 14 days/i);
+    await user.type(tcNameInput, 'Overcharge refund case');
+    await user.click(within(tcDialog).getByRole('button', { name: 'Add Test Case' }));
+    expect(await screen.findByText(/Created test case "Overcharge refund case"/i)).toBeTruthy();
+
+    // 3. Switch to Pluggable Graders tab
+    await user.click(screen.getByRole('tab', { name: /Pluggable Graders/i }));
+    expect(await screen.findByRole('heading', { name: /Pluggable Automated Graders/i })).toBeTruthy();
+    expect(await screen.findByText('Exact Match Grader')).toBeTruthy();
+
+    // 4. Switch to Experiments & Gates tab, run experiment and inspect results matrix & diff
+    await user.click(screen.getByRole('tab', { name: /Experiments & Gates/i }));
+    expect(await screen.findByRole('heading', { name: /Experiment Runs & Release Gates/i })).toBeTruthy();
+    expect(await screen.findByText(/Candidate v1\.0\.1 Regression Check/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Run Evaluation Experiment/i }));
+    expect(await screen.findByText(/Experiment run completed\. Verdict: PASSED/i)).toBeTruthy();
+    expect(await screen.findByRole('table', { name: 'Experiment Results Matrix' })).toBeTruthy();
+
+    // Open diff drawer
+    await user.click(screen.getByRole('button', { name: /Diff/i }));
+    expect(await screen.findByRole('heading', { name: 'Case Evaluation Inspector' })).toBeTruthy();
+    expect(await screen.findByText(/Grader Breakdown:/i)).toBeTruthy();
+
+    // Accessibility validation
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },
     });
