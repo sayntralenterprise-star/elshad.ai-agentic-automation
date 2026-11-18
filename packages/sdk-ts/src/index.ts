@@ -80,9 +80,11 @@ export interface AuditEventDto {
   seq: number;
   ts: string;
   actor: Record<string, unknown>;
+  onBehalfOf?: Record<string, unknown> | null;
   action: string;
   resource: Record<string, unknown>;
   decision: string | null;
+  policyIds?: string[] | null;
   hash: string;
   prevHash: string;
 }
@@ -91,6 +93,7 @@ export interface RoleDto {
   id: string;
   name: string;
   isSystem: boolean;
+  permissions?: Record<string, 'all' | 'own'>;
 }
 
 export interface RunDto {
@@ -614,6 +617,128 @@ export interface AuditVerifyDto {
   reason?: string;
 }
 
+export interface AgentIdentityDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  agentId: string;
+  principalId: string;
+  environmentId: string;
+  displayName: string;
+  allowedToolIds: string[];
+  tokenTtlSeconds: number;
+  status: 'active' | 'disabled';
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentIdentityTokenDto {
+  tokenId: string;
+  agentIdentityId: string;
+  agentPrincipalId: string;
+  agentId: string;
+  orgId: string;
+  workspaceId: string;
+  environmentId: string;
+  onBehalfOfPrincipalId: string | null;
+  allowedToolIds: string[];
+  expiresAt: string;
+}
+
+export interface ToolGrantDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  agentId: string;
+  toolId: string;
+  sideEffectClass: 'read' | 'write' | 'destructive' | 'external_comms';
+  scope: {
+    allowedDomains?: string[];
+    allowedMethods?: string[];
+    maxCallsPerRun?: number;
+  };
+  grantedBy: string;
+  approvedBy: string | null;
+  status: 'active' | 'revoked';
+  createdAt: string;
+}
+
+export type PolicyPointDto =
+  | 'tool_call'
+  | 'data_access'
+  | 'memory_read'
+  | 'memory_write'
+  | 'model_select'
+  | 'egress'
+  | 'promotion'
+  | 'publish';
+
+export interface PolicyConditionDto {
+  points?: PolicyPointDto[];
+  sideEffectClasses?: Array<'read' | 'write' | 'destructive' | 'external_comms'>;
+  environments?: Array<'dev' | 'staging' | 'prod'>;
+  toolNames?: string[];
+  maxAutonomyLevel?: number;
+  untrustedContentInContext?: boolean;
+  dataClassifications?: string[];
+  maxSpendMicroUsd?: number;
+  riskTiers?: Array<'low' | 'medium' | 'high'>;
+}
+
+export interface PolicyDto {
+  id: string;
+  orgId: string;
+  workspaceId: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  point: PolicyPointDto;
+  mode: 'audit_only' | 'enforce';
+  version: number;
+  effect: 'allow' | 'deny' | 'require_approval';
+  condition: PolicyConditionDto;
+  regoSource: string;
+  createdBy: string;
+  approvedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PolicySimulationReportDto {
+  policyId: string;
+  policySlug: string;
+  totalRunsEvaluated: number;
+  matchedCount: number;
+  blockedCount: number;
+  approvalRequiredCount: number;
+  sampleAffectedRunIds: string[];
+  durationMs: number;
+}
+
+export interface AuditExportDto {
+  format: 'csv' | 'json';
+  contentType: string;
+  data: string;
+  rowCount: number;
+  chainValid: boolean;
+}
+
+export interface EvidencePackDto {
+  packId: string;
+  orgId: string;
+  workspaceId: string | null;
+  generatedAt: string;
+  generatedBy: string;
+  chainVerification: AuditVerifyDto;
+  agents: Array<{ id: string; name: string; status: string; versionsCount: number }>;
+  policies: PolicyDto[];
+  toolGrants: ToolGrantDto[];
+  agentIdentities: AgentIdentityDto[];
+  auditSample: AuditEventDto[];
+  digestSha256: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -674,9 +799,11 @@ function mapAudit(a: Record<string, unknown>): AuditEventDto {
     seq: Number(a.seq),
     ts: String(a.ts),
     actor: (a.actor as Record<string, unknown>) ?? {},
+    onBehalfOf: (a.on_behalf_of as Record<string, unknown> | null | undefined) ?? null,
     action: String(a.action),
     resource: (a.resource as Record<string, unknown>) ?? {},
     decision: a.decision ? String(a.decision) : null,
+    policyIds: Array.isArray(a.policy_ids) ? a.policy_ids.map(String) : null,
     hash: String(a.hash),
     prevHash: String(a.prev_hash),
   };
@@ -978,7 +1105,26 @@ export class PlatformClient {
         id: String(r.id),
         name: String(r.name),
         isSystem: Boolean(r.is_system),
+        permissions: r.permissions as Record<string, 'all' | 'own'> | undefined,
       }));
+    },
+    create: async (
+      input: { name: string; permissions: Record<string, 'all' | 'own'> },
+      idempotencyKey?: string,
+    ): Promise<RoleDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/roles', {
+        body: {
+          name: input.name,
+          permissions: input.permissions,
+        },
+        idempotencyKey,
+      });
+      return {
+        id: String(res.id),
+        name: String(res.name),
+        isSystem: Boolean(res.is_system),
+        permissions: res.permissions as Record<string, 'all' | 'own'> | undefined,
+      };
     },
   };
 
@@ -1062,13 +1208,30 @@ export class PlatformClient {
   };
 
   readonly auditEvents = {
-    list: async (opts: { limit?: number; cursor?: string } = {}): Promise<{
+    list: async (
+      opts: {
+        limit?: number;
+        cursor?: string;
+        action?: string;
+        actorId?: string;
+        resourceType?: string;
+        decision?: string;
+        fromTs?: string;
+        toTs?: string;
+      } = {},
+    ): Promise<{
       data: AuditEventDto[];
       nextCursor: string | null;
     }> => {
       const params = new URLSearchParams();
       if (opts.limit) params.set('limit', String(opts.limit));
       if (opts.cursor) params.set('cursor', opts.cursor);
+      if (opts.action) params.set('action', opts.action);
+      if (opts.actorId) params.set('actor_id', opts.actorId);
+      if (opts.resourceType) params.set('resource_type', opts.resourceType);
+      if (opts.decision) params.set('decision', opts.decision);
+      if (opts.fromTs) params.set('from_ts', opts.fromTs);
+      if (opts.toTs) params.set('to_ts', opts.toTs);
       const qs = params.toString();
       const res = await this.request<{ data: Record<string, unknown>[]; next_cursor: string | null }>(
         'GET',
@@ -1087,6 +1250,62 @@ export class PlatformClient {
 
   readonly audit = {
     verify: async (): Promise<AuditVerifyDto> => this.auditEvents.verify(),
+    export: async (
+      opts: {
+        format?: 'csv' | 'json';
+        action?: string;
+        actorId?: string;
+        resourceType?: string;
+        decision?: string;
+        fromTs?: string;
+        toTs?: string;
+      } = {},
+    ): Promise<AuditExportDto> => {
+      const params = new URLSearchParams();
+      if (opts.format) params.set('format', opts.format);
+      if (opts.action) params.set('action', opts.action);
+      if (opts.actorId) params.set('actor_id', opts.actorId);
+      if (opts.resourceType) params.set('resource_type', opts.resourceType);
+      if (opts.decision) params.set('decision', opts.decision);
+      if (opts.fromTs) params.set('from_ts', opts.fromTs);
+      if (opts.toTs) params.set('to_ts', opts.toTs);
+      const qs = params.toString();
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/audit/export${qs ? `?${qs}` : ''}`,
+      );
+      return {
+        format: res.format as 'csv' | 'json',
+        contentType: String(res.content_type),
+        data: String(res.data),
+        rowCount: Number(res.row_count ?? 0),
+        chainValid: Boolean(res.chain_valid),
+      };
+    },
+    generateEvidencePack: async (
+      input: {
+        workspaceId?: string;
+        periodStart?: string;
+        periodEnd?: string;
+        sampleLimit?: number;
+      } = {},
+      idempotencyKey?: string,
+    ): Promise<EvidencePackDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/audit/evidence-pack',
+        {
+          body: {
+            workspace_id: input.workspaceId,
+            period_start: input.periodStart,
+            period_end: input.periodEnd,
+            sample_limit: input.sampleLimit,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapEvidencePack(res);
+    },
   };
 
   readonly runs = {
@@ -1943,6 +2162,218 @@ export class PlatformClient {
       return mapKillSwitch(res);
     },
   };
+
+  readonly agentIdentities = {
+    list: async (): Promise<AgentIdentityDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/agent-identities',
+      );
+      return res.data.map(mapAgentIdentity);
+    },
+    create: async (
+      input: {
+        workspaceId?: string;
+        agentId: string;
+        environmentId?: string;
+        environment?: 'dev' | 'staging' | 'prod';
+        displayName: string;
+        allowedToolIds?: string[];
+        tokenTtlSeconds?: number;
+      },
+      idempotencyKey?: string,
+    ): Promise<AgentIdentityDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/agent-identities', {
+        body: {
+          workspace_id: input.workspaceId,
+          agent_id: input.agentId,
+          environment_id: input.environmentId,
+          environment: input.environment,
+          display_name: input.displayName,
+          allowed_tool_ids: input.allowedToolIds ?? [],
+          token_ttl_seconds: input.tokenTtlSeconds,
+        },
+        idempotencyKey,
+      });
+      return mapAgentIdentity(res);
+    },
+    issueToken: async (
+      id: string,
+      input: {
+        onBehalfOfPrincipalId?: string;
+        environmentId?: string;
+        ttlSeconds?: number;
+      } = {},
+      idempotencyKey?: string,
+    ): Promise<AgentIdentityTokenDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/agent-identities/${id}/token`,
+        {
+          body: {
+            on_behalf_of_principal_id: input.onBehalfOfPrincipalId,
+            environment_id: input.environmentId,
+            ttl_seconds: input.ttlSeconds,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapAgentIdentityToken(res);
+    },
+  };
+
+  readonly toolGrants = {
+    list: async (): Promise<ToolGrantDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/tool-grants',
+      );
+      return res.data.map(mapToolGrant);
+    },
+    create: async (
+      input: {
+        workspaceId?: string;
+        agentId: string;
+        toolId: string;
+        sideEffectClass?: 'read' | 'write' | 'destructive' | 'external_comms';
+        scope?: {
+          allowedDomains?: string[];
+          allowedMethods?: string[];
+          maxCallsPerRun?: number;
+        };
+        approvedBy?: string;
+      },
+      idempotencyKey?: string,
+    ): Promise<ToolGrantDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/tool-grants', {
+        body: {
+          workspace_id: input.workspaceId,
+          agent_id: input.agentId,
+          tool_id: input.toolId,
+          side_effect_class: input.sideEffectClass ?? 'read',
+          scope: input.scope
+            ? {
+                allowed_domains: input.scope.allowedDomains,
+                allowed_methods: input.scope.allowedMethods,
+                max_calls_per_run: input.scope.maxCallsPerRun,
+              }
+            : undefined,
+          approved_by: input.approvedBy,
+        },
+        idempotencyKey,
+      });
+      return mapToolGrant(res);
+    },
+    revoke: async (id: string): Promise<void> => {
+      await this.request<void>('DELETE', `/api/v1/tool-grants/${id}`);
+    },
+  };
+
+  readonly policies = {
+    list: async (): Promise<PolicyDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/policies');
+      return res.data.map(mapPolicy);
+    },
+    create: async (
+      input: {
+        workspaceId?: string | null;
+        slug: string;
+        name: string;
+        description?: string;
+        point: PolicyPointDto;
+        effect: 'allow' | 'deny' | 'require_approval';
+        mode?: 'audit_only' | 'enforce';
+        condition?: PolicyConditionDto;
+        regoSource?: string;
+        approvedBy?: string;
+      },
+      idempotencyKey?: string,
+    ): Promise<PolicyDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/policies', {
+        body: {
+          workspace_id: input.workspaceId,
+          slug: input.slug,
+          name: input.name,
+          description: input.description,
+          point: input.point,
+          effect: input.effect,
+          mode: input.mode ?? 'audit_only',
+          condition: toWireCondition(input.condition),
+          rego_source: input.regoSource,
+          approved_by: input.approvedBy,
+        },
+        idempotencyKey,
+      });
+      return mapPolicy(res);
+    },
+    enforce: async (
+      id: string,
+      input: { secondApproverId?: string } = {},
+      idempotencyKey?: string,
+    ): Promise<PolicyDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/policies/${id}/enforce`,
+        {
+          body: {
+            second_approver_id: input.secondApproverId,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapPolicy(res);
+    },
+    simulate: async (
+      input: {
+        policyId?: string;
+        slug?: string;
+        point?: PolicyPointDto;
+        effect?: 'allow' | 'deny' | 'require_approval';
+        condition?: PolicyConditionDto;
+        runs?: Array<{
+          runId: string;
+          point?: PolicyPointDto;
+          environment?: 'dev' | 'staging' | 'prod';
+          autonomyLevel?: number;
+          sideEffectClass?: 'read' | 'write' | 'destructive' | 'external_comms';
+          toolName?: string;
+          untrustedContentInContext?: boolean;
+          dataClassifications?: string[];
+          cumulativeSpendMicroUsd?: number;
+          riskTier?: 'low' | 'medium' | 'high';
+        }>;
+      },
+      idempotencyKey?: string,
+    ): Promise<PolicySimulationReportDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/policies/simulate',
+        {
+          body: {
+            policy_id: input.policyId,
+            slug: input.slug,
+            point: input.point,
+            effect: input.effect,
+            condition: toWireCondition(input.condition),
+            runs: input.runs?.map((r) => ({
+              run_id: r.runId,
+              point: r.point,
+              environment: r.environment,
+              autonomy_level: r.autonomyLevel,
+              side_effect_class: r.sideEffectClass,
+              tool_name: r.toolName,
+              untrusted_content_in_context: r.untrustedContentInContext,
+              data_classifications: r.dataClassifications,
+              cumulative_spend_micro_usd: r.cumulativeSpendMicroUsd,
+              risk_tier: r.riskTier,
+            })),
+          },
+          idempotencyKey,
+        },
+      );
+      return mapPolicySimulationReport(res);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -2366,5 +2797,176 @@ function mapAuditVerify(v: Record<string, unknown>): AuditVerifyDto {
     checkedCount: Number(v.checked_count ?? 0),
     brokenAtSeq: v.broken_at_seq !== undefined ? Number(v.broken_at_seq) : undefined,
     reason: v.reason ? String(v.reason) : undefined,
+  };
+}
+
+function mapAgentIdentity(a: Record<string, unknown>): AgentIdentityDto {
+  return {
+    id: String(a.id),
+    orgId: String(a.org_id),
+    workspaceId: String(a.workspace_id),
+    agentId: String(a.agent_id),
+    principalId: String(a.principal_id),
+    environmentId: String(a.environment_id),
+    displayName: String(a.display_name),
+    allowedToolIds: Array.isArray(a.allowed_tool_ids) ? a.allowed_tool_ids.map(String) : [],
+    tokenTtlSeconds: Number(a.token_ttl_seconds ?? 900),
+    status: a.status as 'active' | 'disabled',
+    createdBy: String(a.created_by),
+    createdAt: String(a.created_at),
+    updatedAt: String(a.updated_at),
+  };
+}
+
+function mapAgentIdentityToken(t: Record<string, unknown>): AgentIdentityTokenDto {
+  return {
+    tokenId: String(t.token_id),
+    agentIdentityId: String(t.agent_identity_id),
+    agentPrincipalId: String(t.agent_principal_id),
+    agentId: String(t.agent_id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    environmentId: String(t.environment_id),
+    onBehalfOfPrincipalId: t.on_behalf_of_principal_id
+      ? String(t.on_behalf_of_principal_id)
+      : null,
+    allowedToolIds: Array.isArray(t.allowed_tool_ids) ? t.allowed_tool_ids.map(String) : [],
+    expiresAt: String(t.expires_at),
+  };
+}
+
+function mapToolGrant(g: Record<string, unknown>): ToolGrantDto {
+  const scope = (g.scope ?? {}) as Record<string, unknown>;
+  return {
+    id: String(g.id),
+    orgId: String(g.org_id),
+    workspaceId: String(g.workspace_id),
+    agentId: String(g.agent_id),
+    toolId: String(g.tool_id),
+    sideEffectClass: g.side_effect_class as ToolGrantDto['sideEffectClass'],
+    scope: {
+      allowedDomains: Array.isArray(scope.allowed_domains)
+        ? scope.allowed_domains.map(String)
+        : undefined,
+      allowedMethods: Array.isArray(scope.allowed_methods)
+        ? scope.allowed_methods.map(String)
+        : undefined,
+      maxCallsPerRun:
+        scope.max_calls_per_run !== undefined ? Number(scope.max_calls_per_run) : undefined,
+    },
+    grantedBy: String(g.granted_by),
+    approvedBy: g.approved_by ? String(g.approved_by) : null,
+    status: g.status as 'active' | 'revoked',
+    createdAt: String(g.created_at),
+  };
+}
+
+function toWireCondition(cond?: PolicyConditionDto): Record<string, unknown> {
+  if (!cond) return {};
+  return {
+    points: cond.points,
+    side_effect_classes: cond.sideEffectClasses,
+    environments: cond.environments,
+    tool_names: cond.toolNames,
+    max_autonomy_level: cond.maxAutonomyLevel,
+    untrusted_content_in_context: cond.untrustedContentInContext,
+    data_classifications: cond.dataClassifications,
+    max_spend_micro_usd: cond.maxSpendMicroUsd,
+    risk_tiers: cond.riskTiers,
+  };
+}
+
+function mapPolicy(p: Record<string, unknown>): PolicyDto {
+  const cond = (p.condition ?? {}) as Record<string, unknown>;
+  return {
+    id: String(p.id),
+    orgId: String(p.org_id),
+    workspaceId: p.workspace_id ? String(p.workspace_id) : null,
+    slug: String(p.slug),
+    name: String(p.name),
+    description: p.description ? String(p.description) : null,
+    point: p.point as PolicyPointDto,
+    mode: p.mode as 'audit_only' | 'enforce',
+    version: Number(p.version ?? 1),
+    effect: p.effect as PolicyDto['effect'],
+    condition: {
+      points: Array.isArray(cond.points) ? (cond.points as PolicyPointDto[]) : undefined,
+      sideEffectClasses: Array.isArray(cond.side_effect_classes)
+        ? (cond.side_effect_classes as PolicyConditionDto['sideEffectClasses'])
+        : undefined,
+      environments: Array.isArray(cond.environments)
+        ? (cond.environments as PolicyConditionDto['environments'])
+        : undefined,
+      toolNames: Array.isArray(cond.tool_names) ? cond.tool_names.map(String) : undefined,
+      maxAutonomyLevel:
+        cond.max_autonomy_level !== undefined ? Number(cond.max_autonomy_level) : undefined,
+      untrustedContentInContext:
+        cond.untrusted_content_in_context !== undefined
+          ? Boolean(cond.untrusted_content_in_context)
+          : undefined,
+      dataClassifications: Array.isArray(cond.data_classifications)
+        ? cond.data_classifications.map(String)
+        : undefined,
+      maxSpendMicroUsd:
+        cond.max_spend_micro_usd !== undefined ? Number(cond.max_spend_micro_usd) : undefined,
+      riskTiers: Array.isArray(cond.risk_tiers)
+        ? (cond.risk_tiers as PolicyConditionDto['riskTiers'])
+        : undefined,
+    },
+    regoSource: String(p.rego_source ?? ''),
+    createdBy: String(p.created_by),
+    approvedBy: p.approved_by ? String(p.approved_by) : null,
+    createdAt: String(p.created_at),
+    updatedAt: String(p.updated_at),
+  };
+}
+
+function mapPolicySimulationReport(r: Record<string, unknown>): PolicySimulationReportDto {
+  return {
+    policyId: String(r.policy_id),
+    policySlug: String(r.policy_slug),
+    totalRunsEvaluated: Number(r.total_runs_evaluated ?? 0),
+    matchedCount: Number(r.matched_count ?? 0),
+    blockedCount: Number(r.blocked_count ?? 0),
+    approvalRequiredCount: Number(r.approval_required_count ?? 0),
+    sampleAffectedRunIds: Array.isArray(r.sample_affected_run_ids)
+      ? r.sample_affected_run_ids.map(String)
+      : [],
+    durationMs: Number(r.duration_ms ?? 0),
+  };
+}
+
+function mapEvidencePack(e: Record<string, unknown>): EvidencePackDto {
+  return {
+    packId: String(e.pack_id),
+    orgId: String(e.org_id),
+    workspaceId: e.workspace_id ? String(e.workspace_id) : null,
+    generatedAt: String(e.generated_at),
+    generatedBy: String(e.generated_by),
+    chainVerification: mapAuditVerify((e.chain_verification ?? {}) as Record<string, unknown>),
+    agents: Array.isArray(e.agents)
+      ? e.agents.map((a) => {
+          const item = a as Record<string, unknown>;
+          return {
+            id: String(item.id),
+            name: String(item.name),
+            status: String(item.status),
+            versionsCount: Number(item.versions_count ?? 0),
+          };
+        })
+      : [],
+    policies: Array.isArray(e.policies)
+      ? e.policies.map((p) => mapPolicy(p as Record<string, unknown>))
+      : [],
+    toolGrants: Array.isArray(e.tool_grants)
+      ? e.tool_grants.map((g) => mapToolGrant(g as Record<string, unknown>))
+      : [],
+    agentIdentities: Array.isArray(e.agent_identities)
+      ? e.agent_identities.map((ai) => mapAgentIdentity(ai as Record<string, unknown>))
+      : [],
+    auditSample: Array.isArray(e.audit_sample)
+      ? e.audit_sample.map((evt) => mapAudit(evt as Record<string, unknown>))
+      : [],
+    digestSha256: String(e.digest_sha256 ?? ''),
   };
 }

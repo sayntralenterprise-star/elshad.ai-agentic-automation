@@ -7,6 +7,7 @@ import { PlatformError } from '@elshad/domain';
 import {
   PlatformClient,
   type AgentDto,
+  type AgentIdentityDto,
   type ApiKeyDto,
   type BudgetDto,
   type CitationChipDto,
@@ -21,10 +22,12 @@ import {
   type MeDto,
   type MemoryItemDto,
   type ModelCapabilityDto,
+  type PolicyDto,
   type RunDto,
   type RunStepDto,
   type SecretMetadataDto,
   type ToolContractDto,
+  type ToolGrantDto,
   type TriggerDto,
   type WorkflowDto,
   type WorkflowGraphDto,
@@ -999,6 +1002,143 @@ function createMockClient(
     checkedCount: 4,
   });
 
+  const policyList: PolicyDto[] = [];
+  const agentIdentityList: AgentIdentityDto[] = [];
+  const toolGrantList: ToolGrantDto[] = [];
+
+  client.policies.list = async () => structuredClone(policyList);
+  client.policies.create = async (input) => {
+    const now = '2026-11-18T12:15:00.000Z';
+    const created: PolicyDto = {
+      id: `pol_${policyList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      slug: input.slug,
+      name: input.name,
+      description: input.description ?? null,
+      point: input.point,
+      mode: input.mode ?? 'audit_only',
+      version: 1,
+      effect: input.effect,
+      condition: input.condition ?? {},
+      regoSource:
+        input.regoSource ??
+        `package elshad.governance.${input.slug.replace(/-/g, '_')}\nimport rego.v1\ndefault effect := "allow"\neffect := "${input.effect}" if {\n  input.point == "${input.point}"\n}`,
+      createdBy: 'prn_1',
+      approvedBy: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    policyList.unshift(created);
+    return structuredClone(created);
+  };
+  client.policies.simulate = async (input) => {
+    const matched = policyList.find((p) => p.id === input.policyId);
+    return {
+      policyId: input.policyId ?? 'pol_1',
+      policySlug: matched?.slug ?? input.slug ?? 'sim-policy',
+      totalRunsEvaluated: 120,
+      matchedCount: 8,
+      blockedCount: 8,
+      approvalRequiredCount: 0,
+      sampleAffectedRunIds: ['run_hist_1', 'run_hist_2'],
+      durationMs: 4,
+    };
+  };
+  client.policies.enforce = async (id, input) => {
+    const idx = policyList.findIndex((p) => p.id === id);
+    if (idx < 0) throw new Error('policy not found');
+    const updated: PolicyDto = {
+      ...policyList[idx]!,
+      mode: 'enforce',
+      version: policyList[idx]!.version + 1,
+      approvedBy: input.secondApproverId ?? 'prn_reviewer_2',
+      updatedAt: '2026-11-18T12:16:00.000Z',
+    };
+    policyList[idx] = updated;
+    return structuredClone(updated);
+  };
+
+  client.agentIdentities.list = async () => structuredClone(agentIdentityList);
+  client.agentIdentities.create = async (input) => {
+    const now = '2026-11-18T12:15:00.000Z';
+    const created: AgentIdentityDto = {
+      id: `aid_${agentIdentityList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      agentId: input.agentId,
+      principalId: `prn_agent_${agentIdentityList.length + 1}`,
+      environmentId: 'env_dev',
+      displayName: input.displayName,
+      allowedToolIds: input.allowedToolIds ?? [],
+      tokenTtlSeconds: input.tokenTtlSeconds ?? 900,
+      status: 'active',
+      createdBy: 'prn_1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    agentIdentityList.unshift(created);
+    return structuredClone(created);
+  };
+  client.agentIdentities.issueToken = async (id, input = {}) => ({
+    tokenId: 'atok_mock_1',
+    agentIdentityId: id,
+    agentPrincipalId: 'prn_agent_1',
+    agentId: 'agt_1',
+    orgId: 'org_1',
+    workspaceId: 'ws_1',
+    environmentId: input.environmentId ?? 'env_dev',
+    onBehalfOfPrincipalId: input.onBehalfOfPrincipalId ?? 'prn_1',
+    allowedToolIds: ['current_time', 'http_request'],
+    expiresAt: '2026-11-18T13:00:00.000Z',
+  });
+
+  client.toolGrants.list = async () => structuredClone(toolGrantList);
+  client.toolGrants.create = async (input) => {
+    const created: ToolGrantDto = {
+      id: `tg_${toolGrantList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      agentId: input.agentId,
+      toolId: input.toolId,
+      sideEffectClass: input.sideEffectClass ?? 'read',
+      scope: input.scope ?? {},
+      grantedBy: 'prn_1',
+      approvedBy: input.approvedBy ?? null,
+      status: 'active',
+      createdAt: '2026-11-18T12:15:00.000Z',
+    };
+    toolGrantList.unshift(created);
+    return structuredClone(created);
+  };
+  client.toolGrants.revoke = async (id) => {
+    const idx = toolGrantList.findIndex((g) => g.id === id);
+    if (idx >= 0) toolGrantList.splice(idx, 1);
+  };
+
+  client.audit.export = async (opts = {}) => ({
+    format: opts.format ?? 'csv',
+    contentType: opts.format === 'json' ? 'application/json' : 'text/csv; charset=utf-8',
+    data: 'seq,ts,id,action\r\n1,2026-11-18T12:00:00.000Z,aud_1,auth.login',
+    rowCount: 4,
+    chainValid: true,
+  });
+
+  client.audit.generateEvidencePack = async () => ({
+    packId: 'evp_mock_1',
+    orgId: 'org_1',
+    workspaceId: 'ws_1',
+    generatedAt: '2026-11-18T12:20:00.000Z',
+    generatedBy: 'prn_1',
+    chainVerification: { valid: true, checkedCount: 4 },
+    agents: [{ id: 'agt_1', name: 'triage-agent', status: 'active', versionsCount: 1 }],
+    policies: structuredClone(policyList),
+    toolGrants: structuredClone(toolGrantList),
+    agentIdentities: structuredClone(agentIdentityList),
+    auditSample: [],
+    digestSha256: 'a'.repeat(64),
+  });
+
   return client;
 }
 
@@ -1382,6 +1522,63 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     // 4. Audit hash-chain integrity check
     await user.click(screen.getByRole('button', { name: 'Verify Audit Chain' }));
     expect(await screen.findByText('Verified (4 events)')).toBeTruthy();
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('authors declarative policies with Rego preview/simulation/SoD enforce, provisions agent identities & scoped grants, and exports CSV/evidence packs [E1.2]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/governance" />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: /Declarative Policies & Simulation/i }),
+    ).toBeTruthy();
+
+    // 1. Create declarative policy -> preview Rego -> simulate -> promote via SoD
+    await user.click(screen.getByRole('button', { name: 'Create Policy' }));
+    expect(
+      await screen.findByText(/Created policy "Block destructive tools in prod" \(audit_only\)/),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'View Rego' }));
+    const regoPreview = await screen.findByTestId('policy-rego-preview');
+    expect(regoPreview.textContent).toContain('package elshad.governance.deny_destructive_prod');
+
+    await user.click(screen.getByRole('button', { name: 'Simulate Policy' }));
+    const simReport = await screen.findByTestId('policy-sim-report');
+    expect(simReport.textContent).toContain('8 blocked, 0 approvals across 120 runs');
+
+    await user.click(screen.getByRole('button', { name: 'Enforce Policy (SoD)' }));
+    expect(
+      await screen.findByText(/promoted to enforce \(approved by prn_reviewer_2\)/),
+    ).toBeTruthy();
+
+    // 2. Provision agent identity & grant narrowed write tool scope
+    await user.click(screen.getByRole('button', { name: 'Provision Agent Identity' }));
+    expect(
+      await screen.findByText(/Provisioned agent identity "Triage Agent Identity" \(prn_agent_1\)/),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Grant Scoped Tool' }));
+    expect(await screen.findByText(/Granted write tool "http_request" to agt_1/)).toBeTruthy();
+
+    // 3. Export Audit CSV & Generate Compliance Evidence Pack
+    await user.click(screen.getByRole('button', { name: 'Export Audit CSV' }));
+    const csvBanner = await screen.findByTestId('audit-csv-export');
+    expect(csvBanner.textContent).toContain('4 rows');
+
+    await user.click(screen.getByRole('button', { name: 'Generate Evidence Pack' }));
+    const packBanner = await screen.findByTestId('evidence-pack-summary');
+    expect(packBanner.textContent).toContain('Evidence Pack evp_mock_1');
+    expect(packBanner.textContent).toContain('Policies: 1');
+    expect(packBanner.textContent).toContain('Grants: 1');
+    expect(packBanner.textContent).toContain('Agent Identities: 1');
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

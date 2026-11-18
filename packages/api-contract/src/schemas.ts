@@ -124,8 +124,16 @@ export const RoleSchema = z
     id: z.string(),
     name: z.string(),
     is_system: z.boolean(),
+    permissions: z.record(z.string(), z.enum(['all', 'own'])).optional(),
   })
   .openapi('Role');
+
+export const CreateCustomRoleRequestSchema = z
+  .object({
+    name: z.string().min(2).max(64),
+    permissions: z.record(z.string(), z.enum(['all', 'own'])),
+  })
+  .openapi('CreateCustomRoleRequest');
 
 export const RoleBindingSchema = z
   .object({
@@ -198,13 +206,26 @@ export const AuditEventSchema = z
     seq: z.number().int(),
     ts: z.string(),
     actor: z.record(z.string(), z.unknown()),
+    on_behalf_of: z.record(z.string(), z.unknown()).nullable().optional(),
     action: z.string(),
     resource: z.record(z.string(), z.unknown()),
     decision: z.string().nullable(),
+    policy_ids: z.array(z.string()).nullable().optional(),
     hash: z.string(),
     prev_hash: z.string(),
   })
   .openapi('AuditEvent');
+
+export const AuditEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+  action: z.string().optional(),
+  actor_id: z.string().optional(),
+  resource_type: z.string().optional(),
+  decision: z.string().optional(),
+  from_ts: z.string().optional(),
+  to_ts: z.string().optional(),
+});
 
 export const AuditEventPageSchema = z
   .object({
@@ -1275,3 +1296,246 @@ export const AuditVerifyResponseSchema = z
     reason: z.string().optional(),
   })
   .openapi('AuditVerifyResponse');
+
+// ---------- S1.2 Governance v1 Schemas ----------
+
+export const AgentIdentityWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    agent_id: z.string(),
+    principal_id: z.string(),
+    environment_id: z.string(),
+    display_name: z.string(),
+    allowed_tool_ids: z.array(z.string()),
+    token_ttl_seconds: z.number().int(),
+    status: z.enum(['active', 'disabled']),
+    created_by: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('AgentIdentity');
+
+export const CreateAgentIdentityRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    agent_id: z.string().min(1),
+    environment_id: z.string().optional(),
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    display_name: z.string().min(1).max(160),
+    allowed_tool_ids: z.array(z.string()).default([]),
+    token_ttl_seconds: z.number().int().min(60).max(86_400).default(900),
+  })
+  .openapi('CreateAgentIdentityRequest');
+
+export const IssueAgentIdentityTokenRequestSchema = z
+  .object({
+    on_behalf_of_principal_id: z.string().optional(),
+    environment_id: z.string().optional(),
+    ttl_seconds: z.number().int().min(60).max(86_400).optional(),
+  })
+  .openapi('IssueAgentIdentityTokenRequest');
+
+export const AgentIdentityTokenWireSchema = z
+  .object({
+    token_id: z.string(),
+    agent_identity_id: z.string(),
+    agent_principal_id: z.string(),
+    agent_id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    environment_id: z.string(),
+    on_behalf_of_principal_id: z.string().nullable(),
+    allowed_tool_ids: z.array(z.string()),
+    expires_at: z.string(),
+  })
+  .openapi('AgentIdentityToken');
+
+export const ToolGrantWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    agent_id: z.string(),
+    tool_id: z.string(),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']),
+    scope: AgentToolBindingWireSchema.shape.scope,
+    granted_by: z.string(),
+    approved_by: z.string().nullable(),
+    status: z.enum(['active', 'revoked']),
+    created_at: z.string(),
+  })
+  .openapi('ToolGrant');
+
+export const CreateToolGrantRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    agent_id: z.string().min(1),
+    tool_id: z.string().min(1),
+    side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']).default('read'),
+    scope: AgentToolBindingWireSchema.shape.scope.optional(),
+    approved_by: z.string().optional(),
+  })
+  .openapi('CreateToolGrantRequest');
+
+export const PolicyPointWireSchema = z.enum([
+  'tool_call',
+  'data_access',
+  'memory_read',
+  'memory_write',
+  'model_select',
+  'egress',
+  'promotion',
+  'publish',
+]);
+
+export const DeclarativePolicyConditionWireSchema = z
+  .object({
+    points: z.array(PolicyPointWireSchema).optional(),
+    side_effect_classes: z.array(z.enum(['read', 'write', 'destructive', 'external_comms'])).optional(),
+    environments: z.array(z.enum(['dev', 'staging', 'prod'])).optional(),
+    tool_names: z.array(z.string()).optional(),
+    max_autonomy_level: z.number().int().min(0).max(4).optional(),
+    untrusted_content_in_context: z.boolean().optional(),
+    data_classifications: z.array(z.string()).optional(),
+    max_spend_micro_usd: z.number().int().min(0).optional(),
+    risk_tiers: z.array(z.enum(['low', 'medium', 'high'])).optional(),
+  })
+  .openapi('DeclarativePolicyCondition');
+
+export const PolicyWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string().nullable(),
+    slug: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    point: PolicyPointWireSchema,
+    mode: z.enum(['audit_only', 'enforce']),
+    version: z.number().int(),
+    effect: z.enum(['allow', 'deny', 'require_approval']),
+    condition: DeclarativePolicyConditionWireSchema,
+    rego_source: z.string(),
+    created_by: z.string(),
+    approved_by: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Policy');
+
+export const CreatePolicyRequestSchema = z
+  .object({
+    workspace_id: z.string().nullable().optional(),
+    slug: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/, 'Slug must be kebab-case 3-64 chars'),
+    name: z.string().min(1).max(160),
+    description: z.string().max(1000).optional(),
+    point: PolicyPointWireSchema,
+    effect: z.enum(['allow', 'deny', 'require_approval']),
+    mode: z.enum(['audit_only', 'enforce']).default('audit_only'),
+    condition: DeclarativePolicyConditionWireSchema.default({}),
+    rego_source: z.string().optional(),
+    approved_by: z.string().optional(),
+  })
+  .openapi('CreatePolicyRequest');
+
+export const EnforcePolicyRequestSchema = z
+  .object({
+    second_approver_id: z.string().optional(),
+  })
+  .openapi('EnforcePolicyRequest');
+
+export const SimulatePolicyRequestSchema = z
+  .object({
+    policy_id: z.string().optional(),
+    slug: z.string().optional(),
+    point: PolicyPointWireSchema.optional(),
+    effect: z.enum(['allow', 'deny', 'require_approval']).optional(),
+    condition: DeclarativePolicyConditionWireSchema.optional(),
+    runs: z
+      .array(
+        z.object({
+          run_id: z.string(),
+          point: PolicyPointWireSchema.optional(),
+          environment: z.enum(['dev', 'staging', 'prod']).optional(),
+          autonomy_level: z.number().int().min(0).max(4).default(2),
+          side_effect_class: z.enum(['read', 'write', 'destructive', 'external_comms']).optional(),
+          tool_name: z.string().optional(),
+          untrusted_content_in_context: z.boolean().optional(),
+          data_classifications: z.array(z.string()).optional(),
+          cumulative_spend_micro_usd: z.number().int().min(0).optional(),
+          risk_tier: z.enum(['low', 'medium', 'high']).optional(),
+        }),
+      )
+      .optional(),
+  })
+  .openapi('SimulatePolicyRequest');
+
+export const PolicySimulationReportWireSchema = z
+  .object({
+    policy_id: z.string(),
+    policy_slug: z.string(),
+    total_runs_evaluated: z.number().int(),
+    matched_count: z.number().int(),
+    blocked_count: z.number().int(),
+    approval_required_count: z.number().int(),
+    sample_affected_run_ids: z.array(z.string()),
+    duration_ms: z.number().int(),
+  })
+  .openapi('PolicySimulationReport');
+
+export const AuditExportQuerySchema = z.object({
+  format: z.enum(['csv', 'json']).default('csv'),
+  action: z.string().optional(),
+  actor_id: z.string().optional(),
+  resource_type: z.string().optional(),
+  decision: z.string().optional(),
+  from_ts: z.string().optional(),
+  to_ts: z.string().optional(),
+});
+
+export const AuditExportResponseWireSchema = z
+  .object({
+    format: z.enum(['csv', 'json']),
+    content_type: z.string(),
+    data: z.string(),
+    row_count: z.number().int(),
+    chain_valid: z.boolean(),
+  })
+  .openapi('AuditExportResponse');
+
+export const GenerateEvidencePackRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    period_start: z.string().optional(),
+    period_end: z.string().optional(),
+    sample_limit: z.number().int().min(1).max(100).default(20),
+  })
+  .openapi('GenerateEvidencePackRequest');
+
+export const EvidencePackWireSchema = z
+  .object({
+    pack_id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string().nullable(),
+    generated_at: z.string(),
+    generated_by: z.string(),
+    chain_verification: AuditVerifyResponseSchema,
+    agents: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        status: z.string(),
+        versions_count: z.number().int(),
+      }),
+    ),
+    policies: z.array(PolicyWireSchema),
+    tool_grants: z.array(ToolGrantWireSchema),
+    agent_identities: z.array(AgentIdentityWireSchema),
+    audit_sample: z.array(AuditEventSchema),
+    digest_sha256: z.string(),
+  })
+  .openapi('EvidencePack');

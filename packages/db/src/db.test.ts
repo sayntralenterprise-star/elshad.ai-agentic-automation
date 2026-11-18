@@ -9,6 +9,7 @@ import {
   canonicalJson,
   computeAuditHash,
   computeContextHash,
+  formatAuditEventsCsv,
   planUpcomingPartitions,
   verifyAuditEventsChain,
   withTenantPgClient,
@@ -123,6 +124,17 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
       expect(sql07).toContain(`enable_tenant_rls('${tbl}')`);
     }
     expect(sql07).toContain('TO platform_app');
+
+    const sql08 = readFileSync(join(migrationsDir, '0008_s12_governance_v1.sql'), 'utf8');
+    const s12Tables = ['agent_identities', 'policies', 'policy_versions', 'policy_decisions'];
+    for (const tbl of s12Tables) {
+      expect(sql08).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql08).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql08).toContain('policy_decisions_2026_11');
+    expect(sql08).toContain('policy_decisions_default');
+    expect(sql08).toContain('REVOKE UPDATE, DELETE, TRUNCATE ON policy_decisions FROM PUBLIC');
+    expect(sql08).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {
@@ -130,29 +142,19 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(dec.partitionName).toBe('runs_2026_12');
     expect(dec.sql).toContain("FROM ('2026-12-01 00:00:00Z') TO ('2027-01-01 00:00:00Z')");
 
+    const pdDec = buildMonthlyPartitionSql('policy_decisions', 2026, 12);
+    expect(pdDec.partitionName).toBe('policy_decisions_2026_12');
+
     const planned = planUpcomingPartitions(
-      ['runs', 'run_events', 'usage_ledger'],
+      ['runs', 'run_events', 'usage_ledger', 'policy_decisions'],
       new Date('2026-11-18T00:00:00Z'),
       3,
     );
-    expect(planned).toHaveLength(12);
-    expect(planned.map((p) => p.partitionName)).toEqual([
-      'runs_2026_11',
-      'run_events_2026_11',
-      'usage_ledger_2026_11',
-      'runs_2026_12',
-      'run_events_2026_12',
-      'usage_ledger_2026_12',
-      'runs_2027_01',
-      'run_events_2027_01',
-      'usage_ledger_2027_01',
-      'runs_2027_02',
-      'run_events_2027_02',
-      'usage_ledger_2027_02',
-    ]);
+    expect(planned).toHaveLength(16);
+    expect(planned.map((p) => p.partitionName)).toContain('policy_decisions_2027_02');
   });
 
-  it('produces deterministic canonical JSON and detects audit tampering', () => {
+  it('produces deterministic canonical JSON, detects audit tampering, and exports formula-safe CSV [E1.2]', () => {
     expect(canonicalJson({ b: 2, a: { z: 1, y: 2 } })).toBe('{"a":{"y":2,"z":1},"b":2}');
 
     const events: VerifiableAuditEvent[] = [];
@@ -161,11 +163,11 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
       const ctxHash = computeContextHash({ ip: '127.0.0.1', seq });
       const base = {
         actor: { id: 'prn_1', type: 'user' },
-        on_behalf_of: null,
-        action: 'api_key.create',
+        on_behalf_of: seq === 2 ? { id: 'prn_human', type: 'user' } : null,
+        action: seq === 3 ? '=cmd|calc' : 'api_key.create',
         resource: { type: 'api_key', id: `key_${seq}` },
         decision: 'allow',
-        policy_ids: null,
+        policy_ids: seq === 2 ? ['pol-1'] : null,
         context_hash: ctxHash,
         ts: `2026-11-18T12:00:0${seq}.000Z`,
         seq,
@@ -177,11 +179,32 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
 
     expect(verifyAuditEventsChain(events)).toEqual({ valid: true, checkedCount: 3 });
 
-    const tampered = structuredClone(events);
-    tampered[1]!.action = 'org.delete';
-    const result = verifyAuditEventsChain(tampered);
-    expect(result.valid).toBe(false);
-    expect(result.brokenAtSeq).toBe(2);
+    const tamperedAction = structuredClone(events);
+    tamperedAction[1]!.action = 'org.delete';
+    expect(verifyAuditEventsChain(tamperedAction)).toMatchObject({ valid: false, brokenAtSeq: 2 });
+
+    const tamperedCtx = structuredClone(events);
+    tamperedCtx[0]!.context_hash = '0'.repeat(64);
+    expect(verifyAuditEventsChain(tamperedCtx)).toMatchObject({ valid: false, brokenAtSeq: 1 });
+
+    const tamperedPrev = structuredClone(events);
+    tamperedPrev[2]!.prev_hash = 'f'.repeat(64);
+    expect(verifyAuditEventsChain(tamperedPrev)).toMatchObject({ valid: false, brokenAtSeq: 3 });
+
+    const tamperedSeq = structuredClone(events);
+    tamperedSeq[1]!.seq = 99;
+    expect(verifyAuditEventsChain(tamperedSeq)).toMatchObject({
+      valid: false,
+      brokenAtSeq: 3,
+      reason: 'Expected seq 2 but found 3',
+    });
+
+    const csv = formatAuditEventsCsv(events);
+    const lines = csv.split('\r\n');
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toContain('seq,ts,id,action,decision');
+    expect(lines[2]).toContain(',prn_human,');
+    expect(lines[3]).toContain("'=cmd|calc");
   });
 
   it('issues BEGIN, SET LOCAL app.org_id, and COMMIT/ROLLBACK in withTenantPgClient', async () => {

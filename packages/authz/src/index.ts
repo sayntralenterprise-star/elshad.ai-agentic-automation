@@ -259,6 +259,34 @@ export const DEFAULT_ROLE_MATRIX: Record<BuiltInRole, RolePermissionMap> = {
   viewer: VIEWER_MAP,
 };
 
+export const BUILTIN_ROLES: readonly BuiltInRole[] = [
+  'org_owner',
+  'workspace_admin',
+  'builder',
+  'operator',
+  'reviewer',
+  'auditor',
+  'viewer',
+] as const;
+
+export interface CustomRoleSpec {
+  readonly id: string;
+  readonly orgId: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly permissions: RolePermissionMap;
+}
+
+export function resolveRolePermissionMap(
+  roleName: string,
+  customRoles?: readonly CustomRoleSpec[],
+): RolePermissionMap | undefined {
+  if (roleName in DEFAULT_ROLE_MATRIX) {
+    return DEFAULT_ROLE_MATRIX[roleName as BuiltInRole];
+  }
+  return customRoles?.find((r) => r.name === roleName || r.id === roleName)?.permissions;
+}
+
 export type ScopeType = 'org' | 'workspace' | 'project' | 'resource';
 
 export interface RoleBinding {
@@ -272,6 +300,8 @@ export interface AuthzSubject {
   principalId: string;
   orgId: string;
   bindings: readonly RoleBinding[];
+  /** Optional org custom role definitions (FR-GOV-2). */
+  customRoles?: readonly CustomRoleSpec[];
   /** Optional API key scope restriction (if present, permission must be in keyScopes). */
   apiKeyScopes?: readonly Permission[];
 }
@@ -333,10 +363,7 @@ export function authorize(
     }
 
     const permMap: RolePermissionMap | undefined =
-      binding.customPermissions ??
-      (binding.role in DEFAULT_ROLE_MATRIX
-        ? DEFAULT_ROLE_MATRIX[binding.role as BuiltInRole]
-        : undefined);
+      binding.customPermissions ?? resolveRolePermissionMap(binding.role, subject.customRoles);
 
     if (!permMap) continue;
     const mode = permMap[permission];
@@ -433,4 +460,174 @@ export function assertSeparationOfDuties(input: SodCheckInput): void {
       );
     }
   }
+}
+
+export interface O1MatrixCell {
+  readonly role: BuiltInRole;
+  readonly permission: Permission;
+  readonly expectedMode: GrantMode | 'deny';
+}
+
+export interface O1MatrixVerificationReport {
+  readonly totalChecked: number;
+  readonly passed: number;
+  readonly failures: string[];
+  readonly cells: readonly O1MatrixCell[];
+}
+
+/**
+ * Exhaustively verifies every (role x permission x ownership x scope) combination against
+ * the PRD Appendix O.1 permission matrix (E1.2 / F.2 CI authorization test).
+ */
+export function verifyO1RolePermissionMatrix(): O1MatrixVerificationReport {
+  const failures: string[] = [];
+  const cells: O1MatrixCell[] = [];
+  let totalChecked = 0;
+  let passed = 0;
+
+  for (const role of BUILTIN_ROLES) {
+    const roleMap = DEFAULT_ROLE_MATRIX[role];
+    const wsSubject: AuthzSubject = {
+      principalId: 'prn_matrix_actor',
+      orgId: 'org_matrix_1',
+      bindings: [{ role, scopeType: 'workspace', scopeId: 'ws_matrix_1' }],
+    };
+
+    for (const permission of PERMISSIONS) {
+      const mode = roleMap[permission];
+      const expectedMode: GrantMode | 'deny' = mode ?? 'deny';
+      cells.push({ role, permission, expectedMode });
+
+      // 1. Same workspace, own resource
+      const ownDecision = authorize(
+        wsSubject,
+        permission,
+        { orgId: 'org_matrix_1', workspaceId: 'ws_matrix_1' },
+        { ownerId: 'prn_matrix_actor' },
+      );
+      const expectOwn = expectedMode === 'all' || expectedMode === 'own';
+      totalChecked += 1;
+      if (ownDecision.allowed === expectOwn) {
+        passed += 1;
+      } else {
+        failures.push(
+          `${role}/${permission} (own): expected ${expectOwn}, got ${ownDecision.allowed}`,
+        );
+      }
+
+      // 2. Same workspace, other owner's resource
+      const otherDecision = authorize(
+        wsSubject,
+        permission,
+        { orgId: 'org_matrix_1', workspaceId: 'ws_matrix_1' },
+        { ownerId: 'prn_other_actor' },
+      );
+      const expectOther = expectedMode === 'all';
+      totalChecked += 1;
+      if (otherDecision.allowed === expectOther) {
+        passed += 1;
+      } else {
+        failures.push(
+          `${role}/${permission} (other): expected ${expectOther}, got ${otherDecision.allowed}`,
+        );
+      }
+
+      // 3. Cross-workspace boundary (must always deny)
+      const crossWsDecision = authorize(
+        wsSubject,
+        permission,
+        { orgId: 'org_matrix_1', workspaceId: 'ws_matrix_2' },
+        { ownerId: 'prn_matrix_actor' },
+      );
+      totalChecked += 1;
+      if (!crossWsDecision.allowed) {
+        passed += 1;
+      } else {
+        failures.push(`${role}/${permission} (cross-workspace): expected deny, got allow`);
+      }
+
+      // 4. Cross-org boundary even with org binding on org_matrix_1 (must always deny)
+      const orgSubject: AuthzSubject = {
+        principalId: 'prn_matrix_actor',
+        orgId: 'org_matrix_1',
+        bindings: [{ role, scopeType: 'org', scopeId: 'org_matrix_1' }],
+      };
+      const crossOrgDecision = authorize(
+        orgSubject,
+        permission,
+        { orgId: 'org_matrix_2', workspaceId: 'ws_matrix_1' },
+        { ownerId: 'prn_matrix_actor' },
+      );
+      totalChecked += 1;
+      if (!crossOrgDecision.allowed) {
+        passed += 1;
+      } else {
+        failures.push(`${role}/${permission} (cross-org): expected deny, got allow`);
+      }
+    }
+  }
+
+  return { totalChecked, passed, failures, cells };
+}
+
+export interface AgentIdentityGrant {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string;
+  readonly agentId: string;
+  readonly principalId: string;
+  readonly environmentId: string;
+  readonly allowedToolIds: readonly string[];
+  readonly status: 'active' | 'disabled';
+}
+
+export interface AgentIdentityRuntimeToken {
+  readonly tokenId: string;
+  readonly agentIdentityId: string;
+  readonly agentPrincipalId: string;
+  readonly agentId: string;
+  readonly orgId: string;
+  readonly workspaceId: string;
+  readonly environmentId: string;
+  readonly onBehalfOfPrincipalId: string | null;
+  readonly allowedToolIds: readonly string[];
+  readonly expiresAt: string;
+}
+
+/**
+ * Evaluates whether an agent's short-lived runtime identity token authorizes a tool call
+ * inside a specific environment without leakage across tools, environments, or expiry (FR-GOV-1, F.1).
+ */
+export function authorizeAgentIdentityToolCall(
+  token: AgentIdentityRuntimeToken,
+  toolId: string,
+  environmentId: string,
+  nowIso: string = new Date().toISOString(),
+): AuthzDecision {
+  const expiresMs = Date.parse(token.expiresAt);
+  const nowMs = Date.parse(nowIso);
+  if (!Number.isFinite(expiresMs) || !Number.isFinite(nowMs) || nowMs > expiresMs) {
+    return {
+      allowed: false,
+      reason: `Agent identity runtime token ${token.tokenId} has expired`,
+    };
+  }
+  if (token.environmentId !== environmentId) {
+    return {
+      allowed: false,
+      reason: `Agent identity token ${token.tokenId} is scoped to environment ${token.environmentId}, not ${environmentId}`,
+    };
+  }
+  if (!token.allowedToolIds.includes(toolId) && !token.allowedToolIds.includes('*')) {
+    return {
+      allowed: false,
+      reason: `Agent identity ${token.agentIdentityId} is not granted tool "${toolId}"`,
+    };
+  }
+  return {
+    allowed: true,
+    grantMode: 'all',
+    matchedRole: 'agent_identity',
+    reason: `Agent ${token.agentId} authorized tool "${toolId}" on behalf of ${token.onBehalfOfPrincipalId ?? 'autonomous'}`,
+  };
 }

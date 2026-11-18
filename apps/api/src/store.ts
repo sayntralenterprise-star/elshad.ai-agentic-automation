@@ -3,8 +3,10 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import {
   DEFAULT_ROLE_MATRIX,
   type BuiltInRole,
+  type CustomRoleSpec,
   type Permission,
   type RoleBinding,
+  type RolePermissionMap,
 } from '@elshad/authz';
 import {
   GENESIS_AUDIT_HASH,
@@ -72,6 +74,7 @@ export interface RoleRecord {
   org_id: string | null;
   name: string;
   is_system: boolean;
+  permissions?: RolePermissionMap;
 }
 
 export interface RoleBindingRecord {
@@ -131,6 +134,7 @@ export interface AuthPrincipalContext {
   org: OrgRecord;
   bindings: RoleBinding[];
   rawBindings: RoleBindingRecord[];
+  customRoles: CustomRoleSpec[];
   workspaces: WorkspaceRecord[];
 }
 
@@ -163,6 +167,11 @@ export interface IamAuditStore {
   ): Promise<ProjectRecord>;
   listEnvironments(orgId: string, workspaceId: string): Promise<EnvironmentRecord[]>;
   listRoles(orgId: string): Promise<RoleRecord[]>;
+  createCustomRole(
+    orgId: string,
+    input: { name: string; permissions: RolePermissionMap },
+  ): Promise<RoleRecord>;
+  createAgentPrincipal(orgId: string, displayName: string): Promise<PrincipalRecord>;
   listRoleBindings(orgId: string): Promise<RoleBindingRecord[]>;
   createRoleBinding(
     orgId: string,
@@ -200,7 +209,16 @@ export interface IamAuditStore {
   ): Promise<AuditEventRecord>;
   listAuditEvents(
     orgId: string,
-    opts: { limit?: number; cursor?: string; action?: string },
+    opts: {
+      limit?: number;
+      cursor?: string;
+      action?: string;
+      actor_id?: string;
+      resource_type?: string;
+      decision?: string;
+      from_ts?: string;
+      to_ts?: string;
+    },
   ): Promise<{ data: AuditEventRecord[]; next_cursor: string | null }>;
   getIdempotency(
     orgId: string,
@@ -436,6 +454,62 @@ export class InMemoryIamAuditStore implements IamAuditStore {
     return { org, workspace, principal };
   }
 
+  /**
+   * Helper for tests / multi-user scenarios (e.g. SoD) to seed an additional user principal in an org.
+   */
+  seedUserPrincipal(
+    orgId: string,
+    input: {
+      email: string;
+      password: string;
+      displayName?: string;
+      role?: BuiltInRole | string;
+      scopeType?: 'org' | 'workspace';
+      scopeId?: string;
+    },
+  ): PrincipalRecord {
+    const now = this.clock.now().toISOString();
+    const principalId = this.idGen.uuidv7();
+    const principal: PrincipalRecord = {
+      id: principalId,
+      org_id: orgId,
+      type: 'user',
+      external_id: null,
+      email: input.email.toLowerCase(),
+      display_name: input.displayName ?? input.email,
+      disabled_at: null,
+    };
+    this.principals.set(principalId, principal);
+    this.credentials.set(principalId, {
+      principalId,
+      orgId,
+      passwordHash: hashPassword(input.password),
+      failedAttempts: 0,
+      lockedUntilMs: null,
+    });
+
+    if (input.role) {
+      const role = [...this.roles.values()].find(
+        (r) => (r.org_id === null || r.org_id === orgId) && r.name === input.role,
+      );
+      if (role) {
+        const bindingId = this.idGen.uuidv7();
+        this.roleBindings.set(bindingId, {
+          id: bindingId,
+          org_id: orgId,
+          principal_id: principalId,
+          role_id: role.id,
+          role_name: role.name,
+          scope_type: input.scopeType ?? 'org',
+          scope_id: input.scopeId ?? orgId,
+          created_at: now,
+        });
+      }
+    }
+
+    return principal;
+  }
+
   async checkHealth(): Promise<boolean> {
     return true;
   }
@@ -626,13 +700,21 @@ export class InMemoryIamAuditStore implements IamAuditStore {
     const rawBindings = [...this.roleBindings.values()].filter(
       (b) => b.org_id === orgId && b.principal_id === principalId,
     );
+    const customRoles: CustomRoleSpec[] = [...this.roles.values()]
+      .filter((r) => r.org_id === orgId && !r.is_system && r.permissions)
+      .map((r) => ({
+        id: r.id,
+        orgId,
+        name: r.name,
+        permissions: r.permissions!,
+      }));
     const bindings: RoleBinding[] = rawBindings.map((b) => ({
       role: b.role_name,
       scopeType: b.scope_type,
       scopeId: b.scope_id,
     }));
     const workspaces = await this.listWorkspaces(orgId);
-    return { principal, org, bindings, rawBindings, workspaces };
+    return { principal, org, bindings, rawBindings, customRoles, workspaces };
   }
 
   async listWorkspaces(orgId: string): Promise<WorkspaceRecord[]> {
@@ -744,6 +826,43 @@ export class InMemoryIamAuditStore implements IamAuditStore {
 
   async listRoles(orgId: string): Promise<RoleRecord[]> {
     return [...this.roles.values()].filter((r) => r.org_id === null || r.org_id === orgId);
+  }
+
+  async createCustomRole(
+    orgId: string,
+    input: { name: string; permissions: RolePermissionMap },
+  ): Promise<RoleRecord> {
+    const dup = [...this.roles.values()].find(
+      (r) => (r.org_id === null || r.org_id === orgId) && r.name === input.name,
+    );
+    if (dup) {
+      throw new PlatformError('RES_CONFLICT', `Role '${input.name}' already exists.`);
+    }
+    const id = this.idGen.uuidv7();
+    const role: RoleRecord = {
+      id,
+      org_id: orgId,
+      name: input.name,
+      is_system: false,
+      permissions: input.permissions,
+    };
+    this.roles.set(id, role);
+    return role;
+  }
+
+  async createAgentPrincipal(orgId: string, displayName: string): Promise<PrincipalRecord> {
+    const id = this.idGen.uuidv7();
+    const principal: PrincipalRecord = {
+      id,
+      org_id: orgId,
+      type: 'agent',
+      external_id: null,
+      email: null,
+      display_name: displayName,
+      disabled_at: null,
+    };
+    this.principals.set(id, principal);
+    return principal;
   }
 
   async listRoleBindings(orgId: string): Promise<RoleBindingRecord[]> {
@@ -887,12 +1006,36 @@ export class InMemoryIamAuditStore implements IamAuditStore {
 
   async listAuditEvents(
     orgId: string,
-    opts: { limit?: number; cursor?: string; action?: string },
+    opts: {
+      limit?: number;
+      cursor?: string;
+      action?: string;
+      actor_id?: string;
+      resource_type?: string;
+      decision?: string;
+      from_ts?: string;
+      to_ts?: string;
+    },
   ): Promise<{ data: AuditEventRecord[]; next_cursor: string | null }> {
     const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
     let events = [...(this.auditEvents.get(orgId) ?? [])].sort((a, b) => b.seq - a.seq);
     if (opts.action) {
       events = events.filter((e) => e.action === opts.action);
+    }
+    if (opts.actor_id) {
+      events = events.filter((e) => e.actor['id'] === opts.actor_id);
+    }
+    if (opts.resource_type) {
+      events = events.filter((e) => e.resource['type'] === opts.resource_type);
+    }
+    if (opts.decision) {
+      events = events.filter((e) => e.decision === opts.decision);
+    }
+    if (opts.from_ts) {
+      events = events.filter((e) => e.ts >= opts.from_ts!);
+    }
+    if (opts.to_ts) {
+      events = events.filter((e) => e.ts <= opts.to_ts!);
     }
     if (opts.cursor) {
       const cursorSeq = Number(opts.cursor);

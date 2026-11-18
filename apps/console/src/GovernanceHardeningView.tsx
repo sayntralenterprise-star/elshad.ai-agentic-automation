@@ -1,14 +1,31 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { PlatformError, type EnvironmentKind } from '@elshad/domain';
 import {
+  type AgentIdentityDto,
+  type AuditExportDto,
   type AuditVerifyDto,
   type BudgetDto,
+  type EvidencePackDto,
   type KillSwitchDto,
   type PlatformClient,
+  type PolicyDto,
+  type PolicyPointDto,
+  type PolicySimulationReportDto,
   type SecretMetadataDto,
+  type ToolGrantDto,
 } from '@elshad/sdk-ts';
 import { StatusChip, SuccessNotice } from '@elshad/ui-kit';
-import { Key, OctagonAlert, RefreshCw, ShieldAlert, ShieldCheck, Wallet } from 'lucide-react';
+import {
+  FileCheck,
+  FileDown,
+  Key,
+  OctagonAlert,
+  RefreshCw,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  Wallet,
+} from 'lucide-react';
 
 export interface GovernanceHardeningViewProps {
   client: PlatformClient;
@@ -47,16 +64,52 @@ export function GovernanceHardeningView({
   const [ksScopeId, setKsScopeId] = useState('*');
   const [ksReason, setKsReason] = useState('Emergency containment pause');
 
+  // S1.2 Governance v1 state (Policies, Agent Identities, Tool Grants, Export & Evidence Pack)
+  const [policies, setPolicies] = useState<PolicyDto[]>([]);
+  const [agentIdentities, setAgentIdentities] = useState<AgentIdentityDto[]>([]);
+  const [toolGrants, setToolGrants] = useState<ToolGrantDto[]>([]);
+  const [auditExport, setAuditExport] = useState<AuditExportDto | null>(null);
+  const [evidencePack, setEvidencePack] = useState<EvidencePackDto | null>(null);
+  const [simReport, setSimReport] = useState<PolicySimulationReportDto | null>(null);
+  const [expandedRegoId, setExpandedRegoId] = useState<string | null>(null);
+
+  const [policySlug, setPolicySlug] = useState('deny-destructive-prod');
+  const [policyName, setPolicyName] = useState('Block destructive tools in prod');
+  const [policyPoint, setPolicyPoint] = useState<PolicyPointDto>('tool_call');
+  const [policyEffect, setPolicyEffect] = useState<'allow' | 'deny' | 'require_approval'>('deny');
+  const [policyEnv, setPolicyEnv] = useState<'dev' | 'staging' | 'prod'>('prod');
+  const [policySecondApprover, setPolicySecondApprover] = useState('prn_reviewer_2');
+
+  const [aidAgentId, setAidAgentId] = useState('agt_1');
+  const [aidDisplayName, setAidDisplayName] = useState('Triage Agent Identity');
+  const [aidTools, setAidTools] = useState('current_time,http_request');
+
+  const [tgToolId, setTgToolId] = useState('http_request');
+  const [tgSideEffect, setTgSideEffect] = useState<'read' | 'write' | 'destructive' | 'external_comms'>('write');
+  const [tgDomains, setTgDomains] = useState('api.trusted.internal');
+  const [tgMaxCalls, setTgMaxCalls] = useState('3');
+  const [tgApproverId, setTgApproverId] = useState('prn_reviewer_2');
+
   const loadHardeningState = useCallback(async () => {
     try {
-      const [secList, budList, ksList] = await Promise.all([
+      const [secList, budList, ksList, polList, aidList, tgList] = await Promise.all([
         client.secrets.list().catch(() => [] as SecretMetadataDto[]),
         client.budgets.list().catch(() => [] as BudgetDto[]),
         client.killswitches.list().catch(() => [] as KillSwitchDto[]),
+        client.policies?.list ? client.policies.list().catch(() => [] as PolicyDto[]) : Promise.resolve([]),
+        client.agentIdentities?.list
+          ? client.agentIdentities.list().catch(() => [] as AgentIdentityDto[])
+          : Promise.resolve([]),
+        client.toolGrants?.list
+          ? client.toolGrants.list().catch(() => [] as ToolGrantDto[])
+          : Promise.resolve([]),
       ]);
       setSecrets(secList);
       setBudgets(budList);
       setKillSwitches(ksList);
+      setPolicies(polList);
+      setAgentIdentities(aidList);
+      setToolGrants(tgList);
     } catch (err) {
       setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
     }
@@ -180,6 +233,134 @@ export function GovernanceHardeningView({
     }
   }
 
+  async function handleExportAuditCsv() {
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await client.audit.export({ format: 'csv' });
+      setAuditExport(res);
+      setNotice(`Exported CSV (${res.rowCount} rows, chain intact: ${String(res.chainValid)}).`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleGenerateEvidencePack() {
+    setError(null);
+    setNotice(null);
+    try {
+      const pack = await client.audit.generateEvidencePack({ workspaceId });
+      setEvidencePack(pack);
+      setNotice(`Generated compliance evidence pack ${pack.packId} (SHA-256 ${pack.digestSha256.slice(0, 12)}...).`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleCreatePolicy(e: FormEvent) {
+    e.preventDefault();
+    if (!policySlug.trim() || !policyName.trim()) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const created = await client.policies.create({
+        workspaceId,
+        slug: policySlug.trim(),
+        name: policyName.trim(),
+        point: policyPoint,
+        effect: policyEffect,
+        mode: 'audit_only',
+        condition: {
+          environments: [policyEnv],
+        },
+      });
+      setPolicies((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
+      setNotice(`Created policy "${created.name}" (${created.mode}).`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleSimulatePolicy(policyId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      const report = await client.policies.simulate({ policyId });
+      setSimReport(report);
+      setNotice(
+        `Simulated ${report.policySlug}: ${report.blockedCount} blocked, ${report.approvalRequiredCount} approval-gated across ${report.totalRunsEvaluated} runs.`,
+      );
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleEnforcePolicy(policyId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await client.policies.enforce(policyId, {
+        secondApproverId: policySecondApprover.trim() || undefined,
+      });
+      setPolicies((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setNotice(`Policy "${updated.name}" promoted to enforce (approved by ${updated.approvedBy}).`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleProvisionAgentIdentity(e: FormEvent) {
+    e.preventDefault();
+    if (!aidAgentId.trim() || !aidDisplayName.trim()) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const allowedToolIds = aidTools
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const created = await client.agentIdentities.create({
+        workspaceId,
+        agentId: aidAgentId.trim(),
+        environment,
+        displayName: aidDisplayName.trim(),
+        allowedToolIds,
+      });
+      setAgentIdentities((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+      setNotice(`Provisioned agent identity "${created.displayName}" (${created.principalId}).`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
+  async function handleGrantTool(e: FormEvent) {
+    e.preventDefault();
+    if (!aidAgentId.trim() || !tgToolId.trim()) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const allowedDomains = tgDomains
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean);
+      const created = await client.toolGrants.create({
+        workspaceId,
+        agentId: aidAgentId.trim(),
+        toolId: tgToolId.trim(),
+        sideEffectClass: tgSideEffect,
+        scope: {
+          ...(allowedDomains.length > 0 ? { allowedDomains } : {}),
+          ...(tgMaxCalls.trim() ? { maxCallsPerRun: Number(tgMaxCalls) } : {}),
+        },
+        approvedBy: tgSideEffect === 'read' ? undefined : tgApproverId.trim() || undefined,
+      });
+      setToolGrants((prev) => [created, ...prev.filter((g) => g.id !== created.id)]);
+      setNotice(`Granted ${created.sideEffectClass} tool "${created.toolId}" to ${created.agentId}.`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    }
+  }
+
   return (
     <div style={{ display: 'grid', gap: '16px', marginTop: '12px' }}>
       {activeKillSwitches.length > 0 && (
@@ -269,21 +450,92 @@ export function GovernanceHardeningView({
             />
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => void handleVerifyAuditChain()}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => void handleVerifyAuditChain()}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface-raised)',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Verify Audit Chain
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportAuditCsv()}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface-raised)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+          >
+            <FileDown size={14} aria-hidden="true" />
+            <span>Export Audit CSV</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleGenerateEvidencePack()}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface-raised)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+          >
+            <FileCheck size={14} aria-hidden="true" />
+            <span>Generate Evidence Pack</span>
+          </button>
+        </div>
+      </div>
+
+      {auditExport && (
+        <div
+          data-testid="audit-csv-export"
           style={{
-            padding: '6px 12px',
-            borderRadius: 'var(--radius-sm)',
+            padding: '10px 12px',
+            backgroundColor: 'var(--surface)',
             border: '1px solid var(--border)',
-            backgroundColor: 'var(--surface-raised)',
-            fontWeight: 600,
-            cursor: 'pointer',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '12px',
           }}
         >
-          Verify Audit Chain
-        </button>
-      </div>
+          <strong>Audit Export ({auditExport.format.toUpperCase()}):</strong> {auditExport.rowCount} rows ·{' '}
+          Chain Valid: {String(auditExport.chainValid)}
+        </div>
+      )}
+
+      {evidencePack && (
+        <div
+          data-testid="evidence-pack-summary"
+          style={{
+            padding: '10px 12px',
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '12px',
+          }}
+        >
+          <strong>Evidence Pack {evidencePack.packId}:</strong> SHA-256{' '}
+          <code>{evidencePack.digestSha256}</code> · Policies: {evidencePack.policies.length} · Grants:{' '}
+          {evidencePack.toolGrants.length} · Agent Identities: {evidencePack.agentIdentities.length}
+        </div>
+      )}
 
       {/* Hardening Controls Grid: Kill Switch | Budgets | Secrets */}
       <div
@@ -672,6 +924,438 @@ export function GovernanceHardeningView({
                 </button>
               </div>
             </form>
+          )}
+        </section>
+      </div>
+
+      {/* S1.2 Governance v1: Declarative Policies & Simulation | Agent Identities & Tool Grants */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          gap: '12px',
+          alignItems: 'start',
+        }}
+      >
+        {/* 4. Declarative Policies & Simulation */}
+        <section
+          aria-label="Declarative Policies and Simulation"
+          style={{
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px',
+            display: 'grid',
+            gap: '10px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Shield size={16} aria-hidden="true" />
+            <h2 style={{ margin: 0, fontSize: '15px' }}>Declarative Policies &amp; Simulation</h2>
+          </div>
+
+          <form onSubmit={(e) => void handleCreatePolicy(e)} style={{ display: 'grid', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <div>
+                <label htmlFor="policy-slug-input" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Policy Slug
+                </label>
+                <input
+                  id="policy-slug-input"
+                  type="text"
+                  required
+                  value={policySlug}
+                  onChange={(e) => setPolicySlug(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="policy-name-input" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Policy Name
+                </label>
+                <input
+                  id="policy-name-input"
+                  type="text"
+                  required
+                  value={policyName}
+                  onChange={(e) => setPolicyName(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+              <div>
+                <label htmlFor="policy-point-select" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Hook Point
+                </label>
+                <select
+                  id="policy-point-select"
+                  value={policyPoint}
+                  onChange={(e) => setPolicyPoint(e.target.value as PolicyPointDto)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                >
+                  <option value="tool_call">tool_call</option>
+                  <option value="data_access">data_access</option>
+                  <option value="memory_read">memory_read</option>
+                  <option value="memory_write">memory_write</option>
+                  <option value="model_select">model_select</option>
+                  <option value="egress">egress</option>
+                  <option value="promotion">promotion</option>
+                  <option value="publish">publish</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="policy-effect-select" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Effect
+                </label>
+                <select
+                  id="policy-effect-select"
+                  value={policyEffect}
+                  onChange={(e) => setPolicyEffect(e.target.value as 'allow' | 'deny' | 'require_approval')}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                >
+                  <option value="deny">deny</option>
+                  <option value="require_approval">require_approval</option>
+                  <option value="allow">allow</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="policy-env-input" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Target Env
+                </label>
+                <select
+                  id="policy-env-input"
+                  value={policyEnv}
+                  onChange={(e) => setPolicyEnv(e.target.value as 'dev' | 'staging' | 'prod')}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                >
+                  <option value="dev">dev</option>
+                  <option value="staging">staging</option>
+                  <option value="prod">prod</option>
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                padding: '7px 12px',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--brand)',
+                color: '#fff',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Create Policy
+            </button>
+          </form>
+
+          <div>
+            <label htmlFor="policy-second-approver" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+              Second Policy Approver ID (SoD)
+            </label>
+            <input
+              id="policy-second-approver"
+              type="text"
+              value={policySecondApprover}
+              onChange={(e) => setPolicySecondApprover(e.target.value)}
+              style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+            />
+          </div>
+
+          {simReport && (
+            <div
+              data-testid="policy-sim-report"
+              style={{
+                padding: '8px',
+                backgroundColor: 'var(--surface-raised)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: '12px',
+              }}
+            >
+              Simulated <strong>{simReport.policySlug}</strong>: {simReport.blockedCount} blocked,{' '}
+              {simReport.approvalRequiredCount} approvals across {simReport.totalRunsEvaluated} runs (
+              {simReport.durationMs}ms)
+            </div>
+          )}
+
+          {policies.length > 0 && (
+            <div style={{ display: 'grid', gap: '6px' }}>
+              {policies.map((pol) => (
+                <div
+                  key={pol.id}
+                  style={{
+                    padding: '8px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--surface-raised)',
+                    display: 'grid',
+                    gap: '6px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <div>
+                      <strong>{pol.name}</strong> (<code>{pol.slug}</code>) · {pol.effect} ·{' '}
+                      <StatusChip label={pol.mode} tone={pol.mode === 'enforce' ? 'success' : 'info'} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedRegoId((prev) => (prev === pol.id ? null : pol.id))}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--surface)',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                        }}
+                      >
+                        View Rego
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleSimulatePolicy(pol.id)}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--surface)',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                        }}
+                      >
+                        Simulate Policy
+                      </button>
+                      {pol.mode === 'audit_only' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleEnforcePolicy(pol.id)}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--brand)',
+                            backgroundColor: 'var(--brand)',
+                            color: '#fff',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Enforce Policy (SoD)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {expandedRegoId === pol.id && (
+                    <pre
+                      data-testid="policy-rego-preview"
+                      style={{
+                        margin: 0,
+                        padding: '8px',
+                        backgroundColor: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-sm)',
+                        overflowX: 'auto',
+                        fontSize: '11px',
+                      }}
+                    >
+                      {pol.regoSource}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* 5. Agent Identities & Scoped Tool Grants */}
+        <section
+          aria-label="Agent Identities and Scoped Tool Grants"
+          style={{
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px',
+            display: 'grid',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <ShieldCheck size={16} aria-hidden="true" />
+            <h2 style={{ margin: 0, fontSize: '15px' }}>Agent Identities &amp; Scoped Tool Grants</h2>
+          </div>
+
+          <form onSubmit={(e) => void handleProvisionAgentIdentity(e)} style={{ display: 'grid', gap: '6px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <div>
+                <label htmlFor="aid-agent-id" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Target Agent ID
+                </label>
+                <input
+                  id="aid-agent-id"
+                  type="text"
+                  required
+                  value={aidAgentId}
+                  onChange={(e) => setAidAgentId(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="aid-display-name" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Identity Display Name
+                </label>
+                <input
+                  id="aid-display-name"
+                  type="text"
+                  required
+                  value={aidDisplayName}
+                  onChange={(e) => setAidDisplayName(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+            </div>
+            <div>
+              <label htmlFor="aid-tools-input" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                Allowed Tool IDs (comma-separated)
+              </label>
+              <input
+                id="aid-tools-input"
+                type="text"
+                value={aidTools}
+                onChange={(e) => setAidTools(e.target.value)}
+                style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+              />
+            </div>
+            <button
+              type="submit"
+              style={{
+                padding: '7px 12px',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--surface-raised)',
+                borderColor: 'var(--border)',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Provision Agent Identity
+            </button>
+          </form>
+
+          {agentIdentities.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', display: 'grid', gap: '4px' }}>
+              {agentIdentities.map((ai) => (
+                <li key={ai.id}>
+                  <strong>{ai.displayName}</strong> · principal <code>{ai.principalId}</code> · tools [{ai.allowedToolIds.join(', ')}]
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <hr style={{ width: '100%', border: 'none', borderTop: '1px solid var(--border)', margin: 0 }} />
+
+          <form onSubmit={(e) => void handleGrantTool(e)} style={{ display: 'grid', gap: '6px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <div>
+                <label htmlFor="tg-tool-id" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Tool Name
+                </label>
+                <input
+                  id="tg-tool-id"
+                  type="text"
+                  required
+                  value={tgToolId}
+                  onChange={(e) => setTgToolId(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="tg-side-effect" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Side-Effect Class
+                </label>
+                <select
+                  id="tg-side-effect"
+                  value={tgSideEffect}
+                  onChange={(e) =>
+                    setTgSideEffect(e.target.value as 'read' | 'write' | 'destructive' | 'external_comms')
+                  }
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                >
+                  <option value="read">read</option>
+                  <option value="write">write</option>
+                  <option value="destructive">destructive</option>
+                  <option value="external_comms">external_comms</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 1fr', gap: '6px' }}>
+              <div>
+                <label htmlFor="tg-allowed-domains" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Allowed Domains
+                </label>
+                <input
+                  id="tg-allowed-domains"
+                  type="text"
+                  value={tgDomains}
+                  onChange={(e) => setTgDomains(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="tg-max-calls" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Max Calls
+                </label>
+                <input
+                  id="tg-max-calls"
+                  type="number"
+                  min={1}
+                  value={tgMaxCalls}
+                  onChange={(e) => setTgMaxCalls(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="tg-approver-id" style={{ display: 'block', fontSize: '11px', fontWeight: 600 }}>
+                  Approver ID (SoD)
+                </label>
+                <input
+                  id="tg-approver-id"
+                  type="text"
+                  value={tgApproverId}
+                  onChange={(e) => setTgApproverId(e.target.value)}
+                  style={{ width: '100%', padding: '5px', border: '1px solid var(--border)' }}
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              style={{
+                padding: '7px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--surface-raised)',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Grant Scoped Tool
+            </button>
+          </form>
+
+          {toolGrants.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', display: 'grid', gap: '4px' }}>
+              {toolGrants.map((g) => (
+                <li key={g.id}>
+                  <strong>{g.toolId}</strong> ({g.sideEffectClass}) → {g.agentId} · max {g.scope.maxCallsPerRun ?? '∞'} calls
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       </div>

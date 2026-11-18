@@ -638,6 +638,73 @@ export interface KillswitchesTable {
   deactivated_at: Date | null;
 }
 
+export interface AgentIdentitiesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  agent_id: string;
+  principal_id: string;
+  environment_id: string;
+  display_name: string;
+  allowed_tool_ids: string[];
+  token_ttl_seconds: number;
+  status: 'active' | 'disabled';
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface PoliciesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  point:
+    | 'tool_call'
+    | 'data_access'
+    | 'memory_read'
+    | 'memory_write'
+    | 'model_select'
+    | 'egress'
+    | 'promotion'
+    | 'publish';
+  mode: 'audit_only' | 'enforce';
+  active_version_id: string | null;
+  created_by: string;
+  approved_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface PolicyVersionsTable {
+  id: string;
+  org_id: string;
+  policy_id: string;
+  version: number;
+  effect: 'allow' | 'deny' | 'require_approval';
+  rules_json: Record<string, unknown>;
+  rego_source: string;
+  created_by: string;
+  created_at: Date;
+}
+
+export interface PolicyDecisionsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string | null;
+  run_id: string | null;
+  policy_id: string | null;
+  point: string;
+  effect: string;
+  matched_policy_ids: string[];
+  reason: string;
+  input_summary: Record<string, unknown>;
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -680,6 +747,10 @@ export interface Database {
   secrets: SecretsTable;
   budgets: BudgetsTable;
   killswitches: KillswitchesTable;
+  agent_identities: AgentIdentitiesTable;
+  policies: PoliciesTable;
+  policy_versions: PolicyVersionsTable;
+  policy_decisions: PolicyDecisionsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {
@@ -859,7 +930,8 @@ export type PartitionedTable =
   | 'runs'
   | 'run_events'
   | 'run_steps'
-  | 'usage_ledger';
+  | 'usage_ledger'
+  | 'policy_decisions';
 
 export const DEFAULT_PARTITIONED_TABLES: readonly PartitionedTable[] = [
   'audit_events',
@@ -867,6 +939,7 @@ export const DEFAULT_PARTITIONED_TABLES: readonly PartitionedTable[] = [
   'run_events',
   'run_steps',
   'usage_ledger',
+  'policy_decisions',
 ];
 
 const SAFE_TABLE_IDENT = /^[a-z_][a-z0-9_]*$/;
@@ -915,4 +988,60 @@ export function planUpcomingPartitions(
     }
   }
   return results;
+}
+
+const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
+function escapeCsvCell(raw: unknown): string {
+  const str = raw === null || raw === undefined ? '' : String(raw);
+  const safe = CSV_FORMULA_PREFIX.test(str) ? `'${str}` : str;
+  if (safe.includes('"') || safe.includes(',') || safe.includes('\n') || safe.includes('\r')) {
+    return `"${safe.replaceAll('"', '""')}"`;
+  }
+  return safe;
+}
+
+/**
+ * Formats verifiable audit events into RFC 4180 CSV with spreadsheet formula-injection neutralization (FR-GOV-18).
+ */
+export function formatAuditEventsCsv(events: readonly VerifiableAuditEvent[]): string {
+  const header = [
+    'seq',
+    'ts',
+    'id',
+    'action',
+    'decision',
+    'actor_id',
+    'actor_type',
+    'on_behalf_of_id',
+    'resource_type',
+    'resource_id',
+    'policy_ids',
+    'context_hash',
+    'prev_hash',
+    'hash',
+  ].join(',');
+
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  const rows = sorted.map((evt) => {
+    const cells = [
+      evt.seq,
+      evt.ts,
+      evt.id,
+      evt.action,
+      evt.decision ?? '',
+      evt.actor['id'] ?? '',
+      evt.actor['type'] ?? '',
+      evt.on_behalf_of?.['id'] ?? '',
+      evt.resource['type'] ?? '',
+      evt.resource['id'] ?? '',
+      evt.policy_ids ? evt.policy_ids.join(';') : '',
+      evt.context_hash,
+      evt.prev_hash,
+      evt.hash,
+    ];
+    return cells.map(escapeCsvCell).join(',');
+  });
+
+  return [header, ...rows].join('\r\n');
 }

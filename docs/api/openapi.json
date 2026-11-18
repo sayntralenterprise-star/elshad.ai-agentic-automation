@@ -484,6 +484,16 @@
           },
           "is_system": {
             "type": "boolean"
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "all",
+                "own"
+              ]
+            }
           }
         },
         "required": [
@@ -660,6 +670,13 @@
             "type": "object",
             "additionalProperties": {}
           },
+          "on_behalf_of": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {}
+          },
           "action": {
             "type": "string"
           },
@@ -672,6 +689,15 @@
               "string",
               "null"
             ]
+          },
+          "policy_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "hash": {
             "type": "string"
@@ -4474,6 +4500,898 @@
           "valid",
           "checked_count"
         ]
+      },
+      "CreateCustomRoleRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 64
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "all",
+                "own"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "permissions"
+        ]
+      },
+      "AgentIdentity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "allowed_tool_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_ttl_seconds": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "agent_id",
+          "principal_id",
+          "environment_id",
+          "display_name",
+          "allowed_tool_ids",
+          "token_ttl_seconds",
+          "status",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateAgentIdentityRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "allowed_tool_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "token_ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 900
+          }
+        },
+        "required": [
+          "agent_id",
+          "display_name"
+        ]
+      },
+      "AgentIdentityToken": {
+        "type": "object",
+        "properties": {
+          "token_id": {
+            "type": "string"
+          },
+          "agent_identity_id": {
+            "type": "string"
+          },
+          "agent_principal_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "on_behalf_of_principal_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "allowed_tool_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id",
+          "agent_identity_id",
+          "agent_principal_id",
+          "agent_id",
+          "org_id",
+          "workspace_id",
+          "environment_id",
+          "on_behalf_of_principal_id",
+          "allowed_tool_ids",
+          "expires_at"
+        ]
+      },
+      "IssueAgentIdentityTokenRequest": {
+        "type": "object",
+        "properties": {
+          "on_behalf_of_principal_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400
+          }
+        }
+      },
+      "ToolGrant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "allowed_domains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allowed_methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_calls_per_run": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "default": {}
+          },
+          "granted_by": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "agent_id",
+          "tool_id",
+          "side_effect_class",
+          "granted_by",
+          "approved_by",
+          "status",
+          "created_at"
+        ]
+      },
+      "CreateToolGrantRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tool_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "side_effect_class": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive",
+              "external_comms"
+            ],
+            "default": "read"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "allowed_domains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allowed_methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_calls_per_run": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "default": {}
+          },
+          "approved_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "tool_id"
+        ]
+      },
+      "Policy": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point": {
+            "type": "string",
+            "enum": [
+              "tool_call",
+              "data_access",
+              "memory_read",
+              "memory_write",
+              "model_select",
+              "egress",
+              "promotion",
+              "publish"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "audit_only",
+              "enforce"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny",
+              "require_approval"
+            ]
+          },
+          "condition": {
+            "$ref": "#/components/schemas/DeclarativePolicyCondition"
+          },
+          "rego_source": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "slug",
+          "name",
+          "description",
+          "point",
+          "mode",
+          "version",
+          "effect",
+          "condition",
+          "rego_source",
+          "created_by",
+          "approved_by",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "DeclarativePolicyCondition": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tool_call",
+                "data_access",
+                "memory_read",
+                "memory_write",
+                "model_select",
+                "egress",
+                "promotion",
+                "publish"
+              ]
+            }
+          },
+          "side_effect_classes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "destructive",
+                "external_comms"
+              ]
+            }
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dev",
+                "staging",
+                "prod"
+              ]
+            }
+          },
+          "tool_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_autonomy_level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "untrusted_content_in_context": {
+            "type": "boolean"
+          },
+          "data_classifications": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_spend_micro_usd": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "risk_tiers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          }
+        }
+      },
+      "CreatePolicyRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "point": {
+            "type": "string",
+            "enum": [
+              "tool_call",
+              "data_access",
+              "memory_read",
+              "memory_write",
+              "model_select",
+              "egress",
+              "promotion",
+              "publish"
+            ]
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny",
+              "require_approval"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "audit_only",
+              "enforce"
+            ],
+            "default": "audit_only"
+          },
+          "condition": {
+            "$ref": "#/components/schemas/DeclarativePolicyCondition"
+          },
+          "rego_source": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "point",
+          "effect"
+        ]
+      },
+      "EnforcePolicyRequest": {
+        "type": "object",
+        "properties": {
+          "second_approver_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PolicySimulationReport": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "policy_slug": {
+            "type": "string"
+          },
+          "total_runs_evaluated": {
+            "type": "integer"
+          },
+          "matched_count": {
+            "type": "integer"
+          },
+          "blocked_count": {
+            "type": "integer"
+          },
+          "approval_required_count": {
+            "type": "integer"
+          },
+          "sample_affected_run_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "duration_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_id",
+          "policy_slug",
+          "total_runs_evaluated",
+          "matched_count",
+          "blocked_count",
+          "approval_required_count",
+          "sample_affected_run_ids",
+          "duration_ms"
+        ]
+      },
+      "SimulatePolicyRequest": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "point": {
+            "type": "string",
+            "enum": [
+              "tool_call",
+              "data_access",
+              "memory_read",
+              "memory_write",
+              "model_select",
+              "egress",
+              "promotion",
+              "publish"
+            ]
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny",
+              "require_approval"
+            ]
+          },
+          "condition": {
+            "$ref": "#/components/schemas/DeclarativePolicyCondition"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run_id": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "string",
+                  "enum": [
+                    "tool_call",
+                    "data_access",
+                    "memory_read",
+                    "memory_write",
+                    "model_select",
+                    "egress",
+                    "promotion",
+                    "publish"
+                  ]
+                },
+                "environment": {
+                  "type": "string",
+                  "enum": [
+                    "dev",
+                    "staging",
+                    "prod"
+                  ]
+                },
+                "autonomy_level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4,
+                  "default": 2
+                },
+                "side_effect_class": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "destructive",
+                    "external_comms"
+                  ]
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "untrusted_content_in_context": {
+                  "type": "boolean"
+                },
+                "data_classifications": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cumulative_spend_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "risk_tier": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              },
+              "required": [
+                "run_id"
+              ]
+            }
+          }
+        }
+      },
+      "AuditExportResponse": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "json"
+            ]
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "chain_valid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "format",
+          "content_type",
+          "data",
+          "row_count",
+          "chain_valid"
+        ]
+      },
+      "EvidencePack": {
+        "type": "object",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "generated_by": {
+            "type": "string"
+          },
+          "chain_verification": {
+            "$ref": "#/components/schemas/AuditVerifyResponse"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "versions_count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "status",
+                "versions_count"
+              ]
+            }
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Policy"
+            }
+          },
+          "tool_grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolGrant"
+            }
+          },
+          "agent_identities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentIdentity"
+            }
+          },
+          "audit_sample": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            }
+          },
+          "digest_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "org_id",
+          "workspace_id",
+          "generated_at",
+          "generated_by",
+          "chain_verification",
+          "agents",
+          "policies",
+          "tool_grants",
+          "agent_identities",
+          "audit_sample",
+          "digest_sha256"
+        ]
+      },
+      "GenerateEvidencePackRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "sample_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          }
+        }
       }
     },
     "parameters": {}
@@ -5305,6 +6223,52 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "roles.create",
+        "summary": "Create an organization custom RBAC role with fine-grained permissions",
+        "tags": [
+          "IAM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomRoleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/role-bindings": {
@@ -5625,6 +6589,46 @@
             },
             "required": false,
             "name": "action",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "actor_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "resource_type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "decision",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from_ts",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to_ts",
             "in": "query"
           }
         ],
@@ -8629,6 +9633,653 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuditVerifyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-identities": {
+      "get": {
+        "operationId": "agent_identities.list",
+        "summary": "List non-human scoped agent identities in the workspace",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AgentIdentity"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "agent_identities.create",
+        "summary": "Provision a non-human agent identity scoped to environment and tool list",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentIdentityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentIdentity"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-identities/{id}/token": {
+      "post": {
+        "operationId": "agent_identities.issue_token",
+        "summary": "Issue a short-lived scoped runtime token with on-behalf-of attribution",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueAgentIdentityTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentIdentityToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tool-grants": {
+      "get": {
+        "operationId": "tool_grants.list",
+        "summary": "List scoped tool grants binding agents to tool capabilities",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ToolGrant"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "tool_grants.create",
+        "summary": "Grant a narrowed tool scope to an agent with Separation of Duties enforcement for write tools",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToolGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolGrant"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tool-grants/{id}": {
+      "delete": {
+        "operationId": "tool_grants.revoke",
+        "summary": "Revoke a tool grant",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/policies": {
+      "get": {
+        "operationId": "policies.list",
+        "summary": "List declarative governance policies and compiled Rego source",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Policy"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "policies.create",
+        "summary": "Create a declarative governance policy compiled to OPA/Rego",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePolicyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Policy"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/policies/{id}/enforce": {
+      "post": {
+        "operationId": "policies.enforce",
+        "summary": "Promote an audit_only policy to enforce mode (requires distinct second approver via SoD)",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnforcePolicyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Policy"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/policies/simulate": {
+      "post": {
+        "operationId": "policies.simulate",
+        "summary": "Simulate a declarative policy against historical run snapshots",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatePolicyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicySimulationReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "operationId": "audit.export",
+        "summary": "Export filtered audit events as CSV or JSON with chain verification flag",
+        "tags": [
+          "Audit"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "default": "csv"
+            },
+            "required": false,
+            "name": "format",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "action",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "actor_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "resource_type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "decision",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from_ts",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to_ts",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditExportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/evidence-pack": {
+      "post": {
+        "operationId": "audit.evidence_pack",
+        "summary": "Generate a signed SHA-256 compliance evidence pack for auditors",
+        "tags": [
+          "Audit"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateEvidencePackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePack"
                 }
               }
             }

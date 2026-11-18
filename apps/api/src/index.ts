@@ -10,13 +10,16 @@ import {
   type RouteContract,
 } from '@elshad/api-contract';
 import {
+  PERMISSIONS,
+  assertSeparationOfDuties,
   authorize,
   requirePermission,
   type AuthzSubject,
   type Permission,
+  type RolePermissionMap,
 } from '@elshad/authz';
 import type { PlatformConfig } from '@elshad/config';
-import { canonicalJson, verifyAuditEventsChain } from '@elshad/db';
+import { canonicalJson, formatAuditEventsCsv, verifyAuditEventsChain } from '@elshad/db';
 import {
   PlatformError,
   SystemClock,
@@ -73,7 +76,21 @@ import {
   type SecretRef,
   type SecretsProvider,
 } from '@elshad/platform-kit';
-import type { AutonomyLevel } from '@elshad/policy-kit';
+import {
+  DefaultV1PolicyEvaluator,
+  compileDeclarativePolicyToRego,
+  simulatePolicyAgainstRuns,
+  type AutonomyLevel,
+  type DeclarativePolicy,
+  type DeclarativePolicyCondition,
+  type HistoricalRunSnapshotForPolicySim,
+  type PolicyEffect,
+  type PolicyEvaluator,
+  type PolicyPoint,
+  type PolicyRolloutMode,
+  type RiskTier,
+  type SideEffectClass,
+} from '@elshad/policy-kit';
 import {
   BudgetManager,
   InMemoryUsageLedger,
@@ -309,6 +326,132 @@ export function buildApiServer(opts: ApiServerOptions): {
 
   const workflowsById = new Map<string, StoredWorkflow>();
 
+  // --- S1.2 Governance v1 State (Agent Identities, Tool Grants, Declarative Policies) ---
+  interface StoredAgentIdentity {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    agent_id: string;
+    principal_id: string;
+    environment_id: string;
+    display_name: string;
+    allowed_tool_ids: string[];
+    token_ttl_seconds: number;
+    status: 'active' | 'disabled';
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredToolGrant {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    agent_id: string;
+    tool_id: string;
+    side_effect_class: SideEffectClass;
+    scope: {
+      allowed_domains?: string[];
+      allowed_methods?: string[];
+      max_calls_per_run?: number;
+    };
+    granted_by: string;
+    approved_by: string | null;
+    status: 'active' | 'revoked';
+    created_at: string;
+  }
+
+  interface StoredDeclarativePolicy extends DeclarativePolicy {
+    created_at: string;
+    updated_at: string;
+  }
+
+  const agentIdentitiesById = new Map<string, StoredAgentIdentity>();
+  const toolGrantsById = new Map<string, StoredToolGrant>();
+  const policiesById = new Map<string, StoredDeclarativePolicy>();
+
+  function fromWirePolicyCondition(
+    raw?: {
+      points?: PolicyPoint[];
+      side_effect_classes?: SideEffectClass[];
+      environments?: EnvironmentKind[];
+      tool_names?: string[];
+      max_autonomy_level?: number;
+      untrusted_content_in_context?: boolean;
+      data_classifications?: string[];
+      max_spend_micro_usd?: number;
+      risk_tiers?: RiskTier[];
+    },
+  ): DeclarativePolicyCondition {
+    if (!raw) return {};
+    return {
+      ...(raw.points ? { points: raw.points } : {}),
+      ...(raw.side_effect_classes ? { sideEffectClasses: raw.side_effect_classes } : {}),
+      ...(raw.environments ? { environments: raw.environments } : {}),
+      ...(raw.tool_names ? { toolNames: raw.tool_names } : {}),
+      ...(raw.max_autonomy_level !== undefined
+        ? { maxAutonomyLevel: raw.max_autonomy_level as AutonomyLevel }
+        : {}),
+      ...(raw.untrusted_content_in_context !== undefined
+        ? { untrustedContentInContext: raw.untrusted_content_in_context }
+        : {}),
+      ...(raw.data_classifications ? { dataClassifications: raw.data_classifications } : {}),
+      ...(raw.max_spend_micro_usd !== undefined
+        ? { maxSpendMicroUsd: raw.max_spend_micro_usd }
+        : {}),
+      ...(raw.risk_tiers ? { riskTiers: raw.risk_tiers } : {}),
+    };
+  }
+
+  function formatPolicyWire(p: StoredDeclarativePolicy) {
+    return {
+      id: p.id,
+      org_id: p.orgId,
+      workspace_id: p.workspaceId ?? null,
+      slug: p.slug,
+      name: p.name,
+      description: p.description ?? null,
+      point: p.point,
+      mode: p.mode,
+      version: p.version,
+      effect: p.effect,
+      condition: {
+        ...(p.condition.points ? { points: [...p.condition.points] } : {}),
+        ...(p.condition.sideEffectClasses
+          ? { side_effect_classes: [...p.condition.sideEffectClasses] }
+          : {}),
+        ...(p.condition.environments ? { environments: [...p.condition.environments] } : {}),
+        ...(p.condition.toolNames ? { tool_names: [...p.condition.toolNames] } : {}),
+        ...(p.condition.maxAutonomyLevel !== undefined
+          ? { max_autonomy_level: p.condition.maxAutonomyLevel }
+          : {}),
+        ...(p.condition.untrustedContentInContext !== undefined
+          ? { untrusted_content_in_context: p.condition.untrustedContentInContext }
+          : {}),
+        ...(p.condition.dataClassifications
+          ? { data_classifications: [...p.condition.dataClassifications] }
+          : {}),
+        ...(p.condition.maxSpendMicroUsd !== undefined
+          ? { max_spend_micro_usd: p.condition.maxSpendMicroUsd }
+          : {}),
+        ...(p.condition.riskTiers ? { risk_tiers: [...p.condition.riskTiers] } : {}),
+      },
+      rego_source: p.regoSource,
+      created_by: p.createdBy,
+      approved_by: p.approvedBy ?? null,
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    };
+  }
+
+  function getWorkspacePolicies(orgId: string, workspaceId?: string): StoredDeclarativePolicy[] {
+    return [...policiesById.values()].filter(
+      (p) =>
+        p.orgId === orgId &&
+        (p.workspaceId === null || p.workspaceId === undefined || p.workspaceId === workspaceId),
+    );
+  }
+
   const rateLimitCfg = {
     public: opts.rateLimits?.public ?? 1200,
     auth: opts.rateLimits?.auth ?? 120,
@@ -392,6 +535,7 @@ export function buildApiServer(opts: ApiServerOptions): {
           principalId: context.principal.id,
           orgId: context.org.id,
           bindings: context.bindings,
+          customRoles: context.customRoles,
           apiKeyScopes:
             resolved.apiKey.scopes.length > 0 ? resolved.apiKey.scopes : undefined,
         },
@@ -430,6 +574,7 @@ export function buildApiServer(opts: ApiServerOptions): {
         principalId: context.principal.id,
         orgId: context.org.id,
         bindings: context.bindings,
+        customRoles: context.customRoles,
       },
       context,
     };
@@ -1074,10 +1219,16 @@ export function buildApiServer(opts: ApiServerOptions): {
   // --- Audit ---
   app.get('/api/v1/audit-events', async (req) => {
     const contract = findContract('GET', '/api/v1/audit-events')!;
-    const query = validateWithSchema<{ limit?: number; cursor?: string; action?: string }>(
-      contract.querySchema,
-      req.query,
-    );
+    const query = validateWithSchema<{
+      limit?: number;
+      cursor?: string;
+      action?: string;
+      actor_id?: string;
+      resource_type?: string;
+      decision?: string;
+      from_ts?: string;
+      to_ts?: string;
+    }>(contract.querySchema, req.query);
     const auth = req.platformState!.auth!;
     return store.listAuditEvents(auth.context.org.id, query);
   });
@@ -1865,7 +2016,63 @@ export function buildApiServer(opts: ApiServerOptions): {
     const lease = leases.find((l) => l.runId === runRecord.id);
 
     const reg = getRegistryForWorkspace(orgId, agent.workspace_id);
-    const reqToolGateway = new ToolGateway({ registry: reg, clock });
+    const workspacePolicies = getWorkspacePolicies(orgId, agent.workspace_id);
+    const baseEvaluator = new DefaultV1PolicyEvaluator();
+    const capturedPolicyDecisions: Array<{
+      toolName?: string;
+      decision: 'allow' | 'deny' | 'require_approval';
+      matchedPolicyIds: string[];
+      auditOnlyMatchedPolicyIds: string[];
+    }> = [];
+    const reqPolicyEvaluator: PolicyEvaluator = {
+      evaluate: async (evalInput) => {
+        const toolContract = evalInput.toolName ? reg.get(evalInput.toolName) : undefined;
+        const activeToolGrant = evalInput.toolName
+          ? [...toolGrantsById.values()].find(
+              (g) =>
+                g.org_id === orgId &&
+                g.agent_id === agent.id &&
+                g.tool_id === evalInput.toolName &&
+                g.status === 'active',
+            )
+          : undefined;
+        const mergedGrantScope = activeToolGrant
+          ? {
+              allowed_domains:
+                activeToolGrant.scope.allowed_domains ?? evalInput.grantScope?.allowed_domains,
+              allowed_methods:
+                activeToolGrant.scope.allowed_methods ?? evalInput.grantScope?.allowed_methods,
+              max_calls_per_run:
+                activeToolGrant.scope.max_calls_per_run ?? evalInput.grantScope?.max_calls_per_run,
+            }
+          : evalInput.grantScope;
+        const res = await baseEvaluator.evaluate({
+          ...evalInput,
+          environment: evalInput.environment ?? envKind,
+          dataClassifications:
+            evalInput.dataClassifications ?? toolContract?.data_classification_touched,
+          grantScope: mergedGrantScope,
+          customPolicies: [...(evalInput.customPolicies ?? []), ...workspacePolicies],
+        });
+        if (
+          res.effect !== 'allow' ||
+          (res.auditOnlyMatchedPolicyIds && res.auditOnlyMatchedPolicyIds.length > 0)
+        ) {
+          capturedPolicyDecisions.push({
+            toolName: evalInput.toolName,
+            decision: res.effect,
+            matchedPolicyIds: [...res.matchedPolicyIds],
+            auditOnlyMatchedPolicyIds: [...(res.auditOnlyMatchedPolicyIds ?? [])],
+          });
+        }
+        return res;
+      },
+    };
+    const reqToolGateway = new ToolGateway({
+      registry: reg,
+      clock,
+      policyEvaluator: reqPolicyEvaluator,
+    });
 
     let effectiveModelGateway = modelGateway;
     if (body.mock_turns && body.mock_turns.length > 0) {
@@ -1972,6 +2179,24 @@ export function buildApiServer(opts: ApiServerOptions): {
           }),
         );
       }
+    }
+
+    for (const pd of capturedPolicyDecisions) {
+      await store.appendAudit(orgId, {
+        actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+        action: 'policy.evaluate',
+        resource: {
+          type: 'tool',
+          id: pd.toolName ?? 'unknown',
+          run_id: runRecord.id,
+          agent_id: agent.id,
+        },
+        decision: pd.decision,
+        policy_ids: [...pd.matchedPolicyIds, ...pd.auditOnlyMatchedPolicyIds],
+        context: {
+          audit_only_matched: pd.auditOnlyMatchedPolicyIds,
+        },
+      });
     }
 
     await store.appendAudit(orgId, {
@@ -3498,6 +3723,757 @@ export function buildApiServer(opts: ApiServerOptions): {
       ...(res.brokenAtSeq !== undefined ? { broken_at_seq: res.brokenAtSeq } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
     };
+  });
+
+  // ---------- S1.2 Governance v1 (Custom Roles, Agent Identities, Scoped Tool Grants, Policies, Audit Export) ----------
+
+  app.post('/api/v1/roles', async (req, reply) => {
+    const routePath = '/api/v1/roles';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      permissions: Record<string, 'all' | 'own'>;
+    }>(contract.bodySchema, req.body);
+
+    const validPermSet = new Set<string>(PERMISSIONS);
+    for (const key of Object.keys(body.permissions)) {
+      if (!validPermSet.has(key)) {
+        throw new PlatformError('VAL_SCHEMA_MISMATCH', `Unknown permission key "${key}".`, {
+          permission: key,
+        });
+      }
+    }
+
+    const auth = req.platformState!.auth!;
+    const role = await store.createCustomRole(auth.context.org.id, {
+      name: body.name,
+      permissions: body.permissions as RolePermissionMap,
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'role.create',
+      resource: { type: 'role', id: role.id, name: role.name },
+      decision: 'allow',
+    });
+
+    const out = {
+      id: role.id,
+      name: role.name,
+      is_system: role.is_system,
+      permissions: role.permissions,
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 201, out);
+    return reply.status(201).send(out);
+  });
+
+  app.get('/api/v1/agent-identities', async (req) => {
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = [...agentIdentitiesById.values()].filter(
+      (ai) => ai.org_id === orgId && (!state.workspaceId || ai.workspace_id === state.workspaceId),
+    );
+    return { data };
+  });
+
+  app.post('/api/v1/agent-identities', async (req, reply) => {
+    const routePath = '/api/v1/agent-identities';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      agent_id: string;
+      environment_id?: string;
+      environment?: EnvironmentKind;
+      display_name: string;
+      allowed_tool_ids: string[];
+      token_ttl_seconds: number;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const agent = agentsById.get(body.agent_id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${body.agent_id} not found.`);
+    }
+
+    const workspaceId = body.workspace_id ?? agent.workspace_id;
+    const envs = await store.listEnvironments(orgId, workspaceId);
+    const env = body.environment_id
+      ? envs.find((e) => e.id === body.environment_id)
+      : envs.find((e) => e.kind === (body.environment ?? state.environment ?? 'dev')) ?? envs[0];
+    if (!env) {
+      throw new PlatformError('RES_NOT_FOUND', 'Target environment not found.');
+    }
+
+    const dup = [...agentIdentitiesById.values()].find(
+      (ai) => ai.org_id === orgId && ai.agent_id === agent.id && ai.environment_id === env.id,
+    );
+    if (dup) {
+      throw new PlatformError(
+        'RES_CONFLICT',
+        `Agent ${agent.id} already has an identity in environment ${env.kind}.`,
+      );
+    }
+
+    const principal = await store.createAgentPrincipal(orgId, body.display_name);
+    const now = clock.now().toISOString();
+    const record: StoredAgentIdentity = {
+      id: idGen.uuidv7(),
+      org_id: orgId,
+      workspace_id: workspaceId,
+      agent_id: agent.id,
+      principal_id: principal.id,
+      environment_id: env.id,
+      display_name: body.display_name,
+      allowed_tool_ids: [...body.allowed_tool_ids],
+      token_ttl_seconds: body.token_ttl_seconds,
+      status: 'active',
+      created_by: auth.subject.principalId,
+      created_at: now,
+      updated_at: now,
+    };
+    agentIdentitiesById.set(record.id, record);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'agent_identity.create',
+      resource: { type: 'agent_identity', id: record.id, agent_id: record.agent_id },
+      decision: 'allow',
+      context: { environment_id: env.id, principal_id: record.principal_id },
+    });
+
+    await persistIdempotencyIfNeeded(req, routePath, 201, record);
+    return reply.status(201).send(record);
+  });
+
+  app.post('/api/v1/agent-identities/:id/token', async (req) => {
+    const routePath = '/api/v1/agent-identities/{id}/token';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      on_behalf_of_principal_id?: string;
+      environment_id?: string;
+      ttl_seconds?: number;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+    const identity = agentIdentitiesById.get(id);
+    if (!identity || identity.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent identity ${id} not found.`);
+    }
+    if (identity.status !== 'active') {
+      throw new PlatformError('POL_DENIED', `Agent identity ${id} is disabled.`);
+    }
+    if (body.environment_id && body.environment_id !== identity.environment_id) {
+      throw new PlatformError(
+        'POL_DENIED',
+        `Agent identity ${id} is scoped to environment ${identity.environment_id}, not ${body.environment_id}.`,
+      );
+    }
+
+    const onBehalfOfPrincipalId = body.on_behalf_of_principal_id ?? auth.subject.principalId;
+    const ttlSeconds = Math.min(body.ttl_seconds ?? identity.token_ttl_seconds, 86_400);
+    const expiresAt = new Date(clock.now().getTime() + ttlSeconds * 1000).toISOString();
+
+    const token = {
+      token_id: `atok_${idGen.uuidv7()}`,
+      agent_identity_id: identity.id,
+      agent_principal_id: identity.principal_id,
+      agent_id: identity.agent_id,
+      org_id: identity.org_id,
+      workspace_id: identity.workspace_id,
+      environment_id: identity.environment_id,
+      on_behalf_of_principal_id: onBehalfOfPrincipalId,
+      allowed_tool_ids: [...identity.allowed_tool_ids],
+      expires_at: expiresAt,
+    };
+
+    await store.appendAudit(orgId, {
+      actor: { id: identity.principal_id, type: 'agent' },
+      on_behalf_of: { id: onBehalfOfPrincipalId, type: 'user' },
+      action: 'agent_identity.token_issue',
+      resource: { type: 'agent_identity', id: identity.id, agent_id: identity.agent_id },
+      decision: 'allow',
+      context: {
+        environment_id: identity.environment_id,
+        allowed_tool_ids: identity.allowed_tool_ids,
+      },
+    });
+
+    await persistIdempotencyIfNeeded(req, routePath, 200, token);
+    return token;
+  });
+
+  app.get('/api/v1/tool-grants', async (req) => {
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = [...toolGrantsById.values()].filter(
+      (g) => g.org_id === orgId && (!state.workspaceId || g.workspace_id === state.workspaceId),
+    );
+    return { data };
+  });
+
+  app.post('/api/v1/tool-grants', async (req, reply) => {
+    const routePath = '/api/v1/tool-grants';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      agent_id: string;
+      tool_id: string;
+      side_effect_class: SideEffectClass;
+      scope?: {
+        allowed_domains?: string[];
+        allowed_methods?: string[];
+        max_calls_per_run?: number;
+      };
+      approved_by?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const agent = agentsById.get(body.agent_id);
+    if (!agent || agent.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Agent ${body.agent_id} not found.`);
+    }
+
+    const workspaceId = body.workspace_id ?? agent.workspace_id;
+    let approvedBy: string | null = null;
+
+    if (body.side_effect_class !== 'read') {
+      assertSeparationOfDuties({
+        action: 'tool_grant_write',
+        actorId: auth.subject.principalId,
+        authorId: body.approved_by ?? auth.subject.principalId,
+      });
+
+      const approverId = body.approved_by!;
+      let approverCtx: AuthPrincipalContext;
+      try {
+        approverCtx = await store.getPrincipalContext(orgId, approverId);
+      } catch {
+        throw new PlatformError('RES_NOT_FOUND', `Approver principal ${approverId} not found.`);
+      }
+      const approverSubject: AuthzSubject = {
+        principalId: approverCtx.principal.id,
+        orgId: approverCtx.org.id,
+        bindings: approverCtx.bindings,
+        customRoles: approverCtx.customRoles,
+      };
+      const callerWriteGrant = authorize(auth.subject, 'tool:grant_write', { orgId, workspaceId });
+      const approverWriteGrant = authorize(approverSubject, 'tool:grant_write', {
+        orgId,
+        workspaceId,
+      });
+      if (!callerWriteGrant.allowed && !approverWriteGrant.allowed) {
+        throw new PlatformError(
+          'AUTH_FORBIDDEN',
+          'Neither initiator nor approver holds tool:grant_write permission for non-read tool grant.',
+        );
+      }
+      approvedBy = approverId;
+    }
+
+    const record: StoredToolGrant = {
+      id: idGen.uuidv7(),
+      org_id: orgId,
+      workspace_id: workspaceId,
+      agent_id: agent.id,
+      tool_id: body.tool_id,
+      side_effect_class: body.side_effect_class,
+      scope: {
+        ...(body.scope?.allowed_domains ? { allowed_domains: [...body.scope.allowed_domains] } : {}),
+        ...(body.scope?.allowed_methods ? { allowed_methods: [...body.scope.allowed_methods] } : {}),
+        ...(body.scope?.max_calls_per_run !== undefined
+          ? { max_calls_per_run: body.scope.max_calls_per_run }
+          : {}),
+      },
+      granted_by: auth.subject.principalId,
+      approved_by: approvedBy,
+      status: 'active',
+      created_at: clock.now().toISOString(),
+    };
+    toolGrantsById.set(record.id, record);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'tool_grant.create',
+      resource: {
+        type: 'tool_grant',
+        id: record.id,
+        agent_id: record.agent_id,
+        tool_id: record.tool_id,
+      },
+      decision: 'allow',
+      context: { side_effect_class: record.side_effect_class, approved_by: record.approved_by },
+    });
+
+    await persistIdempotencyIfNeeded(req, routePath, 201, record);
+    return reply.status(201).send(record);
+  });
+
+  app.delete('/api/v1/tool-grants/:id', async (req, reply) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+    const grant = toolGrantsById.get(id);
+    if (!grant || grant.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Tool grant ${id} not found.`);
+    }
+
+    requirePermission(
+      auth.subject,
+      'tool:grant',
+      { orgId, workspaceId: grant.workspace_id },
+      { ownerId: grant.granted_by },
+    );
+
+    grant.status = 'revoked';
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'tool_grant.revoke',
+      resource: { type: 'tool_grant', id: grant.id },
+      decision: 'allow',
+    });
+    return reply.status(204).send();
+  });
+
+  app.get('/api/v1/policies', async (req) => {
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = getWorkspacePolicies(orgId, state.workspaceId).map(formatPolicyWire);
+    return { data };
+  });
+
+  app.post('/api/v1/policies', async (req, reply) => {
+    const routePath = '/api/v1/policies';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string | null;
+      slug: string;
+      name: string;
+      description?: string;
+      point: PolicyPoint;
+      effect: PolicyEffect;
+      mode: PolicyRolloutMode;
+      condition?: {
+        points?: PolicyPoint[];
+        side_effect_classes?: SideEffectClass[];
+        environments?: EnvironmentKind[];
+        tool_names?: string[];
+        max_autonomy_level?: number;
+        untrusted_content_in_context?: boolean;
+        data_classifications?: string[];
+        max_spend_micro_usd?: number;
+        risk_tiers?: RiskTier[];
+      };
+      rego_source?: string;
+      approved_by?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id === undefined ? (state.workspaceId ?? null) : body.workspace_id;
+
+    const dup = [...policiesById.values()].find(
+      (p) => p.orgId === orgId && (p.workspaceId ?? null) === workspaceId && p.slug === body.slug,
+    );
+    if (dup) {
+      throw new PlatformError('RES_CONFLICT', `Policy slug "${body.slug}" already exists.`);
+    }
+
+    if (body.mode === 'enforce') {
+      assertSeparationOfDuties({
+        action: 'policy_enforce',
+        actorId: auth.subject.principalId,
+        authorId: auth.subject.principalId,
+        secondApproverId: body.approved_by,
+      });
+    }
+
+    const condition = fromWirePolicyCondition(body.condition);
+    const regoSource =
+      body.rego_source ??
+      compileDeclarativePolicyToRego({
+        slug: body.slug,
+        point: body.point,
+        effect: body.effect,
+        condition,
+      });
+
+    const now = clock.now().toISOString();
+    const record: StoredDeclarativePolicy = {
+      id: idGen.uuidv7(),
+      orgId,
+      workspaceId,
+      slug: body.slug,
+      name: body.name,
+      description: body.description ?? null,
+      point: body.point,
+      mode: body.mode,
+      version: 1,
+      effect: body.effect,
+      condition,
+      regoSource,
+      createdBy: auth.subject.principalId,
+      approvedBy: body.mode === 'enforce' ? (body.approved_by ?? null) : null,
+      created_at: now,
+      updated_at: now,
+    };
+    policiesById.set(record.id, record);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'policy.create',
+      resource: { type: 'policy', id: record.id, slug: record.slug },
+      decision: 'allow',
+      context: { mode: record.mode, effect: record.effect, point: record.point },
+    });
+
+    const formatted = formatPolicyWire(record);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.post('/api/v1/policies/:id/enforce', async (req) => {
+    const routePath = '/api/v1/policies/{id}/enforce';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ second_approver_id?: string }>(
+      contract.bodySchema,
+      req.body,
+    );
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+    const policy = policiesById.get(id);
+    if (!policy || policy.orgId !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Policy ${id} not found.`);
+    }
+
+    const candidateApproverId =
+      body.second_approver_id ??
+      (auth.subject.principalId !== policy.createdBy ? auth.subject.principalId : undefined);
+
+    assertSeparationOfDuties({
+      action: 'policy_enforce',
+      actorId: auth.subject.principalId,
+      authorId: policy.createdBy,
+      secondApproverId: candidateApproverId,
+    });
+
+    let approverCtx: AuthPrincipalContext;
+    try {
+      approverCtx = await store.getPrincipalContext(orgId, candidateApproverId!);
+    } catch {
+      throw new PlatformError(
+        'RES_NOT_FOUND',
+        `Second approver principal ${candidateApproverId} not found.`,
+      );
+    }
+
+    const approverSubject: AuthzSubject = {
+      principalId: approverCtx.principal.id,
+      orgId: approverCtx.org.id,
+      bindings: approverCtx.bindings,
+      customRoles: approverCtx.customRoles,
+    };
+    const editDecision = authorize(approverSubject, 'policy:edit', {
+      orgId,
+      workspaceId: policy.workspaceId ?? undefined,
+    });
+    if (!editDecision.allowed) {
+      throw new PlatformError(
+        'POL_DENIED',
+        'Second policy approver must hold policy:edit permission (Appendix O.1).',
+      );
+    }
+
+    const now = clock.now().toISOString();
+    const updated: StoredDeclarativePolicy = {
+      ...policy,
+      mode: 'enforce',
+      approvedBy: candidateApproverId!,
+      version: policy.version + 1,
+      updated_at: now,
+    };
+    policiesById.set(id, updated);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'policy.enforce',
+      resource: { type: 'policy', id: updated.id, slug: updated.slug },
+      decision: 'allow',
+      context: { second_approver_id: candidateApproverId, version: updated.version },
+    });
+
+    const formatted = formatPolicyWire(updated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/policies/simulate', async (req) => {
+    const routePath = '/api/v1/policies/simulate';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      policy_id?: string;
+      slug?: string;
+      point?: PolicyPoint;
+      effect?: PolicyEffect;
+      condition?: {
+        points?: PolicyPoint[];
+        side_effect_classes?: SideEffectClass[];
+        environments?: EnvironmentKind[];
+        tool_names?: string[];
+        max_autonomy_level?: number;
+        untrusted_content_in_context?: boolean;
+        data_classifications?: string[];
+        max_spend_micro_usd?: number;
+        risk_tiers?: RiskTier[];
+      };
+      runs?: Array<{
+        run_id: string;
+        point?: PolicyPoint;
+        environment?: EnvironmentKind;
+        autonomy_level: number;
+        side_effect_class?: SideEffectClass;
+        tool_name?: string;
+        untrusted_content_in_context?: boolean;
+        data_classifications?: string[];
+        cumulative_spend_micro_usd?: number;
+        risk_tier?: RiskTier;
+      }>;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+
+    let simPolicy: Pick<DeclarativePolicy, 'id' | 'slug' | 'point' | 'effect' | 'condition'>;
+    if (body.policy_id) {
+      const existing = policiesById.get(body.policy_id);
+      if (!existing || existing.orgId !== orgId) {
+        throw new PlatformError('RES_NOT_FOUND', `Policy ${body.policy_id} not found.`);
+      }
+      simPolicy = existing;
+    } else {
+      simPolicy = {
+        id: 'sim_inline',
+        slug: body.slug ?? 'inline-simulation',
+        point: body.point ?? 'tool_call',
+        effect: body.effect ?? 'deny',
+        condition: fromWirePolicyCondition(body.condition),
+      };
+    }
+
+    let snapshots: HistoricalRunSnapshotForPolicySim[];
+    if (body.runs && body.runs.length > 0) {
+      snapshots = body.runs.map((r) => ({
+        runId: r.run_id,
+        point: r.point,
+        environment: r.environment,
+        autonomyLevel: r.autonomy_level as AutonomyLevel,
+        sideEffectClass: r.side_effect_class,
+        toolName: r.tool_name,
+        untrustedContentInContext: r.untrusted_content_in_context,
+        dataClassifications: r.data_classifications,
+        cumulativeSpendMicroUsd: r.cumulative_spend_micro_usd,
+        riskTier: r.risk_tier,
+      }));
+    } else {
+      const histRuns = await executionEngine.listRuns(orgId, { workspaceId: state.workspaceId });
+      const envKindById = new Map<string, EnvironmentKind>();
+      for (const ws of state.auth!.context.workspaces) {
+        const envs = await store.listEnvironments(orgId, ws.id);
+        for (const e of envs) envKindById.set(e.id, e.kind);
+      }
+      snapshots = [];
+      for (const hr of histRuns) {
+        const steps = await executionEngine.listSteps(orgId, hr.id);
+        const toolStep = steps.find((s) => s.type === 'tool_call');
+        const rawToolName =
+          toolStep?.summary['toolName'] ?? toolStep?.summary['tool'] ?? toolStep?.summary['name'];
+        const toolName = typeof rawToolName === 'string' ? rawToolName : undefined;
+        const toolContract = toolName
+          ? getRegistryForWorkspace(orgId, hr.workspace_id).get(toolName)
+          : undefined;
+        snapshots.push({
+          runId: hr.id,
+          point: 'tool_call',
+          environment: envKindById.get(hr.environment_id) ?? 'dev',
+          autonomyLevel: 2,
+          sideEffectClass: toolContract?.side_effect_class ?? (toolStep ? 'write' : 'read'),
+          toolName,
+          cumulativeSpendMicroUsd: hr.cost_micro_usd,
+        });
+      }
+    }
+
+    const report = simulatePolicyAgainstRuns(simPolicy, snapshots);
+    const out = {
+      policy_id: report.policyId,
+      policy_slug: report.policySlug,
+      total_runs_evaluated: report.totalRunsEvaluated,
+      matched_count: report.matchedCount,
+      blocked_count: report.blockedCount,
+      approval_required_count: report.approvalRequiredCount,
+      sample_affected_run_ids: [...report.sampleAffectedRunIds],
+      duration_ms: report.durationMs,
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 200, out);
+    return out;
+  });
+
+  app.get('/api/v1/audit/export', async (req) => {
+    const contract = findContract('GET', '/api/v1/audit/export')!;
+    const query = validateWithSchema<{
+      format: 'csv' | 'json';
+      action?: string;
+      actor_id?: string;
+      resource_type?: string;
+      decision?: string;
+      from_ts?: string;
+      to_ts?: string;
+    }>(contract.querySchema, req.query);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const allEvents = [];
+    let allCursor: string | undefined;
+    do {
+      const page = await store.listAuditEvents(orgId, { limit: 200, cursor: allCursor });
+      allEvents.push(...page.data);
+      allCursor = page.next_cursor ?? undefined;
+    } while (allCursor);
+    const chainCheck = verifyAuditEventsChain(allEvents);
+
+    const filtered = [];
+    let filterCursor: string | undefined;
+    do {
+      const page = await store.listAuditEvents(orgId, {
+        limit: 200,
+        cursor: filterCursor,
+        action: query.action,
+        actor_id: query.actor_id,
+        resource_type: query.resource_type,
+        decision: query.decision,
+        from_ts: query.from_ts,
+        to_ts: query.to_ts,
+      });
+      filtered.push(...page.data);
+      filterCursor = page.next_cursor ?? undefined;
+    } while (filterCursor);
+
+    const data =
+      query.format === 'json' ? JSON.stringify(filtered, null, 2) : formatAuditEventsCsv(filtered);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'audit.export',
+      resource: { type: 'audit_log', id: orgId },
+      decision: 'allow',
+      context: { format: query.format, row_count: filtered.length },
+    });
+
+    return {
+      format: query.format,
+      content_type: query.format === 'json' ? 'application/json' : 'text/csv; charset=utf-8',
+      data,
+      row_count: filtered.length,
+      chain_valid: chainCheck.valid,
+    };
+  });
+
+  app.post('/api/v1/audit/evidence-pack', async (req, reply) => {
+    const routePath = '/api/v1/audit/evidence-pack';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      period_start?: string;
+      period_end?: string;
+      sample_limit: number;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? null;
+
+    const allEvents = [];
+    let cursor: string | undefined;
+    do {
+      const page = await store.listAuditEvents(orgId, { limit: 200, cursor });
+      allEvents.push(...page.data);
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+    const chainRes = verifyAuditEventsChain(allEvents);
+
+    const samplePage = await store.listAuditEvents(orgId, {
+      limit: body.sample_limit,
+      from_ts: body.period_start,
+      to_ts: body.period_end,
+    });
+
+    const scopedAgents = [...agentsById.values()]
+      .filter((a) => a.org_id === orgId && (!workspaceId || a.workspace_id === workspaceId))
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        status: a.status,
+        versions_count: a.versions.length,
+      }));
+    const scopedPolicies = getWorkspacePolicies(orgId, workspaceId ?? undefined).map(
+      formatPolicyWire,
+    );
+    const scopedGrants = [...toolGrantsById.values()].filter(
+      (g) => g.org_id === orgId && (!workspaceId || g.workspace_id === workspaceId),
+    );
+    const scopedIdentities = [...agentIdentitiesById.values()].filter(
+      (ai) => ai.org_id === orgId && (!workspaceId || ai.workspace_id === workspaceId),
+    );
+
+    const generatedAt = clock.now().toISOString();
+    const packPayload = {
+      pack_id: `evp_${idGen.uuidv7()}`,
+      org_id: orgId,
+      workspace_id: workspaceId,
+      generated_at: generatedAt,
+      generated_by: auth.subject.principalId,
+      chain_verification: {
+        valid: chainRes.valid,
+        checked_count: chainRes.checkedCount,
+        ...(chainRes.brokenAtSeq !== undefined ? { broken_at_seq: chainRes.brokenAtSeq } : {}),
+        ...(chainRes.reason ? { reason: chainRes.reason } : {}),
+      },
+      agents: scopedAgents,
+      policies: scopedPolicies,
+      tool_grants: scopedGrants,
+      agent_identities: scopedIdentities,
+      audit_sample: samplePage.data,
+    };
+
+    const digestSha256 = createHash('sha256')
+      .update(canonicalJson(packPayload), 'utf8')
+      .digest('hex');
+
+    const pack = {
+      ...packPayload,
+      digest_sha256: digestSha256,
+    };
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'audit.evidence_pack',
+      resource: { type: 'evidence_pack', id: pack.pack_id },
+      decision: 'allow',
+      context: { digest_sha256: digestSha256 },
+    });
+
+    await persistIdempotencyIfNeeded(req, routePath, 201, pack);
+    return reply.status(201).send(pack);
   });
 
   return {

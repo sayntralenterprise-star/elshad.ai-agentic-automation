@@ -1516,4 +1516,340 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('supports Governance v1: custom RBAC, agent identities with on_behalf_of, SoD tool grants & policy enforce, simulation, audit CSV export & evidence pack [E1.2]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 'gov-owner@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    const orgId = [...store.orgs.keys()][0]!;
+    const builderPrincipal = store.seedUserPrincipal(orgId, {
+      email: 'gov-builder@elshad.local',
+      password: 'Password123!',
+      displayName: 'Builder User',
+      role: 'builder',
+    });
+    const adminApprover = store.seedUserPrincipal(orgId, {
+      email: 'gov-admin2@elshad.local',
+      password: 'Password123!',
+      displayName: 'Second Admin',
+      role: 'workspace_admin',
+    });
+    const reviewerPrincipal = store.seedUserPrincipal(orgId, {
+      email: 'gov-reviewer@elshad.local',
+      password: 'Password123!',
+      displayName: 'Reviewer User',
+      role: 'reviewer',
+    });
+    const customAssignee = store.seedUserPrincipal(orgId, {
+      email: 'gov-custom@elshad.local',
+      password: 'Password123!',
+      displayName: 'Custom Role User',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginOwner = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'gov-owner@elshad.local', password: 'Password123!' },
+    });
+    const cookieOwner = parseCookie(loginOwner.headers['set-cookie']);
+    const csrfOwner = loginOwner.json().csrf_token as string;
+    const ownerPrincipalId = loginOwner.json().me.principal.id as string;
+
+    const loginBuilder = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'gov-builder@elshad.local', password: 'Password123!' },
+    });
+    const cookieBuilder = parseCookie(loginBuilder.headers['set-cookie']);
+    const csrfBuilder = loginBuilder.json().csrf_token as string;
+
+    const loginAdmin2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'gov-admin2@elshad.local', password: 'Password123!' },
+    });
+    const cookieAdmin2 = parseCookie(loginAdmin2.headers['set-cookie']);
+    const csrfAdmin2 = loginAdmin2.json().csrf_token as string;
+
+    // 1. Custom Role Creation & Authorization
+    const roleCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-role-1' },
+      payload: {
+        name: 'compliance_exporter',
+        permissions: { 'audit:read': 'all', 'audit:export': 'all' },
+      },
+    });
+    expect(roleCreate.statusCode).toBe(201);
+    expect(roleCreate.json().is_system).toBe(false);
+
+    const bindCustom = await app.inject({
+      method: 'POST',
+      url: '/api/v1/role-bindings',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-bind-1' },
+      payload: {
+        principal_id: customAssignee.id,
+        role_name: 'compliance_exporter',
+        scope_type: 'org',
+        scope_id: orgId,
+      },
+    });
+    expect(bindCustom.statusCode).toBe(201);
+
+    const loginCustom = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'gov-custom@elshad.local', password: 'Password123!' },
+    });
+    const cookieCustom = parseCookie(loginCustom.headers['set-cookie']);
+
+    const customExportAllowed = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/export?format=csv',
+      headers: { cookie: cookieCustom },
+    });
+    expect(customExportAllowed.statusCode).toBe(200);
+
+    const customEnforceDenied = await app.inject({
+      method: 'POST',
+      url: '/api/v1/policies',
+      headers: { cookie: cookieCustom, 'x-csrf-token': loginCustom.json().csrf_token, 'Idempotency-Key': 's12-c-deny' },
+      payload: { slug: 'should-fail', name: 'Denied', point: 'tool_call', effect: 'deny' },
+    });
+    expect(customEnforceDenied.statusCode).toBe(403);
+
+    // 2. Agent Creation, Agent Identity Provisioning & Token Issuance with on_behalf_of
+    const agentRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-agt-1' },
+      payload: {
+        definition: {
+          name: 'gov-guarded-agent',
+          version: '1.0.0',
+          autonomy_level: 2,
+          model: { tier: 'standard', provider: 'mock', model: 'mock/react-default' },
+          prompt: { system: 'Invoke tools cleanly.' },
+          tools: [{ tool: 'current_time', approval: 'auto', scope: {} }],
+        },
+      },
+    });
+    expect(agentRes.statusCode).toBe(201);
+    const agentId = agentRes.json().id as string;
+
+    const identityRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-identities',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-aid-1' },
+      payload: {
+        agent_id: agentId,
+        environment: 'dev',
+        display_name: 'Guarded Agent Dev Identity',
+        allowed_tool_ids: ['current_time'],
+        token_ttl_seconds: 600,
+      },
+    });
+    expect(identityRes.statusCode).toBe(201);
+    const identityBody = identityRes.json();
+
+    const tokenRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agent-identities/${identityBody.id}/token`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-tok-1' },
+      payload: { on_behalf_of_principal_id: ownerPrincipalId },
+    });
+    expect(tokenRes.statusCode).toBe(200);
+    expect(tokenRes.json().on_behalf_of_principal_id).toBe(ownerPrincipalId);
+
+    const wrongEnvToken = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agent-identities/${identityBody.id}/token`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-tok-bad' },
+      payload: { environment_id: '00000000-0000-0000-0000-000000000999' },
+    });
+    expect(wrongEnvToken.statusCode).toBe(403);
+
+    // 3. Scoped Tool Grant + SoD for write tools (FR-TL-3, Appendix O.1)
+    const selfWriteGrant = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tool-grants',
+      headers: { cookie: cookieBuilder, 'x-csrf-token': csrfBuilder, 'Idempotency-Key': 's12-tg-self' },
+      payload: {
+        agent_id: agentId,
+        tool_id: 'http_request',
+        side_effect_class: 'write',
+        approved_by: builderPrincipal.id,
+      },
+    });
+    expect(selfWriteGrant.statusCode).toBe(403);
+    expect(selfWriteGrant.json().error.code).toBe('POL_DENIED');
+
+    const approvedWriteGrant = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tool-grants',
+      headers: { cookie: cookieBuilder, 'x-csrf-token': csrfBuilder, 'Idempotency-Key': 's12-tg-ok' },
+      payload: {
+        agent_id: agentId,
+        tool_id: 'http_request',
+        side_effect_class: 'write',
+        scope: { allowed_domains: ['api.trusted.internal'], max_calls_per_run: 2 },
+        approved_by: reviewerPrincipal.id,
+      },
+    });
+    expect(approvedWriteGrant.statusCode).toBe(201);
+    expect(approvedWriteGrant.json().approved_by).toBe(reviewerPrincipal.id);
+
+    // 4. Declarative Policy: audit_only -> simulation -> SoD block -> 2-person enforce blocks runtime tool
+    const baselineRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-run-base' },
+      payload: {
+        input: 'Get UTC time first.',
+        mock_turns: [
+          { kind: 'tool_calls', calls: [{ id: 'tc_a', name: 'current_time', arguments: {} }], tokensIn: 40, tokensOut: 10 },
+          { kind: 'answer', content: 'UTC obtained.', tokensIn: 30, tokensOut: 10 },
+        ],
+      },
+    });
+    expect(baselineRun.statusCode).toBe(201);
+    expect(baselineRun.json().status).toBe('succeeded');
+
+    const createPol = await app.inject({
+      method: 'POST',
+      url: '/api/v1/policies',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-pol-1' },
+      payload: {
+        slug: 'deny-current-time-dev',
+        name: 'Deny current_time in dev',
+        point: 'tool_call',
+        effect: 'deny',
+        mode: 'audit_only',
+        condition: {
+          environments: ['dev'],
+          tool_names: ['current_time'],
+        },
+      },
+    });
+    expect(createPol.statusCode).toBe(201);
+    const polId = createPol.json().id as string;
+    expect(createPol.json().rego_source).toContain('package elshad.governance.deny_current_time_dev');
+
+    // Audit_only allows run while logging policy decision
+    const shadowRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-run-shadow' },
+      payload: {
+        input: 'Get UTC time in shadow mode.',
+        mock_turns: [
+          { kind: 'tool_calls', calls: [{ id: 'tc_b', name: 'current_time', arguments: {} }], tokensIn: 40, tokensOut: 10 },
+          { kind: 'answer', content: 'Shadow allowed.', tokensIn: 30, tokensOut: 10 },
+        ],
+      },
+    });
+    expect(shadowRun.statusCode).toBe(201);
+    expect(shadowRun.json().status).toBe('succeeded');
+
+    // Policy simulation against recorded historical runs
+    const simRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/policies/simulate',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-pol-sim' },
+      payload: { policy_id: polId },
+    });
+    expect(simRes.statusCode).toBe(200);
+    expect(simRes.json().total_runs_evaluated).toBeGreaterThanOrEqual(2);
+    expect(simRes.json().blocked_count).toBeGreaterThanOrEqual(2);
+
+    // SoD: author cannot promote their own policy to enforce
+    const selfEnforce = await app.inject({
+      method: 'POST',
+      url: `/api/v1/policies/${polId}/enforce`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-pol-enf-bad' },
+      payload: {},
+    });
+    expect(selfEnforce.statusCode).toBe(403);
+    expect(selfEnforce.json().error.code).toBe('POL_DENIED');
+
+    // Distinct second policy:edit approver enforces policy
+    const secondEnforce = await app.inject({
+      method: 'POST',
+      url: `/api/v1/policies/${polId}/enforce`,
+      headers: { cookie: cookieAdmin2, 'x-csrf-token': csrfAdmin2, 'Idempotency-Key': 's12-pol-enf-ok' },
+      payload: {},
+    });
+    expect(secondEnforce.statusCode).toBe(200);
+    expect(secondEnforce.json().mode).toBe('enforce');
+    expect(secondEnforce.json().approved_by).toBe(adminApprover.id);
+
+    // Subsequent agent run calling current_time is blocked by enforced policy
+    const enforcedRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-run-enf' },
+      payload: {
+        input: 'Get UTC time after enforce.',
+        mock_turns: [
+          { kind: 'tool_calls', calls: [{ id: 'tc_c', name: 'current_time', arguments: {} }], tokensIn: 40, tokensOut: 10 },
+        ],
+      },
+    });
+    expect(enforcedRun.statusCode).toBe(201);
+    expect(enforcedRun.json().status).toBe('policy_blocked');
+
+    // 5. Filtered Audit Events (with on_behalf_of), CSV Export, Evidence Pack & Tamper Detection
+    const filteredAudit = await app.inject({
+      method: 'GET',
+      url: `/api/v1/audit-events?actor_id=${identityBody.principal_id}&action=agent_identity.token_issue`,
+      headers: { cookie: cookieOwner },
+    });
+    expect(filteredAudit.statusCode).toBe(200);
+    expect(filteredAudit.json().data).toHaveLength(1);
+    expect(filteredAudit.json().data[0].on_behalf_of.id).toBe(ownerPrincipalId);
+
+    const exportCsv = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/export?format=csv',
+      headers: { cookie: cookieOwner },
+    });
+    expect(exportCsv.statusCode).toBe(200);
+    expect(exportCsv.json().chain_valid).toBe(true);
+    expect(exportCsv.json().data).toContain('agent_identity.token_issue');
+
+    const packRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/audit/evidence-pack',
+      headers: { cookie: cookieOwner, 'x-csrf-token': csrfOwner, 'Idempotency-Key': 's12-evp-1' },
+      payload: { sample_limit: 10 },
+    });
+    expect(packRes.statusCode).toBe(201);
+    const pack = packRes.json();
+    expect(pack.digest_sha256).toHaveLength(64);
+    expect(pack.chain_verification.valid).toBe(true);
+    expect(pack.policies.length).toBeGreaterThanOrEqual(1);
+    expect(pack.tool_grants.length).toBeGreaterThanOrEqual(1);
+    expect(pack.agent_identities.length).toBeGreaterThanOrEqual(1);
+
+    // Tamper simulation on in-memory audit list is caught by /api/v1/audit/verify
+    const auditArr = store.auditEvents.get(orgId)!;
+    auditArr[1]!.action = 'tampered.action';
+    const tamperedVerify = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify',
+      headers: { cookie: cookieOwner },
+    });
+    expect(tamperedVerify.statusCode).toBe(200);
+    expect(tamperedVerify.json().valid).toBe(false);
+    expect(tamperedVerify.json().broken_at_seq).toBe(2);
+
+    await app.close();
+  });
 });
