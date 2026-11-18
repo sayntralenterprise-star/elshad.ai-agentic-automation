@@ -215,3 +215,158 @@ export const AuditEventPageSchema = z
 
 export const IdParamSchema = z.object({ id: z.string().min(1) });
 export const EmptyOkSchema = z.object({ ok: z.literal(true) }).openapi('EmptyOk');
+
+// --- S0.2 Durable Run Core ---
+export const RunStatusSchema = z.enum([
+  'queued',
+  'running',
+  'waiting_approval',
+  'waiting_input',
+  'waiting_timer',
+  'waiting_child',
+  'succeeded',
+  'failed',
+  'timed_out',
+  'budget_exceeded',
+  'policy_blocked',
+  'cancelled',
+]);
+
+export const RunLimitsSchema = z
+  .object({
+    max_steps: z.number().int().min(1).max(200),
+    max_tokens: z.number().int().min(1).max(2_000_000),
+    max_wall_time_ms: z.number().int().min(1000).max(86_400_000),
+    max_cost_micro_usd: z.number().int().min(0).max(100_000_000),
+  })
+  .openapi('RunLimits');
+
+export const RunUsageSchema = z
+  .object({
+    steps: z.number().int(),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    tool_calls: z.number().int(),
+  })
+  .openapi('RunUsage');
+
+export const SimulatedStepSchema = z.object({
+  type: z
+    .enum(['llm_call', 'tool_call', 'decision', 'handoff', 'approval', 'memory_op', 'node'])
+    .optional(),
+  summary: z.record(z.string(), z.unknown()).optional(),
+  input: z.unknown().optional(),
+  output: z.unknown().optional(),
+  tokens_in: z.number().int().min(0).optional(),
+  tokens_out: z.number().int().min(0).optional(),
+  cost_micro_usd: z.number().int().min(0).optional(),
+  latency_ms: z.number().int().min(0).optional(),
+  fail_code: z.enum(['TOOL_TIMEOUT', 'TOOL_UPSTREAM_REJECTED']).optional(),
+});
+
+export const CreateRunSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    subject_type: z.enum(['agent_version', 'workflow_version']).default('agent_version'),
+    subject_version_id: z.string().min(1),
+    input: z.unknown().optional(),
+    labels: z.record(z.string(), z.string()).optional(),
+    limits: RunLimitsSchema.partial().optional(),
+    queue: z.string().min(1).default('default'),
+    priority: z.number().int().min(1).max(10).default(5),
+    serialize_key: z.string().min(1).optional(),
+    simulated_steps: z.array(SimulatedStepSchema).optional(),
+    execute_inline: z.boolean().optional(),
+  })
+  .openapi('CreateRunRequest');
+
+export const RunSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    environment_id: z.string(),
+    root_run_id: z.string(),
+    parent_run_id: z.string().nullable(),
+    subject_type: z.string(),
+    subject_version_id: z.string(),
+    status: RunStatusSchema,
+    failure_class: z.string().nullable(),
+    termination_reason: z.string().nullable(),
+    initiator_id: z.string(),
+    input: z.unknown(),
+    output: z.unknown(),
+    limits: RunLimitsSchema,
+    usage: RunUsageSchema,
+    cost_micro_usd: z.number().int(),
+    labels: z.record(z.string(), z.string()),
+    last_event_seq: z.number().int(),
+    created_at: z.string(),
+    started_at: z.string().nullable(),
+    ended_at: z.string().nullable(),
+  })
+  .openapi('Run');
+
+export const RunStepSchema = z
+  .object({
+    id: z.string(),
+    run_id: z.string(),
+    seq: z.number().int(),
+    type: z.string(),
+    status: z.string(),
+    attempt: z.number().int(),
+    idempotency_key: z.string(),
+    summary: z.record(z.string(), z.unknown()),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    cost_micro_usd: z.number().int(),
+    latency_ms: z.number().int(),
+    started_at: z.string(),
+    ended_at: z.string(),
+  })
+  .openapi('RunStep');
+
+export const RunEventSchema = z
+  .object({
+    run_id: z.string(),
+    seq: z.number().int(),
+    type: z.string(),
+    data: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })
+  .openapi('RunEvent');
+
+export const CancelRunSchema = z
+  .object({
+    reason: z.string().min(1).max(300).default('Cancelled via API'),
+  })
+  .openapi('CancelRunRequest');
+
+export const SignalRunSchema = z
+  .object({
+    kind: z.enum(['approval', 'input', 'timer', 'child']).default('input'),
+    reason: z.string().min(1).max(300),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('SignalRunRequest');
+
+export const DlqItemSchema = z
+  .object({
+    id: z.string(),
+    run_id: z.string(),
+    workspace_id: z.string(),
+    queue: z.string(),
+    attempts: z.number().int(),
+    max_attempts: z.number().int(),
+    last_error: z.record(z.string(), z.unknown()).nullable(),
+    created_at: z.string(),
+  })
+  .openapi('DlqItem');
+
+export const BulkRedriveSchema = z
+  .object({
+    run_ids: z.array(z.string().min(1)).min(1).max(100),
+    input_patch: z.unknown().optional(),
+  })
+  .openapi('BulkRedriveRequest');

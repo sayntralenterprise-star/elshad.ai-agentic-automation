@@ -26,10 +26,15 @@ import {
   type ApiKeyDto,
   type AuditEventDto,
   type CreatedApiKeyDto,
+  type DlqItemDto,
   type MeDto,
   type ProjectDto,
+  type RunDto,
+  type RunEventDto,
+  type RunStepDto,
 } from '@elshad/sdk-ts';
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { RunsView } from './RunsView.js';
 import { t } from './i18n.js';
 
 export type NavSection =
@@ -60,7 +65,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   { id: 'workflows', label: 'Workflows', icon: GitBranch, sliceHint: 'S0.4' },
   { id: 'tools', label: 'Tools & Connections', icon: Wrench, sliceHint: 'S0.3 / S1.5' },
   { id: 'knowledge', label: 'Knowledge & Memory', icon: Database, sliceHint: 'S0.5' },
-  { id: 'runs', label: 'Runs', icon: Activity, sliceHint: 'S0.2' },
+  { id: 'runs', label: 'Runs' , icon: Activity },
   { id: 'approvals', label: 'Approvals', icon: CheckSquare, sliceHint: 'S1.1' },
   { id: 'evaluations', label: 'Evaluations', icon: FileCheck2, sliceHint: 'S1.3' },
   { id: 'monitoring', label: 'Monitoring', icon: Activity, sliceHint: 'S1.8' },
@@ -140,6 +145,15 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
   const [auditEvents, setAuditEvents] = useState<AuditEventDto[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<PlatformError | null>(null);
+
+  const [runs, setRuns] = useState<RunDto[]>([]);
+  const [dlqItems, setDlqItems] = useState<DlqItemDto[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<PlatformError | null>(null);
+  const [selectedRun, setSelectedRun] = useState<RunDto | null>(null);
+  const [selectedSteps, setSelectedSteps] = useState<RunStepDto[]>([]);
+  const [selectedEvents, setSelectedEvents] = useState<RunEventDto[]>([]);
+  const [selectedStep, setSelectedStep] = useState<RunStepDto | null>(null);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -232,6 +246,46 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
     }
   }, [client]);
 
+  const loadRuns = useCallback(async () => {
+    setRunsLoading(true);
+    setRunsError(null);
+    try {
+      const [runRows, dlqRows] = await Promise.all([
+        client.runs.list({ workspaceId: activeWorkspace?.id }),
+        client.runs.listDlq(),
+      ]);
+      setRuns(runRows);
+      setDlqItems(dlqRows);
+    } catch (err) {
+      setRunsError(
+        err instanceof PlatformError ? err : new PlatformError('SYS_INTERNAL', 'Failed to load runs'),
+      );
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [client, activeWorkspace?.id]);
+
+  const selectRun = useCallback(
+    async (runId: string) => {
+      try {
+        const [run, steps, evts] = await Promise.all([
+          client.runs.get(runId),
+          client.runs.listSteps(runId),
+          client.runs.listEvents(runId),
+        ]);
+        setSelectedRun(run);
+        setSelectedSteps(steps);
+        setSelectedEvents(evts);
+        setSelectedStep(null);
+      } catch (err) {
+        setRunsError(
+          err instanceof PlatformError ? err : new PlatformError('SYS_INTERNAL', 'Failed to load trace'),
+        );
+      }
+    },
+    [client],
+  );
+
   useEffect(() => {
     if (!me) return;
     void loadWorkspaceData();
@@ -239,8 +293,10 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
       void loadApiKeys();
     } else if (section === 'governance') {
       void loadAuditEvents();
+    } else if (section === 'runs') {
+      void loadRuns();
     }
-  }, [me, section, loadWorkspaceData, loadApiKeys, loadAuditEvents]);
+  }, [me, section, loadWorkspaceData, loadApiKeys, loadAuditEvents, loadRuns]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -761,7 +817,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <div style={{ display: 'grid', gap: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h1 style={{ margin: 0, fontSize: '22px' }}>{t('home.title')}</h1>
-                  <StatusChip label="Slice S0.1 Active" tone="success" />
+                  <StatusChip label="Slice S0.2 Active" tone="success" />
                 </div>
 
                 <div
@@ -820,7 +876,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                       </button>
                     </li>
                     <li>Inspect hash-chained audit events — available under Governance</li>
-                    <li>Durable run engine &amp; first ReAct agent — arrives in S0.2 / S0.3</li>
+                    <li>Durable run engine &amp; trace viewer — available under Runs</li>
+                    <li>First ReAct agent &amp; Model Gateway — arrives in S0.3</li>
                   </ul>
                 </section>
               </div>
@@ -1075,7 +1132,61 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               </div>
             )}
 
-            {section !== 'home' && section !== 'settings' && section !== 'governance' && (
+            {section === 'runs' && (
+              <RunsView
+                runs={runs}
+                dlqItems={dlqItems}
+                loading={runsLoading}
+                error={runsError ? { message: runsError.message, code: runsError.code } : null}
+                selectedRun={selectedRun}
+                selectedSteps={selectedSteps}
+                selectedEvents={selectedEvents}
+                selectedStepId={selectedStep?.id}
+                onRefresh={() => void loadRuns()}
+                onStartSampleRun={() => {
+                  void (async () => {
+                    const created = await client.runs.create(
+                      {
+                        workspaceId: activeWorkspace?.id,
+                        environment: env,
+                        subjectType: 'agent_version',
+                        subjectVersionId: 'agv_demo',
+                        executeInline: true,
+                        simulatedSteps: [
+                          { type: 'decision', summary: { note: 'Plan turn' }, cost_micro_usd: 120, latency_ms: 14 },
+                          { type: 'tool_call', summary: { tool: 'http_get' }, cost_micro_usd: 40, latency_ms: 35 },
+                        ],
+                      },
+                      `ui-run-${Date.now()}`,
+                    );
+                    await loadRuns();
+                    await selectRun(created.id);
+                  })();
+                }}
+                onSelectRun={(runId) => void selectRun(runId)}
+                onSelectStep={(step) => {
+                  setSelectedStep(step);
+                  setRightDrawerOpen(true);
+                }}
+                onCancelRun={(runId) => {
+                  void (async () => {
+                    await client.runs.cancel(runId, 'Cancelled from console', `ui-cancel-${Date.now()}`);
+                    await loadRuns();
+                    if (selectedRun?.id === runId) {
+                      await selectRun(runId);
+                    }
+                  })();
+                }}
+                onRedriveRun={(runId) => {
+                  void (async () => {
+                    await client.runs.bulkRedrive([runId], `ui-redrive-${Date.now()}`);
+                    await loadRuns();
+                  })();
+                }}
+              />
+            )}
+
+            {section !== 'home' && section !== 'settings' && section !== 'governance' && section !== 'runs' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}
@@ -1126,6 +1237,17 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
             <p style={{ margin: '6px 0 0 0', color: 'var(--text-secondary)' }}>
               Environment: <strong>{env.toUpperCase()}</strong>
             </p>
+            {selectedStep && (
+              <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border)', display: 'grid', gap: '6px', fontSize: '12px' }}>
+                <strong>Step #{selectedStep.seq} ({selectedStep.type})</strong>
+                <div>Status: {selectedStep.status}</div>
+                <div>Latency: {selectedStep.latencyMs}ms</div>
+                <div>Tokens: {selectedStep.tokensIn} in / {selectedStep.tokensOut} out</div>
+                <div style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                  Idempotency: {selectedStep.idempotencyKey}
+                </div>
+              </div>
+            )}
           </aside>
         )}
       </div>

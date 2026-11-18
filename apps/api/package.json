@@ -9,6 +9,7 @@
     "@elshad/config": "workspace:*",
     "@elshad/db": "workspace:*",
     "@elshad/domain": "workspace:*",
+    "@elshad/execution": "workspace:*",
     "@elshad/platform-kit": "workspace:*",
     "@elshad/telemetry": "workspace:*",
     "@fastify/cookie": "^11.1.5",

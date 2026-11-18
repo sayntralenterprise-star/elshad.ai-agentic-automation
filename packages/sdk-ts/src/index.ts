@@ -1,4 +1,4 @@
-import { PlatformError, type ErrorCode } from '@elshad/domain';
+import { PlatformError, type ErrorCode, type RunStatus } from '@elshad/domain';
 
 export interface WorkspaceDto {
   id: string;
@@ -93,6 +93,71 @@ export interface RoleDto {
   isSystem: boolean;
 }
 
+export interface RunDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  environmentId: string;
+  rootRunId: string;
+  parentRunId: string | null;
+  subjectType: string;
+  subjectVersionId: string;
+  status: RunStatus;
+  failureClass: string | null;
+  terminationReason: string | null;
+  initiatorId: string;
+  input: unknown;
+  output: unknown;
+  usage: {
+    steps: number;
+    tokensIn: number;
+    tokensOut: number;
+    toolCalls: number;
+  };
+  costMicroUsd: number;
+  labels: Record<string, string>;
+  lastEventSeq: number;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+export interface RunStepDto {
+  id: string;
+  runId: string;
+  seq: number;
+  type: string;
+  status: string;
+  attempt: number;
+  idempotencyKey: string;
+  summary: Record<string, unknown>;
+  tokensIn: number;
+  tokensOut: number;
+  costMicroUsd: number;
+  latencyMs: number;
+  startedAt: string;
+  endedAt: string;
+}
+
+export interface RunEventDto {
+  runId: string;
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface DlqItemDto {
+  id: string;
+  runId: string;
+  workspaceId: string;
+  queue: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: Record<string, unknown> | null;
+  createdAt: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -158,6 +223,80 @@ function mapAudit(a: Record<string, unknown>): AuditEventDto {
     decision: a.decision ? String(a.decision) : null,
     hash: String(a.hash),
     prevHash: String(a.prev_hash),
+  };
+}
+
+function mapRun(r: Record<string, unknown>): RunDto {
+  const usage = (r.usage as Record<string, unknown>) ?? {};
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    workspaceId: String(r.workspace_id),
+    environmentId: String(r.environment_id),
+    rootRunId: String(r.root_run_id),
+    parentRunId: r.parent_run_id ? String(r.parent_run_id) : null,
+    subjectType: String(r.subject_type),
+    subjectVersionId: String(r.subject_version_id),
+    status: r.status as RunStatus,
+    failureClass: r.failure_class ? String(r.failure_class) : null,
+    terminationReason: r.termination_reason ? String(r.termination_reason) : null,
+    initiatorId: String(r.initiator_id),
+    input: r.input,
+    output: r.output,
+    usage: {
+      steps: Number(usage.steps ?? 0),
+      tokensIn: Number(usage.tokens_in ?? 0),
+      tokensOut: Number(usage.tokens_out ?? 0),
+      toolCalls: Number(usage.tool_calls ?? 0),
+    },
+    costMicroUsd: Number(r.cost_micro_usd ?? 0),
+    labels: (r.labels as Record<string, string>) ?? {},
+    lastEventSeq: Number(r.last_event_seq ?? 0),
+    createdAt: String(r.created_at),
+    startedAt: r.started_at ? String(r.started_at) : null,
+    endedAt: r.ended_at ? String(r.ended_at) : null,
+  };
+}
+
+function mapRunStep(s: Record<string, unknown>): RunStepDto {
+  return {
+    id: String(s.id),
+    runId: String(s.run_id),
+    seq: Number(s.seq),
+    type: String(s.type),
+    status: String(s.status),
+    attempt: Number(s.attempt),
+    idempotencyKey: String(s.idempotency_key),
+    summary: (s.summary as Record<string, unknown>) ?? {},
+    tokensIn: Number(s.tokens_in ?? 0),
+    tokensOut: Number(s.tokens_out ?? 0),
+    costMicroUsd: Number(s.cost_micro_usd ?? 0),
+    latencyMs: Number(s.latency_ms ?? 0),
+    startedAt: String(s.started_at),
+    endedAt: String(s.ended_at),
+  };
+}
+
+function mapRunEvent(e: Record<string, unknown>): RunEventDto {
+  return {
+    runId: String(e.run_id),
+    seq: Number(e.seq),
+    type: String(e.type),
+    data: (e.data as Record<string, unknown>) ?? {},
+    createdAt: String(e.created_at),
+  };
+}
+
+function mapDlqItem(d: Record<string, unknown>): DlqItemDto {
+  return {
+    id: String(d.id),
+    runId: String(d.run_id),
+    workspaceId: String(d.workspace_id),
+    queue: String(d.queue),
+    attempts: Number(d.attempts),
+    maxAttempts: Number(d.max_attempts),
+    lastError: (d.last_error as Record<string, unknown>) ?? null,
+    createdAt: String(d.created_at),
   };
 }
 
@@ -483,6 +622,109 @@ export class PlatformClient {
         data: res.data.map(mapAudit),
         nextCursor: res.next_cursor ?? null,
       };
+    },
+  };
+
+  readonly runs = {
+    create: async (
+      input: {
+        workspaceId?: string;
+        environment?: 'dev' | 'staging' | 'prod';
+        subjectType?: 'agent_version' | 'workflow_version';
+        subjectVersionId: string;
+        input?: unknown;
+        labels?: Record<string, string>;
+        queue?: string;
+        priority?: number;
+        serializeKey?: string;
+        simulatedSteps?: Array<Record<string, unknown>>;
+        executeInline?: boolean;
+      },
+      idempotencyKey: string,
+    ): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/runs', {
+        body: {
+          workspace_id: input.workspaceId,
+          environment: input.environment,
+          subject_type: input.subjectType ?? 'agent_version',
+          subject_version_id: input.subjectVersionId,
+          input: input.input,
+          labels: input.labels,
+          queue: input.queue ?? 'default',
+          priority: input.priority ?? 5,
+          serialize_key: input.serializeKey,
+          simulated_steps: input.simulatedSteps,
+          execute_inline: input.executeInline,
+        },
+        idempotencyKey,
+      });
+      return mapRun(res);
+    },
+    list: async (filter: { status?: RunStatus; workspaceId?: string } = {}): Promise<RunDto[]> => {
+      const params = new URLSearchParams();
+      if (filter.status) params.set('status', filter.status);
+      if (filter.workspaceId) params.set('workspace_id', filter.workspaceId);
+      const qs = params.toString();
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/runs${qs ? `?${qs}` : ''}`,
+      );
+      return res.data.map(mapRun);
+    },
+    get: async (id: string): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>('GET', `/api/v1/runs/${id}`);
+      return mapRun(res);
+    },
+    listSteps: async (id: string): Promise<RunStepDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/runs/${id}/steps`,
+      );
+      return res.data.map(mapRunStep);
+    },
+    listEvents: async (id: string, afterSeq?: number): Promise<RunEventDto[]> => {
+      const qs = afterSeq !== undefined ? `?after_seq=${afterSeq}` : '';
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/runs/${id}/events${qs}`,
+      );
+      return res.data.map(mapRunEvent);
+    },
+    cancel: async (id: string, reason: string, idempotencyKey: string): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/runs/${id}/cancel`,
+        { body: { reason }, idempotencyKey },
+      );
+      return mapRun(res);
+    },
+    signal: async (
+      id: string,
+      input: { kind?: 'approval' | 'input' | 'timer' | 'child'; reason: string; payload?: Record<string, unknown> },
+      idempotencyKey: string,
+    ): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/runs/${id}/signal`,
+        { body: { kind: input.kind ?? 'input', reason: input.reason, payload: input.payload }, idempotencyKey },
+      );
+      return mapRun(res);
+    },
+    listDlq: async (): Promise<DlqItemDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/dlq');
+      return res.data.map(mapDlqItem);
+    },
+    bulkRedrive: async (
+      runIds: string[],
+      idempotencyKey: string,
+      inputPatch?: unknown,
+    ): Promise<RunDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'POST',
+        '/api/v1/runs:bulk-redrive',
+        { body: { run_ids: runIds, input_patch: inputPatch }, idempotencyKey },
+      );
+      return res.data.map(mapRun);
     },
   };
 }

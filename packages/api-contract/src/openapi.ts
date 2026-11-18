@@ -1,6 +1,6 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
-import { S01_ROUTES } from './routes.js';
+import { ALL_ROUTES } from './routes.js';
 import { ErrorEnvelopeSchema } from './schemas.js';
 
 export interface OpenApiDocument {
@@ -33,7 +33,7 @@ export function generateOpenApiDocument(): OpenApiDocument {
     name: 'platform_session',
   });
 
-  for (const route of S01_ROUTES) {
+  for (const route of ALL_ROUTES) {
     const request: {
       params?: z.ZodTypeAny;
       query?: z.ZodTypeAny;

@@ -162,6 +162,124 @@ export interface AuditEventsTable {
   hash: string;
 }
 
+export interface RunsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  environment_id: string;
+  root_run_id: string;
+  parent_run_id: string | null;
+  subject_type: string;
+  subject_version_id: string;
+  status: string;
+  failure_class: string | null;
+  termination_reason: string | null;
+  initiator_id: string;
+  on_behalf_of_id: string | null;
+  trigger: Record<string, unknown>;
+  input_ref: string | null;
+  output_ref: string | null;
+  limits: Record<string, unknown>;
+  usage: Record<string, unknown>;
+  cost_micro_usd: number;
+  wait: Record<string, unknown> | null;
+  flags: Record<string, unknown>;
+  labels: Record<string, unknown>;
+  last_event_seq: number;
+  engine_version: string;
+  created_at: Date;
+  started_at: Date | null;
+  ended_at: Date | null;
+}
+
+export interface RunEventsTable {
+  run_id: string;
+  seq: number;
+  org_id: string;
+  type: string;
+  data: Record<string, unknown>;
+  created_at: Date;
+}
+
+export interface RunStepsTable {
+  id: string;
+  run_id: string;
+  org_id: string;
+  seq: number;
+  type: string;
+  agent_id: string | null;
+  status: string;
+  attempt: number;
+  idempotency_key: string;
+  summary: Record<string, unknown>;
+  input_ref: string | null;
+  output_ref: string | null;
+  model: string | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_micro_usd: number;
+  latency_ms: number | null;
+  policy: Record<string, unknown> | null;
+  provenance: string | null;
+  error: Record<string, unknown> | null;
+  started_at: Date | null;
+  ended_at: Date | null;
+  created_at: Date;
+}
+
+export interface CheckpointsTable {
+  run_id: string;
+  seq: number;
+  org_id: string;
+  state_ref: string;
+  size_bytes: number;
+  milestone: boolean;
+  created_at: Date;
+}
+
+export interface WorkItemsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  queue: string;
+  priority: number;
+  run_id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  serialize_key: string | null;
+  available_at: Date;
+  lease_owner: string | null;
+  lease_expires_at: Date | null;
+  attempts: number;
+  max_attempts: number;
+  status: 'ready' | 'leased' | 'done' | 'dead';
+  last_error: Record<string, unknown> | null;
+  created_at: Date;
+}
+
+export interface TimersTable {
+  id: string;
+  org_id: string;
+  run_id: string;
+  kind: string;
+  fire_at: Date;
+  payload: Record<string, unknown>;
+  fired_at: Date | null;
+}
+
+export interface EffectLedgerTable {
+  org_id: string;
+  idempotency_key: string;
+  run_id: string;
+  step_seq: number;
+  attempt_group: number;
+  status: 'succeeded' | 'failed';
+  result_ref: string | null;
+  result_json: Record<string, unknown> | null;
+  expires_at: Date;
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -176,6 +294,13 @@ export interface Database {
   idempotency_keys: IdempotencyKeysTable;
   outbox: OutboxTable;
   audit_events: AuditEventsTable;
+  runs: RunsTable;
+  run_events: RunEventsTable;
+  run_steps: RunStepsTable;
+  checkpoints: CheckpointsTable;
+  work_items: WorkItemsTable;
+  timers: TimersTable;
+  effect_ledger: EffectLedgerTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {
@@ -348,4 +473,66 @@ export function verifyAuditEventsChain(
   }
 
   return { valid: true, checkedCount: sorted.length };
+}
+
+export type PartitionedTable =
+  | 'audit_events'
+  | 'runs'
+  | 'run_events'
+  | 'run_steps'
+  | 'usage_ledger';
+
+export const DEFAULT_PARTITIONED_TABLES: readonly PartitionedTable[] = [
+  'audit_events',
+  'runs',
+  'run_events',
+  'run_steps',
+];
+
+const SAFE_TABLE_IDENT = /^[a-z_][a-z0-9_]*$/;
+
+export function buildMonthlyPartitionSql(
+  table: string,
+  year: number,
+  month1Based: number,
+): { partitionName: string; sql: string } {
+  if (!SAFE_TABLE_IDENT.test(table)) {
+    throw new Error(`Invalid partitioned table name: ${table}`);
+  }
+  if (!Number.isInteger(month1Based) || month1Based < 1 || month1Based > 12) {
+    throw new Error(`Month must be 1..12, got ${month1Based}`);
+  }
+  const mm = String(month1Based).padStart(2, '0');
+  const start = `${year}-${mm}-01 00:00:00Z`;
+  const nextYear = month1Based === 12 ? year + 1 : year;
+  const nextMonth = month1Based === 12 ? 1 : month1Based + 1;
+  const nextMm = String(nextMonth).padStart(2, '0');
+  const end = `${nextYear}-${nextMm}-01 00:00:00Z`;
+  const partitionName = `${table}_${year}_${mm}`;
+  const statement = `CREATE TABLE IF NOT EXISTS ${partitionName} PARTITION OF ${table} FOR VALUES FROM ('${start}') TO ('${end}');`;
+  return { partitionName, sql: statement };
+}
+
+/**
+ * Generates DDL statements for the current month + `monthsAhead` months (default 3 per E0.2-1).
+ */
+export function planUpcomingPartitions(
+  tables: readonly string[] = DEFAULT_PARTITIONED_TABLES,
+  fromDate: Date = new Date(),
+  monthsAhead = 3,
+): Array<{ table: string; partitionName: string; sql: string }> {
+  const results: Array<{ table: string; partitionName: string; sql: string }> = [];
+  const startYear = fromDate.getUTCFullYear();
+  const startMonth = fromDate.getUTCMonth(); // 0-based
+
+  for (let offset = 0; offset <= monthsAhead; offset++) {
+    const d = new Date(Date.UTC(startYear, startMonth + offset, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() + 1;
+    for (const table of tables) {
+      const built = buildMonthlyPartitionSql(table, y, m);
+      results.push({ table, ...built });
+    }
+  }
+  return results;
 }

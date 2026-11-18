@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import * as oidc from 'openid-client';
 import type { ZodTypeAny } from 'zod';
 import {
-  S01_ROUTES,
+  ALL_ROUTES,
   generateOpenApiDocument,
   type RouteContract,
 } from '@elshad/api-contract';
@@ -23,9 +23,23 @@ import {
   SystemIdGen,
   toErrorEnvelope,
   type Clock,
+  type EnvironmentId,
   type EnvironmentKind,
   type IdGen,
+  type OrgId,
+  type PrincipalId,
+  type RunStatus,
+  type TenantContext,
+  type WorkspaceId,
 } from '@elshad/domain';
+import {
+  InMemoryEffectLedger,
+  InMemoryExecutionEngine,
+  type EffectLedger,
+  type ExecutionEngine,
+  type RunLimits,
+  type TurnStepInput,
+} from '@elshad/execution';
 import {
   InMemoryCache,
   SlidingWindowRateLimiter,
@@ -59,6 +73,8 @@ export type OidcCallbackExchange = (input: {
 export interface ApiServerOptions {
   config: PlatformConfig;
   store?: IamAuditStore;
+  executionEngine?: ExecutionEngine;
+  effectLedger?: EffectLedger;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -99,6 +115,7 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 export function buildApiServer(opts: ApiServerOptions): {
   app: FastifyInstance;
   store: IamAuditStore;
+  executionEngine: ExecutionEngine;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -116,6 +133,9 @@ export function buildApiServer(opts: ApiServerOptions): {
       clock,
       idGen,
     });
+  const executionEngine: ExecutionEngine =
+    opts.executionEngine ?? new InMemoryExecutionEngine({ clock, idGen });
+  const effectLedger: EffectLedger = opts.effectLedger ?? new InMemoryEffectLedger(clock);
 
   const rateLimitCfg = {
     public: opts.rateLimits?.public ?? 1200,
@@ -138,12 +158,12 @@ export function buildApiServer(opts: ApiServerOptions): {
   });
 
   const routeMap = new Map<string, RouteContract>();
-  for (const r of S01_ROUTES) {
+  for (const r of ALL_ROUTES) {
     routeMap.set(`${r.method.toUpperCase()} ${r.path}`, r);
   }
 
   function findContract(method: string, routePath: string): RouteContract | undefined {
-    const normalized = routePath.replace(/:([a-zA-Z0-9_]+)/g, '{$1}');
+    const normalized = routePath.replace(/\/:([a-zA-Z0-9_]+)/g, '/{$1}');
     return routeMap.get(`${method.toUpperCase()} ${normalized}`);
   }
 
@@ -312,7 +332,7 @@ export function buildApiServer(opts: ApiServerOptions): {
           orgId: auth.context.org.id,
           workspaceId:
             (req.params as Record<string, string> | undefined)?.id &&
-            contract.scope === 'workspace'
+              contract.scope === 'workspace'
               ? (req.params as Record<string, string>).id
               : state.workspaceId,
         };
@@ -875,5 +895,289 @@ export function buildApiServer(opts: ApiServerOptions): {
     return store.listAuditEvents(auth.context.org.id, query);
   });
 
-  return { app, store };
+  // --- Durable Run Core (S0.2) ---
+  function buildTenantContext(req: FastifyRequest, workspaceId?: string, envId?: string): TenantContext {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    return {
+      orgId: auth.context.org.id as OrgId,
+      workspaceId: (workspaceId ?? state.workspaceId) as WorkspaceId | undefined,
+      environmentId: envId as EnvironmentId | undefined,
+      environmentKind: state.environment,
+      principal: {
+        id: auth.subject.principalId as PrincipalId,
+        type: auth.context.principal.type,
+        displayName: auth.context.principal.display_name,
+        email: auth.context.principal.email ?? undefined,
+      },
+      requestId: state.requestId,
+      traceId: state.traceId,
+    };
+  }
+
+  app.post('/api/v1/runs', async (req, reply) => {
+    const routePath = '/api/v1/runs';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      environment?: EnvironmentKind;
+      subject_type: 'agent_version' | 'workflow_version';
+      subject_version_id: string;
+      input?: unknown;
+      labels?: Record<string, string>;
+      limits?: Partial<RunLimits>;
+      queue: string;
+      priority: number;
+      serialize_key?: string;
+      simulated_steps?: Array<{
+        type?: TurnStepInput['type'];
+        summary?: Record<string, unknown>;
+        input?: unknown;
+        output?: unknown;
+        tokens_in?: number;
+        tokens_out?: number;
+        cost_micro_usd?: number;
+        latency_ms?: number;
+        fail_code?: 'TOOL_TIMEOUT' | 'TOOL_UPSTREAM_REJECTED';
+      }>;
+      execute_inline?: boolean;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    if (!workspaceId) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible workspace found.');
+    }
+    const ws = await store.getWorkspace(orgId, workspaceId);
+    if (!ws) {
+      throw new PlatformError('RES_NOT_FOUND', `Workspace ${workspaceId} not found.`);
+    }
+
+    const envs = await store.listEnvironments(orgId, workspaceId);
+    const targetEnvKind = body.environment ?? state.environment ?? 'dev';
+    const env = envs.find((e) => e.kind === targetEnvKind) ?? envs[0];
+    if (!env) {
+      throw new PlatformError('RES_NOT_FOUND', `Environment ${targetEnvKind} not found.`);
+    }
+
+    const created = await executionEngine.createRun(buildTenantContext(req, workspaceId, env.id), {
+      workspaceId,
+      environmentId: env.id,
+      subjectType: body.subject_type,
+      subjectVersionId: body.subject_version_id,
+      input: body.input,
+      limits: body.limits,
+      labels: body.labels,
+      queue: body.queue,
+      priority: body.priority,
+      serializeKey: body.serialize_key,
+      payload: body.simulated_steps ? { simulated_steps: body.simulated_steps } : {},
+    });
+
+    if (body.execute_inline) {
+      const leases = await executionEngine.claim('api-inline', [body.queue], 1);
+      const lease = leases.find((l) => l.runId === created.id);
+      if (lease) {
+        try {
+          const steps = body.simulated_steps ?? [{ type: 'decision', summary: { ok: true } }];
+          for (let i = 0; i < steps.length; i++) {
+            const s = steps[i]!;
+            const stepSeq = i + 1;
+            if (s.fail_code) {
+              throw new PlatformError(s.fail_code, `Simulated failure ${s.fail_code}`);
+            }
+            const res = await effectLedger.executeOnce(
+              orgId,
+              { runId: lease.runId, stepSeq },
+              async () => s.output ?? { step: stepSeq, ok: true },
+            );
+            await executionEngine.commitTurn(lease, {
+              steps: [
+                {
+                  seq: stepSeq,
+                  type: s.type ?? 'decision',
+                  summary: s.summary ?? { step: stepSeq },
+                  input: s.input,
+                  output: res.result,
+                  tokensIn: s.tokens_in ?? 0,
+                  tokensOut: s.tokens_out ?? 0,
+                  costMicroUsd: s.cost_micro_usd ?? 0,
+                  latencyMs: s.latency_ms ?? 5,
+                },
+              ],
+              checkpoint: {
+                seq: stepSeq,
+                cursor: i + 1,
+                scratchpad: {},
+                messages: [],
+                blackboard: {},
+                engine_version: '1.0.0',
+              },
+              milestone: i === steps.length - 1,
+            });
+          }
+          await executionEngine.complete(lease, {
+            status: 'succeeded',
+            terminationReason: 'final_answer',
+            output: { steps: steps.length },
+          });
+        } catch (err) {
+          const pe =
+            err instanceof PlatformError
+              ? err
+              : new PlatformError('SYS_INTERNAL', err instanceof Error ? err.message : String(err));
+          await executionEngine.retryOrFail(lease, pe);
+        }
+      }
+    }
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'run.create',
+      resource: { type: 'run', id: created.id, workspace_id: workspaceId },
+      decision: 'allow',
+    });
+
+    const latest = (await executionEngine.getRun(orgId, created.id)) ?? created;
+    await persistIdempotencyIfNeeded(req, routePath, 202, latest);
+    return reply.status(202).send(latest);
+  });
+
+  app.get('/api/v1/runs', async (req) => {
+    const contract = findContract('GET', '/api/v1/runs')!;
+    const query = validateWithSchema<{ status?: RunStatus; workspace_id?: string }>(
+      contract.querySchema,
+      req.query,
+    );
+    const orgId = req.platformState!.auth!.context.org.id;
+    const data = await executionEngine.listRuns(orgId, {
+      workspaceId: query.workspace_id,
+      status: query.status,
+    });
+    return { data };
+  });
+
+  app.get('/api/v1/runs/:id', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+    const run = await executionEngine.getRun(orgId, id);
+    if (!run) {
+      throw new PlatformError('RES_NOT_FOUND', `Run ${id} not found.`);
+    }
+    return run;
+  });
+
+  app.get('/api/v1/runs/:id/steps', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+    const data = await executionEngine.listSteps(orgId, id);
+    return { data };
+  });
+
+  app.get('/api/v1/runs/:id/events', async (req, reply) => {
+    const contract = findContract('GET', '/api/v1/runs/{id}/events')!;
+    const query = validateWithSchema<{ after_seq?: number; stream?: 'true' | 'false' }>(
+      contract.querySchema,
+      req.query,
+    );
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const lastEventIdHeader = req.headers['last-event-id'];
+    const parsedHeaderSeq =
+      typeof lastEventIdHeader === 'string' && /^\d+$/.test(lastEventIdHeader.trim())
+        ? Number(lastEventIdHeader.trim())
+        : undefined;
+    const afterSeq = parsedHeaderSeq ?? query.after_seq ?? 0;
+
+    const events = await executionEngine.listEvents(orgId, id, afterSeq);
+    const wantsSse =
+      query.stream === 'true' ||
+      (typeof req.headers.accept === 'string' && req.headers.accept.includes('text/event-stream'));
+
+    if (wantsSse) {
+      reply.header('Content-Type', 'text/event-stream; charset=utf-8');
+      reply.header('Cache-Control', 'no-cache');
+      const frames = events
+        .map((e) => `id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`)
+        .join('');
+      return reply.status(200).send(frames);
+    }
+
+    return { data: events };
+  });
+
+  app.post('/api/v1/runs/:id/cancel', async (req) => {
+    const routePath = '/api/v1/runs/{id}/cancel';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ reason: string }>(contract.bodySchema, req.body ?? {});
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+
+    const cancelled = await executionEngine.cancel(buildTenantContext(req), id, body.reason);
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'run.cancel',
+      resource: { type: 'run', id },
+      decision: 'allow',
+    });
+    await persistIdempotencyIfNeeded(req, routePath, 200, cancelled);
+    return cancelled;
+  });
+
+  app.post('/api/v1/runs/:id/signal', async (req) => {
+    const routePath = '/api/v1/runs/{id}/signal';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      kind: 'approval' | 'input' | 'timer' | 'child';
+      reason: string;
+      payload?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+    const auth = req.platformState!.auth!;
+    const { id } = req.params as { id: string };
+
+    const resumed = await executionEngine.signal(buildTenantContext(req), id, body);
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'run.signal',
+      resource: { type: 'run', id, kind: body.kind },
+      decision: 'allow',
+    });
+    await persistIdempotencyIfNeeded(req, routePath, 200, resumed);
+    return resumed;
+  });
+
+  app.get('/api/v1/dlq', async (req) => {
+    const auth = req.platformState!.auth!;
+    const data = await executionEngine.listDlq(auth.context.org.id);
+    return { data };
+  });
+
+  app.post('/api/v1/runs:bulk-redrive', async (req) => {
+    const routePath = '/api/v1/runs:bulk-redrive';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ run_ids: string[]; input_patch?: unknown }>(
+      contract.bodySchema,
+      req.body,
+    );
+    const auth = req.platformState!.auth!;
+    const redriven = await executionEngine.redrive(
+      buildTenantContext(req),
+      body.run_ids,
+      body.input_patch,
+    );
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'run.redrive',
+      resource: { type: 'run_batch', run_ids: body.run_ids },
+      decision: 'allow',
+    });
+    const responseBody = { data: redriven };
+    await persistIdempotencyIfNeeded(req, routePath, 200, responseBody);
+    return responseBody;
+  });
+
+  return { app, store, executionEngine };
 }

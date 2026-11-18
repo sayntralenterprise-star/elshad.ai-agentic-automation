@@ -4,9 +4,11 @@ import type { Pool, PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
   GENESIS_AUDIT_HASH,
+  buildMonthlyPartitionSql,
   canonicalJson,
   computeAuditHash,
   computeContextHash,
+  planUpcomingPartitions,
   verifyAuditEventsChain,
   withTenantPgClient,
   type VerifiableAuditEvent,
@@ -47,6 +49,46 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
 
     expect(sql02).toContain('REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM PUBLIC');
     expect(sql02).toContain('audit_events_2026_11');
+
+    const sql03 = readFileSync(join(migrationsDir, '0003_s02_run_core.sql'), 'utf8');
+    const s02Tables = [
+      'runs',
+      'run_events',
+      'run_steps',
+      'checkpoints',
+      'work_items',
+      'timers',
+      'effect_ledger',
+    ];
+    for (const tbl of s02Tables) {
+      expect(sql03).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql03).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql03).toContain('runs_2026_11');
+    expect(sql03).toContain('runs_2027_02');
+    expect(sql03).toContain('run_events_2026_11');
+    expect(sql03).toContain('run_steps_2026_11');
+    expect(sql03).toContain('work_items_serialize_uidx');
+    expect(sql03).toContain('last_event_seq');
+  });
+
+  it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {
+    const dec = buildMonthlyPartitionSql('runs', 2026, 12);
+    expect(dec.partitionName).toBe('runs_2026_12');
+    expect(dec.sql).toContain("FROM ('2026-12-01 00:00:00Z') TO ('2027-01-01 00:00:00Z')");
+
+    const planned = planUpcomingPartitions(['runs', 'run_events'], new Date('2026-11-18T00:00:00Z'), 3);
+    expect(planned).toHaveLength(8);
+    expect(planned.map((p) => p.partitionName)).toEqual([
+      'runs_2026_11',
+      'run_events_2026_11',
+      'runs_2026_12',
+      'run_events_2026_12',
+      'runs_2027_01',
+      'run_events_2027_01',
+      'runs_2027_02',
+      'run_events_2027_02',
+    ]);
   });
 
   it('produces deterministic canonical JSON and detects audit tampering', () => {

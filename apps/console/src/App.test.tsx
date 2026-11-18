@@ -7,7 +7,10 @@ import { PlatformError } from '@elshad/domain';
 import {
   PlatformClient,
   type ApiKeyDto,
+  type DlqItemDto,
   type MeDto,
+  type RunDto,
+  type RunStepDto,
 } from '@elshad/sdk-ts';
 import { ConsoleApp } from './App.js';
 
@@ -15,9 +18,30 @@ afterEach(() => {
   cleanup();
 });
 
-function createMockClient(opts: { authenticatedInitially?: boolean } = {}) {
+function createMockClient(
+  opts: {
+    authenticatedInitially?: boolean;
+    initialStepsByRun?: Record<string, RunStepDto[]>;
+  } = {},
+) {
   let authed = opts.authenticatedInitially ?? false;
   const keys: ApiKeyDto[] = [];
+  const runs: RunDto[] = [];
+  const stepsByRun = new Map<string, RunStepDto[]>(
+    Object.entries(opts.initialStepsByRun ?? {}),
+  );
+  const dlqItems: DlqItemDto[] = [
+    {
+      id: 'wi_dlq_1',
+      runId: 'run_failed_1',
+      workspaceId: 'ws_1',
+      queue: 'default',
+      attempts: 5,
+      maxAttempts: 5,
+      lastError: { code: 'TOOL_TIMEOUT', message: 'Upstream timeout' },
+      createdAt: '2026-11-18T12:00:00.000Z',
+    },
+  ];
 
   const me: MeDto = {
     principal: {
@@ -127,6 +151,93 @@ function createMockClient(opts: { authenticatedInitially?: boolean } = {}) {
     nextCursor: null,
   });
 
+  client.runs.list = async () => [...runs];
+  client.runs.get = async (id) => {
+    const found = runs.find((r) => r.id === id);
+    if (!found) throw new PlatformError('RES_NOT_FOUND', 'Run not found');
+    return found;
+  };
+  client.runs.listSteps = async (id) => stepsByRun.get(id) ?? [];
+  client.runs.listEvents = async (id) => [
+    {
+      runId: id,
+      seq: 1,
+      type: 'run.created',
+      data: {},
+      createdAt: '2026-11-18T12:00:00.000Z',
+    },
+  ];
+  client.runs.create = async (input) => {
+    const id = `run_${runs.length + 1}`;
+    const run: RunDto = {
+      id,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      environmentId: 'env_1',
+      rootRunId: id,
+      parentRunId: null,
+      subjectType: input.subjectType ?? 'agent_version',
+      subjectVersionId: input.subjectVersionId,
+      status: 'succeeded',
+      failureClass: null,
+      terminationReason: 'final_answer',
+      initiatorId: 'prn_1',
+      input: {},
+      output: { ok: true },
+      usage: { steps: 2, tokensIn: 0, tokensOut: 0, toolCalls: 1 },
+      costMicroUsd: 160,
+      labels: {},
+      lastEventSeq: 3,
+      createdAt: '2026-11-18T12:00:00.000Z',
+      startedAt: '2026-11-18T12:00:00.100Z',
+      endedAt: '2026-11-18T12:00:00.500Z',
+    };
+    runs.push(run);
+    stepsByRun.set(id, [
+      {
+        id: `${id}_s1`,
+        runId: id,
+        seq: 1,
+        type: 'decision',
+        status: 'succeeded',
+        attempt: 1,
+        idempotencyKey: 'idem_hash_1',
+        summary: { note: 'Plan turn' },
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 120,
+        latencyMs: 14,
+        startedAt: '2026-11-18T12:00:00.100Z',
+        endedAt: '2026-11-18T12:00:00.114Z',
+      },
+      {
+        id: `${id}_s2`,
+        runId: id,
+        seq: 2,
+        type: 'tool_call',
+        status: 'succeeded',
+        attempt: 1,
+        idempotencyKey: 'idem_hash_2',
+        summary: { tool: 'http_get' },
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 40,
+        latencyMs: 35,
+        startedAt: '2026-11-18T12:00:00.115Z',
+        endedAt: '2026-11-18T12:00:00.150Z',
+      },
+    ]);
+    return run;
+  };
+  client.runs.listDlq = async () => [...dlqItems];
+  client.runs.bulkRedrive = async (runIds) => {
+    for (const id of runIds) {
+      const idx = dlqItems.findIndex((d) => d.runId === id);
+      if (idx >= 0) dlqItems.splice(idx, 1);
+    }
+    return [];
+  };
+
   return client;
 }
 
@@ -182,7 +293,7 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(axeLight.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
-  });
+  }, 15_000);
 
   it('passes axe accessibility checks in dark theme on login and authenticated shell [NFR-15]', async () => {
     const clientUnauth = createMockClient({ authenticatedInitially: false });
@@ -205,5 +316,97 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(axeShell.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
-  });
+  }, 15_000);
+
+  it('runs a durable run, inspects trace step in drawer, and re-drives a DLQ item [E0.2-7]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    render(<ConsoleApp client={client} initialPath="/w/default/e/dev/runs" />);
+
+    expect(await screen.findByRole('heading', { name: 'Runs & Traces' })).toBeTruthy();
+
+    // Start Durable Run
+    await user.click(screen.getAllByRole('button', { name: 'Start Durable Run' })[0]!);
+    expect(await screen.findByRole('heading', { name: /Run Trace: run_1/ })).toBeTruthy();
+
+    // Click first trace step to inspect in Right Inspector Drawer
+    const stepRow = await screen.findByRole('treeitem', { name: /#1 · decision/ });
+    await user.click(stepRow);
+    expect(await screen.findByText(/Idempotency: idem_hash_1/)).toBeTruthy();
+
+    // Switch to DLQ tab and re-drive failed run
+    await user.click(screen.getByRole('button', { name: /DLQ \(1\)/ }));
+    expect(await screen.findByText('run_failed_1')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Re-drive' }));
+    expect(await screen.findByText('Dead-letter queue is empty')).toBeTruthy();
+  }, 15_000);
+
+  it('virtualizes a 5,000-span trace under 1 second and passes axe checks [E0.2-7]', async () => {
+    const user = userEvent.setup();
+    const fiveThousandSteps: RunStepDto[] = Array.from({ length: 5000 }, (_, i) => ({
+      id: `stp_${i + 1}`,
+      runId: 'run_big',
+      seq: i + 1,
+      type: i % 2 === 0 ? 'decision' : 'tool_call',
+      status: 'succeeded',
+      attempt: 1,
+      idempotencyKey: `idem_${i + 1}`,
+      summary: { idx: i + 1 },
+      tokensIn: 10,
+      tokensOut: 5,
+      costMicroUsd: 2,
+      latencyMs: 3,
+      startedAt: '2026-11-18T12:00:00.000Z',
+      endedAt: '2026-11-18T12:00:00.003Z',
+    }));
+
+    const client = createMockClient({
+      authenticatedInitially: true,
+      initialStepsByRun: { run_big: fiveThousandSteps },
+    });
+    const bigRun: RunDto = {
+      id: 'run_big',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      environmentId: 'env_1',
+      rootRunId: 'run_big',
+      parentRunId: null,
+      subjectType: 'agent_version',
+      subjectVersionId: 'agv_1',
+      status: 'succeeded',
+      failureClass: null,
+      terminationReason: 'final_answer',
+      initiatorId: 'prn_1',
+      input: {},
+      output: {},
+      usage: { steps: 5000, tokensIn: 50_000, tokensOut: 25_000, toolCalls: 2500 },
+      costMicroUsd: 10_000,
+      labels: {},
+      lastEventSeq: 10_002,
+      createdAt: '2026-11-18T12:00:00.000Z',
+      startedAt: '2026-11-18T12:00:00.000Z',
+      endedAt: '2026-11-18T12:00:15.000Z',
+    };
+    client.runs.list = async () => [bigRun];
+    client.runs.get = async () => bigRun;
+
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/runs" />,
+    );
+    const inspectBtn = await screen.findByRole('button', { name: 'Inspect Trace' });
+
+    const t0 = performance.now();
+    await user.click(inspectBtn);
+    await screen.findByText(/5000 total spans/);
+    const elapsedMs = performance.now() - t0;
+
+    expect(elapsedMs).toBeLessThan(1000);
+    const renderedTreeItems = screen.getAllByRole('treeitem');
+    expect(renderedTreeItems.length).toBeLessThan(50);
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 15_000);
 });

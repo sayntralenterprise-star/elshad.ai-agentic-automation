@@ -69,4 +69,48 @@ describe('@elshad/sdk-ts [E0.1-6, L.4]', () => {
 
     await expect(client.capabilities()).rejects.toThrowError(PlatformError);
   });
+
+  it('maps runs, steps, and DLQ responses cleanly [E0.2-4]', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/v1/runs')) {
+        return new Response(
+          JSON.stringify({
+            id: 'run_1',
+            org_id: 'org_1',
+            workspace_id: 'ws_1',
+            environment_id: 'env_1',
+            root_run_id: 'run_1',
+            parent_run_id: null,
+            subject_type: 'agent_version',
+            subject_version_id: 'agv_1',
+            status: 'queued',
+            failure_class: null,
+            termination_reason: null,
+            initiator_id: 'prn_1',
+            input: {},
+            output: null,
+            usage: { steps: 1, tokens_in: 10, tokens_out: 5, tool_calls: 0 },
+            cost_micro_usd: 100,
+            labels: {},
+            last_event_seq: 1,
+            created_at: '2026-11-18T12:00:00.000Z',
+            started_at: null,
+            ended_at: null,
+          }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    const client = new PlatformClient({
+      baseUrl: 'http://localhost:8080',
+      fetchImpl: mockFetch,
+    });
+    const run = await client.runs.create({ subjectVersionId: 'agv_1' }, 'idem-1');
+    expect(run.status).toBe('queued');
+    expect(run.usage.tokensIn).toBe(10);
+    expect(run.costMicroUsd).toBe(100);
+  });
 });

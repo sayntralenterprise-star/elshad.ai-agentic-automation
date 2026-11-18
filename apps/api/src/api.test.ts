@@ -486,4 +486,175 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('handles run lifecycle, SSE Last-Event-ID resume, RES_CONFLICT, DLQ redrive, and cross-org isolation [E0.2-4, E0.2-6]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 'admin-a@org-a.local',
+      adminPassword: 'PasswordA123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    store.seedOrganization({
+      slug: 'org-b',
+      name: 'Org B',
+      adminEmail: 'admin-b@org-b.local',
+      adminPassword: 'PasswordB123!',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'admin-a@org-a.local', password: 'PasswordA123!' },
+    });
+    const cookieA = parseCookie(loginA.headers['set-cookie']);
+    const csrfA = loginA.json().csrf_token as string;
+
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'admin-b@org-b.local', password: 'PasswordB123!' },
+    });
+    const cookieB = parseCookie(loginB.headers['set-cookie']);
+    const csrfB = loginB.json().csrf_token as string;
+
+    // 1. Start inline run with 2 steps
+    const runRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/runs',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'run-1' },
+      payload: {
+        subject_type: 'agent_version',
+        subject_version_id: 'agv_1',
+        execute_inline: true,
+        simulated_steps: [
+          { type: 'decision', summary: { note: 'plan' }, cost_micro_usd: 100 },
+          { type: 'tool_call', summary: { tool: 'http' }, cost_micro_usd: 250 },
+        ],
+      },
+    });
+    expect(runRes.statusCode).toBe(202);
+    const runId = runRes.json().id as string;
+    expect(runRes.json().status).toBe('succeeded');
+    expect(runRes.json().cost_micro_usd).toBe(350);
+
+    // Steps listed
+    const stepsRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runId}/steps`,
+      headers: { cookie: cookieA },
+    });
+    expect(stepsRes.statusCode).toBe(200);
+    expect(stepsRes.json().data).toHaveLength(2);
+
+    // SSE stream & Last-Event-ID resume without gaps
+    const fullSse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runId}/events?stream=true`,
+      headers: { cookie: cookieA, Accept: 'text/event-stream' },
+    });
+    expect(fullSse.statusCode).toBe(200);
+    expect(fullSse.headers['content-type']).toContain('text/event-stream');
+    expect(fullSse.body).toContain('event: run.created');
+    expect(fullSse.body).toContain('event: run.completed');
+
+    const resumedSse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runId}/events?stream=true`,
+      headers: { cookie: cookieA, 'Last-Event-ID': '4' },
+    });
+    expect(resumedSse.statusCode).toBe(200);
+    expect(resumedSse.body).not.toContain('id: 1\n');
+    expect(resumedSse.body).not.toContain('id: 4\n');
+    expect(resumedSse.body).toContain('id: 5\n');
+
+    // Illegal transition: cancelling a succeeded run -> 409 RES_CONFLICT
+    const illegalCancel = await app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${runId}/cancel`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'cancel-illegal' },
+      payload: { reason: 'too late' },
+    });
+    expect(illegalCancel.statusCode).toBe(409);
+    expect(illegalCancel.json().error.code).toBe('RES_CONFLICT');
+
+    // 2. Queued run cancellation
+    const queuedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/runs',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'run-queued' },
+      payload: { subject_version_id: 'agv_1' },
+    });
+    expect(queuedRes.statusCode).toBe(202);
+    const queuedId = queuedRes.json().id as string;
+
+    const cancelOk = await app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${queuedId}/cancel`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'cancel-ok' },
+      payload: { reason: 'stop queued' },
+    });
+    expect(cancelOk.statusCode).toBe(200);
+    expect(cancelOk.json().status).toBe('cancelled');
+
+    // 3. Permanent failure -> DLQ -> bulk redrive
+    const failRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/runs',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'run-fail' },
+      payload: {
+        subject_version_id: 'agv_1',
+        execute_inline: true,
+        simulated_steps: [{ fail_code: 'TOOL_UPSTREAM_REJECTED' }],
+      },
+    });
+    expect(failRes.statusCode).toBe(202);
+    const failedId = failRes.json().id as string;
+    expect(failRes.json().status).toBe('failed');
+
+    const dlqList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/dlq',
+      headers: { cookie: cookieA },
+    });
+    expect(dlqList.statusCode).toBe(200);
+    expect(dlqList.json().data).toHaveLength(1);
+    expect(dlqList.json().data[0].run_id).toBe(failedId);
+
+    const redriveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/runs:bulk-redrive',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'redrive-1' },
+      payload: { run_ids: [failedId], input_patch: { retry: true } },
+    });
+    expect(redriveRes.statusCode).toBe(200);
+    expect(redriveRes.json().data[0].status).toBe('queued');
+
+    // 4. Cross-org run isolation
+    const orgBGetRun = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runId}`,
+      headers: { cookie: cookieB },
+    });
+    expect(orgBGetRun.statusCode).toBe(404);
+
+    const orgBListRuns = await app.inject({
+      method: 'GET',
+      url: '/api/v1/runs',
+      headers: { cookie: cookieB },
+    });
+    expect(orgBListRuns.statusCode).toBe(200);
+    expect(orgBListRuns.json().data).toHaveLength(0);
+
+    const orgBRedrive = await app.inject({
+      method: 'POST',
+      url: '/api/v1/runs:bulk-redrive',
+      headers: { cookie: cookieB, 'x-csrf-token': csrfB, 'Idempotency-Key': 'b-redrive' },
+      payload: { run_ids: [failedId] },
+    });
+    expect(orgBRedrive.statusCode).toBe(404);
+
+    await app.close();
+  });
 });

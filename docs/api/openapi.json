@@ -691,6 +691,502 @@
           "hash",
           "prev_hash"
         ]
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "root_run_id": {
+            "type": "string"
+          },
+          "parent_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "subject_version_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "waiting_approval",
+              "waiting_input",
+              "waiting_timer",
+              "waiting_child",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "budget_exceeded",
+              "policy_blocked",
+              "cancelled"
+            ]
+          },
+          "failure_class": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termination_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "initiator_id": {
+            "type": "string"
+          },
+          "input": {},
+          "output": {},
+          "limits": {
+            "$ref": "#/components/schemas/RunLimits"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/RunUsage"
+          },
+          "cost_micro_usd": {
+            "type": "integer"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "last_event_seq": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "environment_id",
+          "root_run_id",
+          "parent_run_id",
+          "subject_type",
+          "subject_version_id",
+          "status",
+          "failure_class",
+          "termination_reason",
+          "initiator_id",
+          "limits",
+          "usage",
+          "cost_micro_usd",
+          "labels",
+          "last_event_seq",
+          "created_at",
+          "started_at",
+          "ended_at"
+        ]
+      },
+      "RunLimits": {
+        "type": "object",
+        "properties": {
+          "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000
+          },
+          "max_wall_time_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 86400000
+          },
+          "max_cost_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000
+          }
+        },
+        "required": [
+          "max_steps",
+          "max_tokens",
+          "max_wall_time_ms",
+          "max_cost_micro_usd"
+        ]
+      },
+      "RunUsage": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "integer"
+          },
+          "tokens_in": {
+            "type": "integer"
+          },
+          "tokens_out": {
+            "type": "integer"
+          },
+          "tool_calls": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps",
+          "tokens_in",
+          "tokens_out",
+          "tool_calls"
+        ]
+      },
+      "CreateRunRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "agent_version",
+              "workflow_version"
+            ],
+            "default": "agent_version"
+          },
+          "subject_version_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input": {},
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_steps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2000000
+              },
+              "max_wall_time_ms": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 86400000
+              },
+              "max_cost_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              }
+            }
+          },
+          "queue": {
+            "type": "string",
+            "minLength": 1,
+            "default": "default"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          },
+          "serialize_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "simulated_steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "llm_call",
+                    "tool_call",
+                    "decision",
+                    "handoff",
+                    "approval",
+                    "memory_op",
+                    "node"
+                  ]
+                },
+                "summary": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "input": {},
+                "output": {},
+                "tokens_in": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tokens_out": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cost_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "latency_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fail_code": {
+                  "type": "string",
+                  "enum": [
+                    "TOOL_TIMEOUT",
+                    "TOOL_UPSTREAM_REJECTED"
+                  ]
+                }
+              }
+            }
+          },
+          "execute_inline": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "subject_version_id"
+        ]
+      },
+      "RunStep": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "tokens_in": {
+            "type": "integer"
+          },
+          "tokens_out": {
+            "type": "integer"
+          },
+          "cost_micro_usd": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "ended_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "seq",
+          "type",
+          "status",
+          "attempt",
+          "idempotency_key",
+          "summary",
+          "tokens_in",
+          "tokens_out",
+          "cost_micro_usd",
+          "latency_ms",
+          "started_at",
+          "ended_at"
+        ]
+      },
+      "RunEvent": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "seq",
+          "type",
+          "data",
+          "created_at"
+        ]
+      },
+      "CancelRunRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "default": "Cancelled via API"
+          }
+        }
+      },
+      "SignalRunRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "approval",
+              "input",
+              "timer",
+              "child"
+            ],
+            "default": "input"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "DlqItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "last_error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "workspace_id",
+          "queue",
+          "attempts",
+          "max_attempts",
+          "last_error",
+          "created_at"
+        ]
+      },
+      "BulkRedriveRequest": {
+        "type": "object",
+        "properties": {
+          "run_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "input_patch": {}
+        },
+        "required": [
+          "run_ids"
+        ]
       }
     },
     "parameters": {}
@@ -1852,6 +2348,557 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "post": {
+        "operationId": "runs.create",
+        "summary": "Enqueue a durable run",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "runs.list",
+        "summary": "List runs in organization or workspace",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "waiting_approval",
+                "waiting_input",
+                "waiting_timer",
+                "waiting_child",
+                "succeeded",
+                "failed",
+                "timed_out",
+                "budget_exceeded",
+                "policy_blocked",
+                "cancelled"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "workspace_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Run"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}": {
+      "get": {
+        "operationId": "runs.get",
+        "summary": "Get run details",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/steps": {
+      "get": {
+        "operationId": "runs.steps",
+        "summary": "List ordered steps for a run",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RunStep"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/events": {
+      "get": {
+        "operationId": "runs.events",
+        "summary": "Fetch or stream (SSE) ordered run events with Last-Event-ID resume",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "required": false,
+            "name": "after_seq",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "stream",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RunEvent"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/cancel": {
+      "post": {
+        "operationId": "runs.cancel",
+        "summary": "Cancel a non-terminal run and propagate to child runs",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/signal": {
+      "post": {
+        "operationId": "runs.signal",
+        "summary": "Send external signal/input to resume a waiting run",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dlq": {
+      "get": {
+        "operationId": "dlq.list",
+        "summary": "List dead-lettered work items",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DlqItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs:bulk-redrive": {
+      "post": {
+        "operationId": "runs.bulk_redrive",
+        "summary": "Re-drive failed or timed-out runs from DLQ",
+        "tags": [
+          "Runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkRedriveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Run"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
                 }
               }
             }

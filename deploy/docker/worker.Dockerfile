@@ -15,6 +15,7 @@ COPY packages/authz/package.json packages/authz/
 COPY packages/config/package.json packages/config/
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
+COPY packages/execution/package.json packages/execution/
 COPY packages/platform-kit/package.json packages/platform-kit/
 COPY packages/sdk-ts/package.json packages/sdk-ts/
 COPY packages/telemetry/package.json packages/telemetry/
