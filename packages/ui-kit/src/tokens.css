@@ -1,0 +1,113 @@
+/* Design tokens per PRD Appendix E.2 (Light, Dark, High-Contrast) */
+:root,
+[data-theme='light'] {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-raised: #f1f5f9;
+  --border: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-disabled: #94a3b8;
+  --brand: #2563eb;
+  --brand-contrast: #ffffff;
+  --success: #15803d;
+  --success-bg: #dcfce7;
+  --danger: #b91c1c;
+  --danger-bg: #fee2e2;
+  --warning: #b45309;
+  --warning-bg: #fef3c7;
+  --info: #1d4ed8;
+  --info-bg: #dbeafe;
+  --human: #6d28d9;
+  --human-bg: #ede9fe;
+  --env-dev: #0f766e;
+  --env-staging: #b45309;
+  --env-prod: #dc2626;
+  --focus-ring: #2563eb;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+[data-theme='dark'] {
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-raised: #1e293b;
+  --border: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-disabled: #64748b;
+  --brand: #60a5fa;
+  --brand-contrast: #0f172a;
+  --success: #4ade80;
+  --success-bg: #14532d;
+  --danger: #f87171;
+  --danger-bg: #7f1d1d;
+  --warning: #fbbf24;
+  --warning-bg: #78350f;
+  --info: #60a5fa;
+  --info-bg: #1e3a8a;
+  --human: #a78bfa;
+  --human-bg: #4c1d95;
+  --env-dev: #2dd4bf;
+  --env-staging: #fbbf24;
+  --env-prod: #ef4444;
+  --focus-ring: #93c5fd;
+}
+
+[data-theme='high-contrast'] {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-raised: #171717;
+  --border: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #e5e5e5;
+  --text-disabled: #a3a3a3;
+  --brand: #facc15;
+  --brand-contrast: #000000;
+  --success: #4ade80;
+  --success-bg: #052e16;
+  --danger: #ff6b6b;
+  --danger-bg: #450a0a;
+  --warning: #fde047;
+  --warning-bg: #422006;
+  --info: #38bdf8;
+  --info-bg: #082f49;
+  --human: #e879f9;
+  --human-bg: #4a044e;
+  --env-dev: #2dd4bf;
+  --env-staging: #fde047;
+  --env-prod: #ff4444;
+  --focus-ring: #facc15;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

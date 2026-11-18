@@ -1,0 +1,276 @@
+x-platform-env: &platform-env
+  PLATFORM_BASE_URL: ${PLATFORM_BASE_URL:-http://localhost:3000}
+  PLATFORM_DB_URL: ${PLATFORM_DB_URL:-postgres://platform_app:platform_app_dev@postgres:5432/platform}
+  PLATFORM_DB_POOL_MAX: ${PLATFORM_DB_POOL_MAX:-40}
+  PLATFORM_REDIS_URL: ${PLATFORM_REDIS_URL:-redis://redis:6379}
+  PLATFORM_NATS_URL: ${PLATFORM_NATS_URL:-nats://nats:4222}
+  PLATFORM_OBJECT_STORE_URL: ${PLATFORM_OBJECT_STORE_URL:-http://minio:9000}
+  PLATFORM_OBJECT_STORE_BUCKET: ${PLATFORM_OBJECT_STORE_BUCKET:-platform-artifacts}
+  PLATFORM_OBJECT_STORE_ACCESS_KEY: ${PLATFORM_OBJECT_STORE_ACCESS_KEY:-minioadmin}
+  PLATFORM_OBJECT_STORE_SECRET_KEY: ${PLATFORM_OBJECT_STORE_SECRET_KEY:-minioadmin}
+  PLATFORM_OBJECT_STORE_REGION: ${PLATFORM_OBJECT_STORE_REGION:-us-east-1}
+  PLATFORM_MASTER_KEY: ${PLATFORM_MASTER_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  PLATFORM_SECRETS_PROVIDER: ${PLATFORM_SECRETS_PROVIDER:-db}
+  PLATFORM_OIDC_ISSUER: ${PLATFORM_OIDC_ISSUER:-}
+  PLATFORM_OIDC_CLIENT_ID: ${PLATFORM_OIDC_CLIENT_ID:-}
+  PLATFORM_OIDC_CLIENT_SECRET: ${PLATFORM_OIDC_CLIENT_SECRET:-}
+  PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-admin@elshad.local}
+  PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-ChangeMe123!}
+  PLATFORM_EDITION: ${PLATFORM_EDITION:-community}
+  PLATFORM_LICENSE_KEY: ${PLATFORM_LICENSE_KEY:-}
+  PLATFORM_OTLP_ENDPOINT: ${PLATFORM_OTLP_ENDPOINT:-}
+  PLATFORM_LOG_LEVEL: ${PLATFORM_LOG_LEVEL:-info}
+  PLATFORM_SANDBOX_MODE: ${PLATFORM_SANDBOX_MODE:-docker}
+  PLATFORM_EGRESS_PROXY_URL: ${PLATFORM_EGRESS_PROXY_URL:-}
+  PLATFORM_SMTP_URL: ${PLATFORM_SMTP_URL:-}
+  PLATFORM_WORKER_QUEUES: ${PLATFORM_WORKER_QUEUES:-default}
+  PLATFORM_WORKER_CONCURRENCY: ${PLATFORM_WORKER_CONCURRENCY:-8}
+  PLATFORM_FEATURE_FLAGS: ${PLATFORM_FEATURE_FLAGS:-}
+  PLATFORM_TELEMETRY_OPTOUT: ${PLATFORM_TELEMETRY_OPTOUT:-false}
+  PLATFORM_API_PORT: ${PLATFORM_API_PORT:-8080}
+  PLATFORM_ENGINE_PORT: ${PLATFORM_ENGINE_PORT:-8081}
+  PLATFORM_API_KEY_PEPPER: ${PLATFORM_API_KEY_PEPPER:-dev-local-pepper-change-in-prod}
+  PLATFORM_CORS_ORIGIN: ${PLATFORM_CORS_ORIGIN:-http://localhost:3000}
+  PLATFORM_LOCAL_AUTH_ENABLED: ${PLATFORM_LOCAL_AUTH_ENABLED:-true}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-platform}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-platform}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: valkey/valkey:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ['-js', '-m', '8222', '-sd', '/data']
+    ports:
+      - '4222:4222'
+      - '8222:8222'
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:8222/healthz']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live || mc ready local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio-init:
+    image: minio/mc:latest
+    restart: 'no'
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      PLATFORM_OBJECT_STORE_BUCKET: ${PLATFORM_OBJECT_STORE_BUCKET:-platform-artifacts}
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && \
+        mc mb --ignore-existing "local/$${PLATFORM_OBJECT_STORE_BUCKET}"
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+      target: migrate
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-platform}
+    command: ['pnpm', '--filter', '@elshad/db', 'migrate:up']
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+      target: runner
+    restart: unless-stopped
+    ports:
+      - '${PLATFORM_API_PORT:-8080}:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:8080/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/engine.Dockerfile
+    restart: unless-stopped
+    ports:
+      - '${PLATFORM_ENGINE_PORT:-8081}:8081'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:8081/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/worker.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'pgrep', '-f', 'apps/worker/dist/main.js']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  console:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/console.Dockerfile
+    restart: unless-stopped
+    ports:
+      - '3000:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:80/']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    profiles: ['observability']
+    restart: unless-stopped
+    ports:
+      - '4317:4317'
+      - '4318:4318'
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    command: ['--config=/etc/otelcol/config.yaml']
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ['local-models']
+    restart: unless-stopped
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  minio_data:
+  ollama_data:

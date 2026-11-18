@@ -1,0 +1,118 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Pool, PoolClient } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  GENESIS_AUDIT_HASH,
+  canonicalJson,
+  computeAuditHash,
+  computeContextHash,
+  verifyAuditEventsChain,
+  withTenantPgClient,
+  type VerifiableAuditEvent,
+} from './index.js';
+
+describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () => {
+  it('enables and forces RLS on every tenant table containing org_id in S0.1 migrations', () => {
+    const migrationsDir = join(__dirname, '..', 'migrations');
+    const sql01 = readFileSync(join(migrationsDir, '0001_extensions_and_roles.sql'), 'utf8');
+    const sql02 = readFileSync(join(migrationsDir, '0002_s01_core_schema.sql'), 'utf8');
+
+    expect(sql01).toContain('CREATE EXTENSION IF NOT EXISTS citext');
+    expect(sql01).toContain('CREATE ROLE platform_app');
+    expect(sql01).toContain('NOBYPASSRLS');
+    expect(sql01).toContain('ENABLE ROW LEVEL SECURITY');
+    expect(sql01).toContain('FORCE ROW LEVEL SECURITY');
+
+    // Parse all CREATE TABLE statements in 0002 and ensure every table with org_id enables RLS
+    const tableBlocks = [...sql02.matchAll(/CREATE TABLE (\w+)\s*\(([\s\S]*?)\)\s*(?:PARTITION|;)/g)];
+    const tenantTables = tableBlocks
+      .filter(([, name, body]) => name !== 'organizations' && /\borg_id\b/.test(body!))
+      .map(([, name]) => name!);
+
+    expect(tenantTables).toContain('workspaces');
+    expect(tenantTables).toContain('projects');
+    expect(tenantTables).toContain('outbox');
+    expect(tenantTables).toContain('audit_events');
+    expect(tenantTables).toContain('api_keys');
+
+    for (const tbl of tenantTables) {
+      if (tbl === 'roles') {
+        expect(sql02).toContain(`ALTER TABLE roles ENABLE ROW LEVEL SECURITY`);
+        expect(sql02).toContain(`ALTER TABLE roles FORCE ROW LEVEL SECURITY`);
+      } else {
+        expect(sql02).toContain(`enable_tenant_rls('${tbl}')`);
+      }
+    }
+
+    expect(sql02).toContain('REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM PUBLIC');
+    expect(sql02).toContain('audit_events_2026_11');
+  });
+
+  it('produces deterministic canonical JSON and detects audit tampering', () => {
+    expect(canonicalJson({ b: 2, a: { z: 1, y: 2 } })).toBe('{"a":{"y":2,"z":1},"b":2}');
+
+    const events: VerifiableAuditEvent[] = [];
+    let prev = GENESIS_AUDIT_HASH;
+    for (let seq = 1; seq <= 3; seq++) {
+      const ctxHash = computeContextHash({ ip: '127.0.0.1', seq });
+      const base = {
+        actor: { id: 'prn_1', type: 'user' },
+        on_behalf_of: null,
+        action: 'api_key.create',
+        resource: { type: 'api_key', id: `key_${seq}` },
+        decision: 'allow',
+        policy_ids: null,
+        context_hash: ctxHash,
+        ts: `2026-11-18T12:00:0${seq}.000Z`,
+        seq,
+      };
+      const hash = computeAuditHash(prev, base);
+      events.push({ id: `aud_${seq}`, prev_hash: prev, hash, ...base });
+      prev = hash;
+    }
+
+    expect(verifyAuditEventsChain(events)).toEqual({ valid: true, checkedCount: 3 });
+
+    const tampered = structuredClone(events);
+    tampered[1]!.action = 'org.delete';
+    const result = verifyAuditEventsChain(tampered);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAtSeq).toBe(2);
+  });
+
+  it('issues BEGIN, SET LOCAL app.org_id, and COMMIT/ROLLBACK in withTenantPgClient', async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockClient = {
+      query: vi.fn(async (sqlText: string, params?: unknown[]) => {
+        queries.push({ sql: sqlText, params });
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    } as unknown as PoolClient;
+
+    const mockPool = {
+      connect: vi.fn(async () => mockClient),
+    } as unknown as Pool;
+
+    await withTenantPgClient(mockPool, 'org_uuid_1', async () => 'ok');
+    expect(queries.map((q) => q.sql)).toEqual([
+      'BEGIN',
+      "SELECT set_config('app.org_id', $1, true)",
+      'COMMIT',
+    ]);
+    expect(queries[1]!.params).toEqual(['org_uuid_1']);
+
+    queries.length = 0;
+    await expect(
+      withTenantPgClient(mockPool, 'org_uuid_2', async () => {
+        throw new Error('fail');
+      }),
+    ).rejects.toThrow('fail');
+    expect(queries.map((q) => q.sql)).toEqual([
+      'BEGIN',
+      "SELECT set_config('app.org_id', $1, true)",
+      'ROLLBACK',
+    ]);
+  });
+});

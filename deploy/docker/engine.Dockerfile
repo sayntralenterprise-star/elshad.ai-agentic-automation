@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+
+FROM node:22-alpine AS base
+WORKDIR /app
+RUN npm install -g pnpm@12.14.0 && npm cache clean --force
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/console/package.json apps/console/
+COPY apps/engine/package.json apps/engine/
+COPY apps/worker/package.json apps/worker/
+COPY packages/api-contract/package.json packages/api-contract/
+COPY packages/authz/package.json packages/authz/
+COPY packages/config/package.json packages/config/
+COPY packages/db/package.json packages/db/
+COPY packages/domain/package.json packages/domain/
+COPY packages/platform-kit/package.json packages/platform-kit/
+COPY packages/sdk-ts/package.json packages/sdk-ts/
+COPY packages/telemetry/package.json packages/telemetry/
+COPY packages/ui-kit/package.json packages/ui-kit/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY packages /tmp/src/packages
+COPY apps/engine /tmp/src/apps/engine
+RUN find /tmp/src \( -name node_modules -o -name dist -o -name .turbo -o -name coverage \) -prune -exec rm -rf {} + \
+  && cp -R /tmp/src/packages/. ./packages/ \
+  && cp -R /tmp/src/apps/engine/. ./apps/engine/ \
+  && rm -rf /tmp/src \
+  && pnpm --filter @elshad/engine... build \
+  && CI=true pnpm prune --prod --yes
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build --chown=node:node /app/package.json /app/pnpm-workspace.yaml ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/packages ./packages
+COPY --from=build --chown=node:node /app/apps/engine ./apps/engine
+USER node
+EXPOSE 8081
+CMD ["node", "apps/engine/dist/main.js"]

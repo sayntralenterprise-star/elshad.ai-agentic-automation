@@ -1,0 +1,18 @@
+{
+  "name": "@elshad/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@elshad/config": "workspace:*",
+    "@elshad/db": "workspace:*",
+    "@elshad/domain": "workspace:*",
+    "@elshad/platform-kit": "workspace:*",
+    "@elshad/telemetry": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js"
+  }
+}
