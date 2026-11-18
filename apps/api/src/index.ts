@@ -16,7 +16,7 @@ import {
   type Permission,
 } from '@elshad/authz';
 import type { PlatformConfig } from '@elshad/config';
-import { canonicalJson } from '@elshad/db';
+import { canonicalJson, verifyAuditEventsChain } from '@elshad/db';
 import {
   PlatformError,
   SystemClock,
@@ -65,17 +65,29 @@ import {
   type SensitivityLevel,
 } from '@elshad/memory-kit';
 import {
+  EnvelopeSecretsProvider,
   InMemoryCache,
   SlidingWindowRateLimiter,
   type Cache,
+  type SecretRecordMetadata,
+  type SecretRef,
+  type SecretsProvider,
 } from '@elshad/platform-kit';
 import type { AutonomyLevel } from '@elshad/policy-kit';
 import {
+  BudgetManager,
   InMemoryUsageLedger,
+  KillSwitchService,
   diffAgentDefinitions,
   executeReActAgentRun,
   validateAgentDefinition,
   type AgentDefinition,
+  type BudgetActionOnBreach,
+  type BudgetPeriod,
+  type BudgetRecord,
+  type BudgetScopeType,
+  type KillSwitchRecord,
+  type KillSwitchScopeType,
   type UsageLedger,
   type UsageLedgerEntry,
 } from '@elshad/runtime-core';
@@ -136,6 +148,9 @@ export interface ApiServerOptions {
   memoryBackend?: InMemoryMemoryBackend;
   sessionStore?: ConversationSessionStore;
   kbService?: KnowledgeBaseService;
+  secretsProvider?: SecretsProvider;
+  budgetManager?: BudgetManager;
+  killSwitchService?: KillSwitchService;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -184,6 +199,9 @@ export function buildApiServer(opts: ApiServerOptions): {
   memoryBackend: InMemoryMemoryBackend;
   sessionStore: ConversationSessionStore;
   kbService: KnowledgeBaseService;
+  secretsProvider: SecretsProvider;
+  budgetManager: BudgetManager;
+  killSwitchService: KillSwitchService;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -214,6 +232,10 @@ export function buildApiServer(opts: ApiServerOptions): {
   const kbService = opts.kbService ?? new KnowledgeBaseService({ clock, idGen });
   const kbSearchTool = createKbSearchTool(kbService);
   toolGateway.registry.register(kbSearchTool.contract, kbSearchTool.executor);
+  const secretsProvider: SecretsProvider =
+    opts.secretsProvider ?? new EnvelopeSecretsProvider(opts.config.PLATFORM_MASTER_KEY, clock);
+  const budgetManager = opts.budgetManager ?? new BudgetManager({ clock, idGen });
+  const killSwitchService = opts.killSwitchService ?? new KillSwitchService({ clock, idGen });
   const modelGateway =
     opts.modelGateway ??
     (() => {
@@ -1805,6 +1827,18 @@ export function buildApiServer(opts: ApiServerOptions): {
       throw new PlatformError('RES_NOT_FOUND', `Environment ${envKind} not found.`);
     }
 
+    const ksHit = killSwitchService.checkBlocked({
+      orgId,
+      workspaceId: agent.workspace_id,
+      agentId: agent.id,
+    });
+    if (ksHit) {
+      throw new PlatformError(
+        'POL_DENIED',
+        `Execution blocked by ${ksHit.scopeType} kill switch (${ksHit.scopeId}): ${ksHit.reason}`,
+      );
+    }
+
     const tenantCtx = buildTenantContext(req, agent.workspace_id, env.id);
     const runRecord = await executionEngine.createRun(tenantCtx, {
       workspaceId: agent.workspace_id,
@@ -1865,6 +1899,8 @@ export function buildApiServer(opts: ApiServerOptions): {
         modelGateway: effectiveModelGateway,
         toolGateway: reqToolGateway,
         usageLedger,
+        budgetManager,
+        killSwitchService,
         clock,
         idGen,
         projectMaxAutonomy: parseProjectMaxAutonomy(project?.max_autonomy_level),
@@ -1922,6 +1958,12 @@ export function buildApiServer(opts: ApiServerOptions): {
               ? JSON.stringify(execResult.output)
               : execResult.terminationReason,
         });
+      } else if (execResult.status === 'cancelled') {
+        await executionEngine.cancel(
+          tenantCtx,
+          runRecord.id,
+          execResult.error?.message ?? 'Halted by emergency kill switch.',
+        );
       } else {
         await executionEngine.retryOrFail(
           lease,
@@ -2420,6 +2462,17 @@ export function buildApiServer(opts: ApiServerOptions): {
       throw new PlatformError('RES_NOT_FOUND', `Environment ${envKind} not found.`);
     }
 
+    const ksWfHit = killSwitchService.checkBlocked({
+      orgId,
+      workspaceId: wf.workspace_id,
+    });
+    if (ksWfHit) {
+      throw new PlatformError(
+        'POL_DENIED',
+        `Workflow run blocked by ${ksWfHit.scopeType} kill switch (${ksWfHit.scopeId}): ${ksWfHit.reason}`,
+      );
+    }
+
     const tenantCtx = buildTenantContext(req, wf.workspace_id, env.id);
     const execResult = await executeWorkflowGraph(
       {
@@ -2493,6 +2546,16 @@ export function buildApiServer(opts: ApiServerOptions): {
       const wf = workflowsById.get(delivery.trigger.workflowId);
       const version = wf?.versions.find((v) => v.id === delivery.trigger.workflowVersionId);
       if (wf && version) {
+        const hookKsHit = killSwitchService.checkBlocked({
+          orgId: wf.org_id,
+          workspaceId: wf.workspace_id,
+        });
+        if (hookKsHit) {
+          throw new PlatformError(
+            'POL_DENIED',
+            `Webhook run blocked by ${hookKsHit.scopeType} kill switch (${hookKsHit.scopeId}): ${hookKsHit.reason}`,
+          );
+        }
         const hookCtx: TenantContext = {
           orgId: wf.org_id as OrgId,
           workspaceId: wf.workspace_id as WorkspaceId,
@@ -3146,6 +3209,297 @@ export function buildApiServer(opts: ApiServerOptions): {
     return formatted;
   });
 
+  // ---------- S0.6 Hardening Endpoints (Secrets, Budgets, Kill Switches, Audit Verify) ----------
+
+  function formatSecretMetaWire(m: SecretRecordMetadata): Record<string, unknown> {
+    return {
+      id: m.id,
+      ref: m.ref,
+      org_id: m.orgId,
+      provider: m.provider,
+      name: m.name,
+      environment_id: m.environmentId ?? null,
+      key_version: m.keyVersion,
+      ...(m.kekVersion !== undefined ? { kek_version: m.kekVersion } : {}),
+      created_at: m.createdAt,
+      updated_at: m.updatedAt,
+    };
+  }
+
+  function formatBudgetWire(b: BudgetRecord): Record<string, unknown> {
+    return {
+      id: b.id,
+      org_id: b.orgId,
+      workspace_id: b.workspaceId,
+      project_id: b.projectId,
+      agent_id: b.agentId,
+      scope_type: b.scopeType,
+      scope_id: b.scopeId,
+      period: b.period,
+      soft_limit_micro_usd: b.softLimitMicroUsd,
+      hard_limit_micro_usd: b.hardLimitMicroUsd,
+      soft_limit_tokens: b.softLimitTokens,
+      hard_limit_tokens: b.hardLimitTokens,
+      spent_micro_usd: b.spentMicroUsd,
+      spent_tokens: b.spentTokens,
+      action_on_breach: b.actionOnBreach,
+      alert_emitted_at: b.alertEmittedAt,
+      created_by: b.createdBy,
+      created_at: b.createdAt,
+      updated_at: b.updatedAt,
+    };
+  }
+
+  function formatKillSwitchWire(k: KillSwitchRecord): Record<string, unknown> {
+    return {
+      id: k.id,
+      org_id: k.orgId,
+      workspace_id: k.workspaceId,
+      scope_type: k.scopeType,
+      scope_id: k.scopeId,
+      active: k.active,
+      reason: k.reason,
+      activated_by: k.activatedBy,
+      activated_at: k.activatedAt,
+      deactivated_by: k.deactivatedBy,
+      deactivated_at: k.deactivatedAt,
+    };
+  }
+
+  function resolveSecretRefParam(idOrRef: string): SecretRef {
+    return idOrRef.startsWith('secret://') ? (idOrRef as SecretRef) : `secret://db/${idOrRef}`;
+  }
+
+  app.get('/api/v1/secrets', async (req) => {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const list = await (secretsProvider.listMetadata?.(buildTenantContext(req, workspaceId)) ??
+      Promise.resolve([]));
+    return { data: list.map(formatSecretMetaWire) };
+  });
+
+  app.post('/api/v1/secrets', async (req, reply) => {
+    const routePath = '/api/v1/secrets';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      value: string;
+      environment_id?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const ctx = buildTenantContext(req, workspaceId);
+    const ref = await secretsProvider.put(ctx, new TextEncoder().encode(body.value), {
+      name: body.name.trim(),
+      environmentId: body.environment_id,
+    });
+    const meta = await secretsProvider.getMetadata(ctx, ref);
+    if (!meta) {
+      throw new PlatformError('SYS_INTERNAL', 'Secret metadata missing after write.');
+    }
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'secret.put',
+      resource: { type: 'secret', id: meta.id, name: meta.name, key_version: meta.keyVersion },
+      decision: 'allow',
+    });
+
+    const formatted = formatSecretMetaWire(meta);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.post('/api/v1/secrets/:id/rotate', async (req) => {
+    const routePath = '/api/v1/secrets/{id}/rotate';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ value: string }>(contract.bodySchema, req.body);
+    const { id } = req.params as { id: string };
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const ctx = buildTenantContext(req);
+    const ref = resolveSecretRefParam(id);
+    await secretsProvider.rotate(ctx, ref, new TextEncoder().encode(body.value));
+    const meta = await secretsProvider.getMetadata(ctx, ref);
+    if (!meta) {
+      throw new PlatformError('RES_NOT_FOUND', `Secret ${id} not found.`);
+    }
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'secret.rotate',
+      resource: { type: 'secret', id: meta.id, name: meta.name, key_version: meta.keyVersion },
+      decision: 'allow',
+    });
+
+    const formatted = formatSecretMetaWire(meta);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.delete('/api/v1/secrets/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const ctx = buildTenantContext(req);
+    const ref = resolveSecretRefParam(id);
+    const existing = await secretsProvider.getMetadata(ctx, ref);
+    if (!existing) {
+      throw new PlatformError('RES_NOT_FOUND', `Secret ${id} not found.`);
+    }
+    await secretsProvider.delete(ctx, ref);
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'secret.delete',
+      resource: { type: 'secret', id: existing.id, name: existing.name },
+      decision: 'allow',
+    });
+    return reply.status(204).send();
+  });
+
+  app.get('/api/v1/budgets', async (req) => {
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = budgetManager.list(orgId, state.workspaceId).map(formatBudgetWire);
+    return { data };
+  });
+
+  app.post('/api/v1/budgets', async (req) => {
+    const routePath = '/api/v1/budgets';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      scope_type: BudgetScopeType;
+      scope_id: string;
+      period: BudgetPeriod;
+      workspace_id?: string | null;
+      project_id?: string | null;
+      agent_id?: string | null;
+      soft_limit_micro_usd?: number | null;
+      hard_limit_micro_usd?: number | null;
+      soft_limit_tokens?: number | null;
+      hard_limit_tokens?: number | null;
+      action_on_breach: BudgetActionOnBreach;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const saved = budgetManager.upsertBudget(buildTenantContext(req, workspaceId ?? undefined), {
+      scopeType: body.scope_type,
+      scopeId: body.scope_id,
+      period: body.period,
+      workspaceId,
+      projectId: body.project_id,
+      agentId: body.agent_id,
+      softLimitMicroUsd: body.soft_limit_micro_usd,
+      hardLimitMicroUsd: body.hard_limit_micro_usd,
+      softLimitTokens: body.soft_limit_tokens,
+      hardLimitTokens: body.hard_limit_tokens,
+      actionOnBreach: body.action_on_breach,
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'budget.upsert',
+      resource: {
+        type: 'budget',
+        id: saved.id,
+        scope_type: saved.scopeType,
+        scope_id: saved.scopeId,
+      },
+      decision: 'allow',
+    });
+
+    const formatted = formatBudgetWire(saved);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.get('/api/v1/killswitches', async (req) => {
+    const state = req.platformState!;
+    const orgId = state.auth!.context.org.id;
+    const data = killSwitchService.list(orgId, state.workspaceId).map(formatKillSwitchWire);
+    return { data };
+  });
+
+  app.post('/api/v1/killswitches', async (req) => {
+    const routePath = '/api/v1/killswitches';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      scope_type: KillSwitchScopeType;
+      scope_id?: string;
+      workspace_id?: string | null;
+      reason: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const activated = killSwitchService.activate(buildTenantContext(req, workspaceId ?? undefined), {
+      scopeType: body.scope_type,
+      scopeId: body.scope_id,
+      workspaceId,
+      reason: body.reason,
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'killswitch.activate',
+      resource: {
+        type: 'killswitch',
+        id: activated.id,
+        scope_type: activated.scopeType,
+        scope_id: activated.scopeId,
+      },
+      decision: 'allow',
+    });
+
+    const formatted = formatKillSwitchWire(activated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/killswitches/:id/deactivate', async (req) => {
+    const routePath = '/api/v1/killswitches/{id}/deactivate';
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const deactivated = killSwitchService.deactivate(buildTenantContext(req), id);
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'killswitch.deactivate',
+      resource: { type: 'killswitch', id: deactivated.id },
+      decision: 'allow',
+    });
+
+    const formatted = formatKillSwitchWire(deactivated);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.get('/api/v1/audit/verify', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const collected = [];
+    let cursor: string | undefined;
+    do {
+      const page = await store.listAuditEvents(orgId, { limit: 200, cursor });
+      collected.push(...page.data);
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+
+    const res = verifyAuditEventsChain(collected);
+    return {
+      valid: res.valid,
+      checked_count: res.checkedCount,
+      ...(res.brokenAtSeq !== undefined ? { broken_at_seq: res.brokenAtSeq } : {}),
+      ...(res.reason ? { reason: res.reason } : {}),
+    };
+  });
+
   return {
     app,
     store,
@@ -3157,5 +3511,8 @@ export function buildApiServer(opts: ApiServerOptions): {
     memoryBackend,
     sessionStore,
     kbService,
+    secretsProvider,
+    budgetManager,
+    killSwitchService,
   };
 }

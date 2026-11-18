@@ -578,6 +578,66 @@ export interface KbChunksTable {
   deleted_at: Date | null;
 }
 
+export interface SecretsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  environment_id: string | null;
+  name: string;
+  secret_ref: string;
+  provider: 'db' | 'vault' | 'env';
+  key_version: number;
+  wrapped_dek: Uint8Array;
+  dek_iv: Uint8Array;
+  dek_tag: Uint8Array;
+  ciphertext: Uint8Array;
+  data_iv: Uint8Array;
+  data_tag: Uint8Array;
+  purpose_allowlist: string[];
+  last_rotated_at: Date | null;
+  expires_at: Date | null;
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface BudgetsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string | null;
+  project_id: string | null;
+  agent_id: string | null;
+  scope_type: 'org' | 'workspace' | 'project' | 'agent';
+  scope_id: string;
+  period: 'daily' | 'weekly' | 'monthly';
+  soft_limit_micro_usd: number | null;
+  hard_limit_micro_usd: number | null;
+  soft_limit_tokens: number | null;
+  hard_limit_tokens: number | null;
+  spent_micro_usd: number;
+  spent_tokens: number;
+  action_on_breach: 'downgrade_model' | 'require_approval' | 'stop';
+  alert_emitted_at: Date | null;
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface KillswitchesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string | null;
+  scope_type: 'global' | 'workspace' | 'agent' | 'tool';
+  scope_id: string;
+  active: boolean;
+  reason: string;
+  activated_by: string;
+  activated_at: Date;
+  deactivated_by: string | null;
+  deactivated_at: Date | null;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -617,6 +677,9 @@ export interface Database {
   kb_sources: KbSourcesTable;
   kb_documents: KbDocumentsTable;
   kb_chunks: KbChunksTable;
+  secrets: SecretsTable;
+  budgets: BudgetsTable;
+  killswitches: KillswitchesTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

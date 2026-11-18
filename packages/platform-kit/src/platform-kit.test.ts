@@ -12,6 +12,8 @@ import {
   InMemoryEventBus,
   InMemoryObjectStore,
   SlidingWindowRateLimiter,
+  VaultSecretsProvider,
+  scanForSecretLeaks,
 } from './index.js';
 
 class FakeClock implements Clock {
@@ -123,5 +125,83 @@ describe('@elshad/platform-kit [D13, F.3]', () => {
     const readBack = await store.get(makeCtx('org_a'), ref);
     expect(Buffer.from(readBack).toString('utf8')).toBe('{"ok":true}');
     await expect(store.get(makeCtx('org_b'), ref)).rejects.toThrowError(PlatformError);
+  });
+
+  it('supports KEK master-key rotation, VaultSecretsProvider adapter & leak scanning [E0.6-1]', async () => {
+    const clock = new FakeClock(1_760_000_000_000);
+    const envProvider = new EnvelopeSecretsProvider(
+      'master-kek-v1-secret-material-32bytes!',
+      clock,
+    );
+    const ctx = makeCtx('org_a');
+    const refV1 = await envProvider.put(ctx, new TextEncoder().encode('tok-before-kek-rot'), {
+      name: 'stripe_key',
+    });
+    expect(envProvider.rotateMasterKey('master-kek-v2-secret-material-32bytes!')).toBe(2);
+
+    // Prior KEK v1 secret remains readable after master key rotation
+    const readOld = new TextDecoder().decode(await envProvider.resolve(ctx, refV1, 'tool_call'));
+    expect(readOld).toBe('tok-before-kek-rot');
+
+    const refV2 = await envProvider.put(ctx, new TextEncoder().encode('tok-under-kek-v2'), {
+      name: 'slack_bot',
+    });
+    expect((await envProvider.getMetadata(ctx, refV2))?.kekVersion).toBe(2);
+    expect((await envProvider.listMetadata(ctx)).length).toBe(2);
+
+    // VaultSecretsProvider with offline KV transport
+    const kv = new Map<string, Record<string, unknown>>();
+    const vault = new VaultSecretsProvider({
+      address: 'https://vault.internal:8200',
+      clock,
+      transport: {
+        request: async ({ method, path, body }) => {
+          if (method === 'POST') {
+            kv.set(path, (body?.['data'] ?? {}) as Record<string, unknown>);
+            return { status: 200, data: { data: { data: kv.get(path) } } };
+          }
+          if (method === 'GET') {
+            const found = kv.get(path);
+            return found ? { status: 200, data: { data: { data: found } } } : { status: 404 };
+          }
+          kv.delete(path);
+          return { status: 204 };
+        },
+      },
+    });
+    const vaultRef = await vault.put(ctx, new TextEncoder().encode('vault-api-token-99'), {
+      name: 'erp_token',
+    });
+    expect(vaultRef.startsWith('secret://vault/')).toBe(true);
+    expect(new TextDecoder().decode(await vault.resolve(ctx, vaultRef, 'tool_call'))).toBe(
+      'vault-api-token-99',
+    );
+    await vault.rotate(ctx, vaultRef, new TextEncoder().encode('vault-api-token-100'));
+    expect((await vault.getMetadata(ctx, vaultRef))?.keyVersion).toBe(2);
+    await vault.delete(ctx, vaultRef);
+    expect(await vault.getMetadata(ctx, vaultRef)).toBeNull();
+
+    // Automated secret leak scanner
+    const cleanScan = scanForSecretLeaks(
+      [
+        { step: 'ok', ref: vaultRef, msg: 'Using [REDACTED:api_key]' },
+      ],
+      ['vault-api-token-99', 'tok-under-kek-v2'],
+    );
+    expect(cleanScan.clean).toBe(true);
+    expect(cleanScan.findings).toHaveLength(0);
+
+    const dirtyScan = scanForSecretLeaks(
+      [
+        { trace: { output: 'leaked tok-under-kek-v2 in payload' } },
+        { log: 'raw key sk-live-secret-1234567890' },
+      ],
+      ['tok-under-kek-v2'],
+    );
+    expect(dirtyScan.clean).toBe(false);
+    expect(dirtyScan.findings.map((f) => f.reason)).toEqual([
+      'known_secret_leak',
+      'pattern_secret_leak',
+    ]);
   });
 });

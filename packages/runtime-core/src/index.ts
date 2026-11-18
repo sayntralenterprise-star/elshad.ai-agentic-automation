@@ -623,10 +623,319 @@ export class InMemoryUsageLedger implements UsageLedger {
   }
 }
 
+// ---------- Hardening: Budgets (N.2.6, FR-GOV-14) & Kill Switches (C.8, E0.6-3) ----------
+
+export type BudgetScopeType = 'org' | 'workspace' | 'project' | 'agent';
+export type BudgetPeriod = 'daily' | 'weekly' | 'monthly';
+export type BudgetActionOnBreach = 'downgrade_model' | 'require_approval' | 'stop';
+
+export interface BudgetRecord {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string | null;
+  readonly projectId: string | null;
+  readonly agentId: string | null;
+  readonly scopeType: BudgetScopeType;
+  readonly scopeId: string;
+  readonly period: BudgetPeriod;
+  readonly softLimitMicroUsd: number | null;
+  readonly hardLimitMicroUsd: number | null;
+  readonly softLimitTokens: number | null;
+  readonly hardLimitTokens: number | null;
+  spentMicroUsd: number;
+  spentTokens: number;
+  readonly actionOnBreach: BudgetActionOnBreach;
+  alertEmittedAt: string | null;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  updatedAt: string;
+}
+
+export interface BudgetEvaluationResult {
+  readonly allowed: boolean;
+  readonly action: BudgetActionOnBreach | null;
+  readonly breachedBudget: BudgetRecord | null;
+  readonly softAlertTriggered: boolean;
+  readonly softAlertBudget: BudgetRecord | null;
+  readonly reason?: string;
+}
+
+export class BudgetManager {
+  private readonly budgets = new Map<string, BudgetRecord>();
+  private readonly clock: Clock;
+  private readonly idGen: IdGen;
+
+  constructor(opts: { clock?: Clock; idGen?: IdGen } = {}) {
+    this.clock = opts.clock ?? new SystemClock();
+    this.idGen = opts.idGen ?? new SystemIdGen();
+  }
+
+  private compositeKey(orgId: string, scopeType: BudgetScopeType, scopeId: string): string {
+    return `${orgId}::${scopeType}::${scopeId}`;
+  }
+
+  upsertBudget(
+    ctx: TenantContext,
+    input: {
+      scopeType: BudgetScopeType;
+      scopeId: string;
+      period?: BudgetPeriod;
+      workspaceId?: string | null;
+      projectId?: string | null;
+      agentId?: string | null;
+      softLimitMicroUsd?: number | null;
+      hardLimitMicroUsd?: number | null;
+      softLimitTokens?: number | null;
+      hardLimitTokens?: number | null;
+      actionOnBreach?: BudgetActionOnBreach;
+    },
+  ): BudgetRecord {
+    const key = this.compositeKey(ctx.orgId, input.scopeType, input.scopeId);
+    const existing = this.budgets.get(key);
+    const nowIso = this.clock.now().toISOString();
+    const record: BudgetRecord = {
+      id: existing?.id ?? `bud_${this.idGen.uuidv7(this.clock.now().getTime())}`,
+      orgId: ctx.orgId,
+      workspaceId: input.workspaceId ?? (input.scopeType === 'workspace' ? input.scopeId : existing?.workspaceId ?? ctx.workspaceId ?? null),
+      projectId: input.projectId ?? (input.scopeType === 'project' ? input.scopeId : existing?.projectId ?? null),
+      agentId: input.agentId ?? (input.scopeType === 'agent' ? input.scopeId : existing?.agentId ?? null),
+      scopeType: input.scopeType,
+      scopeId: input.scopeId,
+      period: input.period ?? existing?.period ?? 'monthly',
+      softLimitMicroUsd: input.softLimitMicroUsd ?? null,
+      hardLimitMicroUsd: input.hardLimitMicroUsd ?? null,
+      softLimitTokens: input.softLimitTokens ?? null,
+      hardLimitTokens: input.hardLimitTokens ?? null,
+      spentMicroUsd: existing?.spentMicroUsd ?? 0,
+      spentTokens: existing?.spentTokens ?? 0,
+      actionOnBreach: input.actionOnBreach ?? 'stop',
+      alertEmittedAt: existing?.alertEmittedAt ?? null,
+      createdBy: existing?.createdBy ?? ctx.principal.id,
+      createdAt: existing?.createdAt ?? nowIso,
+      updatedAt: nowIso,
+    };
+    this.budgets.set(key, record);
+    return structuredClone(record);
+  }
+
+  list(orgId: string, workspaceId?: string): BudgetRecord[] {
+    const out: BudgetRecord[] = [];
+    for (const b of this.budgets.values()) {
+      if (b.orgId !== orgId) continue;
+      if (workspaceId && b.workspaceId && b.workspaceId !== workspaceId) continue;
+      out.push(structuredClone(b));
+    }
+    return out;
+  }
+
+  private resolveHierarchy(opts: {
+    orgId: string;
+    workspaceId: string;
+    projectId: string;
+    agentId: string;
+  }): BudgetRecord[] {
+    const candidates: Array<[BudgetScopeType, string]> = [
+      ['agent', opts.agentId],
+      ['project', opts.projectId],
+      ['workspace', opts.workspaceId],
+      ['org', opts.orgId],
+    ];
+    const matched: BudgetRecord[] = [];
+    for (const [scopeType, scopeId] of candidates) {
+      const b = this.budgets.get(this.compositeKey(opts.orgId, scopeType, scopeId));
+      if (b) matched.push(b);
+    }
+    return matched;
+  }
+
+  /**
+   * Evaluates budgets from narrowest scope (agent) to broadest (org) per PRD N.2.6.
+   */
+  evaluatePreCall(opts: {
+    orgId: string;
+    workspaceId: string;
+    projectId: string;
+    agentId: string;
+    projectedCostMicroUsd: number;
+    projectedTokens: number;
+  }): BudgetEvaluationResult {
+    const hierarchy = this.resolveHierarchy(opts);
+    let softAlertTriggered = false;
+    let softAlertBudget: BudgetRecord | null = null;
+
+    for (const b of hierarchy) {
+      const nextCost = b.spentMicroUsd + opts.projectedCostMicroUsd;
+      const nextTokens = b.spentTokens + opts.projectedTokens;
+
+      const softCostHit = b.softLimitMicroUsd !== null && nextCost >= b.softLimitMicroUsd;
+      const softTokensHit = b.softLimitTokens !== null && nextTokens >= b.softLimitTokens;
+      if ((softCostHit || softTokensHit) && !b.alertEmittedAt) {
+        b.alertEmittedAt = this.clock.now().toISOString();
+        b.updatedAt = b.alertEmittedAt;
+        softAlertTriggered = true;
+        softAlertBudget = structuredClone(b);
+      }
+
+      const hardCostHit = b.hardLimitMicroUsd !== null && nextCost > b.hardLimitMicroUsd;
+      const hardTokensHit = b.hardLimitTokens !== null && nextTokens > b.hardLimitTokens;
+      if (hardCostHit || hardTokensHit) {
+        return {
+          allowed: false,
+          action: b.actionOnBreach,
+          breachedBudget: structuredClone(b),
+          softAlertTriggered,
+          softAlertBudget,
+          reason: hardCostHit
+            ? `${b.scopeType} hard cost limit reached (${nextCost} > ${b.hardLimitMicroUsd} micro-USD).`
+            : `${b.scopeType} hard token limit reached (${nextTokens} > ${b.hardLimitTokens} tokens).`,
+        };
+      }
+    }
+
+    return {
+      allowed: true,
+      action: null,
+      breachedBudget: null,
+      softAlertTriggered,
+      softAlertBudget,
+    };
+  }
+
+  recordSpend(opts: {
+    orgId: string;
+    workspaceId: string;
+    projectId: string;
+    agentId: string;
+    costMicroUsd: number;
+    tokens: number;
+  }): void {
+    const nowIso = this.clock.now().toISOString();
+    for (const b of this.resolveHierarchy(opts)) {
+      b.spentMicroUsd += opts.costMicroUsd;
+      b.spentTokens += opts.tokens;
+      b.updatedAt = nowIso;
+    }
+  }
+}
+
+export type KillSwitchScopeType = 'global' | 'workspace' | 'agent' | 'tool';
+
+export interface KillSwitchRecord {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string | null;
+  readonly scopeType: KillSwitchScopeType;
+  readonly scopeId: string;
+  active: boolean;
+  reason: string;
+  activatedBy: string;
+  activatedAt: string;
+  deactivatedBy: string | null;
+  deactivatedAt: string | null;
+}
+
+export class KillSwitchService {
+  private readonly switches = new Map<string, KillSwitchRecord>();
+  private readonly clock: Clock;
+  private readonly idGen: IdGen;
+
+  constructor(opts: { clock?: Clock; idGen?: IdGen } = {}) {
+    this.clock = opts.clock ?? new SystemClock();
+    this.idGen = opts.idGen ?? new SystemIdGen();
+  }
+
+  activate(
+    ctx: TenantContext,
+    input: {
+      scopeType: KillSwitchScopeType;
+      scopeId?: string;
+      workspaceId?: string | null;
+      reason: string;
+    },
+  ): KillSwitchRecord {
+    const scopeId = input.scopeId ?? (input.scopeType === 'global' ? '*' : ctx.workspaceId ?? '*');
+    for (const existing of this.switches.values()) {
+      if (
+        existing.orgId === ctx.orgId &&
+        existing.scopeType === input.scopeType &&
+        existing.scopeId === scopeId
+      ) {
+        existing.active = true;
+        existing.reason = input.reason;
+        existing.activatedBy = ctx.principal.id;
+        existing.activatedAt = this.clock.now().toISOString();
+        existing.deactivatedBy = null;
+        existing.deactivatedAt = null;
+        return structuredClone(existing);
+      }
+    }
+
+    const record: KillSwitchRecord = {
+      id: `ksw_${this.idGen.uuidv7(this.clock.now().getTime())}`,
+      orgId: ctx.orgId,
+      workspaceId: input.workspaceId ?? (input.scopeType === 'workspace' ? scopeId : ctx.workspaceId ?? null),
+      scopeType: input.scopeType,
+      scopeId,
+      active: true,
+      reason: input.reason,
+      activatedBy: ctx.principal.id,
+      activatedAt: this.clock.now().toISOString(),
+      deactivatedBy: null,
+      deactivatedAt: null,
+    };
+    this.switches.set(record.id, record);
+    return structuredClone(record);
+  }
+
+  deactivate(ctx: TenantContext, id: string): KillSwitchRecord {
+    const found = this.switches.get(id);
+    if (!found || found.orgId !== ctx.orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Kill switch ${id} not found.`);
+    }
+    found.active = false;
+    found.deactivatedBy = ctx.principal.id;
+    found.deactivatedAt = this.clock.now().toISOString();
+    return structuredClone(found);
+  }
+
+  list(orgId: string, workspaceId?: string): KillSwitchRecord[] {
+    const out: KillSwitchRecord[] = [];
+    for (const ks of this.switches.values()) {
+      if (ks.orgId !== orgId) continue;
+      if (workspaceId && ks.scopeType === 'workspace' && ks.scopeId !== workspaceId) continue;
+      out.push(structuredClone(ks));
+    }
+    return out;
+  }
+
+  checkBlocked(opts: {
+    orgId: string;
+    workspaceId?: string;
+    agentId?: string;
+    toolName?: string;
+  }): KillSwitchRecord | null {
+    for (const ks of this.switches.values()) {
+      if (!ks.active || ks.orgId !== opts.orgId) continue;
+      if (ks.scopeType === 'global') return structuredClone(ks);
+      if (ks.scopeType === 'workspace' && opts.workspaceId && ks.scopeId === opts.workspaceId) {
+        return structuredClone(ks);
+      }
+      if (ks.scopeType === 'agent' && opts.agentId && ks.scopeId === opts.agentId) {
+        return structuredClone(ks);
+      }
+      if (ks.scopeType === 'tool' && opts.toolName && ks.scopeId === opts.toolName) {
+        return structuredClone(ks);
+      }
+    }
+    return null;
+  }
+}
+
 // ---------- ReAct Runtime Execution Engine (PRD N.2.2, FR-RT-1..2, 7..15) ----------
 
 export type AgentRuntimeEvent =
   | { type: 'run.started'; runId: string; agentName: string; version: string }
+  | { type: 'budget.soft_limit'; budgetId: string; scopeType: BudgetScopeType }
   | { type: 'llm.completed'; stepSeq: number; provider: string; model: string; costMicroUsd: number; content: string }
   | { type: 'tool.called'; stepSeq: number; toolCall: ModelToolCall; dryRun: boolean }
   | { type: 'tool.observed'; stepSeq: number; toolName: string; untrustedSource: boolean; injectionSuspected: boolean; costMicroUsd: number }
@@ -650,6 +959,8 @@ export interface ExecuteAgentRunDeps {
   readonly modelGateway: ModelGateway;
   readonly toolGateway: ToolGateway;
   readonly usageLedger: UsageLedger;
+  readonly budgetManager?: BudgetManager;
+  readonly killSwitchService?: KillSwitchService;
   readonly clock?: Clock;
   readonly idGen?: IdGen;
   readonly projectMaxAutonomy?: AutonomyLevel;
@@ -755,6 +1066,21 @@ export async function executeReActAgentRun(
     },
     async () => {
       for (let turn = 0; turn < def.limits.max_steps; turn++) {
+        // Emergency kill switch check (C.8, E0.6-3)
+        const ksPre = deps.killSwitchService?.checkBlocked({
+          orgId: input.ctx.orgId,
+          workspaceId,
+          agentId: input.agentId,
+        });
+        if (ksPre) {
+          return finishResult('cancelled', 'cancelled', 'policy_violation', {
+            error: {
+              code: 'POL_DENIED',
+              message: `Execution halted by ${ksPre.scopeType} kill switch (${ksPre.scopeId}): ${ksPre.reason}`,
+            },
+          });
+        }
+
         // Check abort / wall-time before calling LLM
         if (input.signal?.aborted) {
           return finishResult('cancelled', 'cancelled', null, { error: { code: 'RUN_CANCELLED', message: 'Run cancelled by caller.' } });
@@ -776,8 +1102,49 @@ export async function executeReActAgentRun(
           });
         }
 
+        let effectiveTier = def.model.tier as ModelTier;
+        let effectiveModel = def.model.model;
+        const preBudget = deps.budgetManager?.evaluatePreCall({
+          orgId: input.ctx.orgId,
+          workspaceId,
+          projectId: input.projectId,
+          agentId: input.agentId,
+          projectedCostMicroUsd: 0,
+          projectedTokens: Math.max(
+            1,
+            Math.ceil((def.prompt.system.length + input.userInput.length) / 4),
+          ),
+        });
+        if (preBudget?.softAlertTriggered && preBudget.softAlertBudget) {
+          input.onEvent?.({
+            type: 'budget.soft_limit',
+            budgetId: preBudget.softAlertBudget.id,
+            scopeType: preBudget.softAlertBudget.scopeType,
+          });
+        }
+        if (preBudget && !preBudget.allowed) {
+          if (preBudget.action === 'downgrade_model') {
+            effectiveTier = 'fast';
+            effectiveModel = def.model.provider === 'mock' ? 'mock/react-fast' : undefined;
+          } else if (preBudget.action === 'require_approval') {
+            return finishResult('waiting_approval', 'escalated', 'policy_violation', {
+              error: {
+                code: 'POL_APPROVAL_REQUIRED',
+                message: preBudget.reason ?? 'Budget hard limit requires approval.',
+              },
+            });
+          } else {
+            return finishResult('budget_exceeded', 'limit_reached', 'budget', {
+              error: {
+                code: 'BUD_HARD_LIMIT',
+                message: preBudget.reason ?? 'Budget hard limit exceeded.',
+              },
+            });
+          }
+        }
+
         const primaryProvider = def.model.provider ?? 'mock';
-        const primaryModel = def.model.model ?? `mock/react-${def.model.tier === 'embedding' ? 'default' : def.model.tier}`;
+        const primaryModel = effectiveModel ?? `mock/react-${effectiveTier === 'embedding' ? 'default' : effectiveTier}`;
         const cap = deps.modelGateway.registry.get(primaryProvider, primaryModel);
         const contextWindow = cap?.contextWindowTokens ?? 64_000;
 
@@ -792,9 +1159,9 @@ export async function executeReActAgentRun(
 
         const llmStarted = clock.now().toISOString();
         const gwResult = await deps.modelGateway.complete(input.ctx, workspaceId, {
-          tier: def.model.tier as ModelTier,
+          tier: effectiveTier,
           provider: def.model.provider,
-          model: def.model.model,
+          model: effectiveModel,
           messages: assembled.messages,
           tools: modelTools,
           temperature: def.model.temperature,
@@ -865,6 +1232,48 @@ export async function executeReActAgentRun(
           content: res.content,
         });
 
+        deps.budgetManager?.recordSpend({
+          orgId: input.ctx.orgId,
+          workspaceId,
+          projectId: input.projectId,
+          agentId: input.agentId,
+          costMicroUsd: callCost,
+          tokens: res.usage.tokensIn + res.usage.tokensOut,
+        });
+        const postLlmBudget = deps.budgetManager?.evaluatePreCall({
+          orgId: input.ctx.orgId,
+          workspaceId,
+          projectId: input.projectId,
+          agentId: input.agentId,
+          projectedCostMicroUsd: 0,
+          projectedTokens: 0,
+        });
+        if (postLlmBudget?.softAlertTriggered && postLlmBudget.softAlertBudget) {
+          input.onEvent?.({
+            type: 'budget.soft_limit',
+            budgetId: postLlmBudget.softAlertBudget.id,
+            scopeType: postLlmBudget.softAlertBudget.scopeType,
+          });
+        }
+        if (postLlmBudget && !postLlmBudget.allowed) {
+          if (postLlmBudget.action === 'stop') {
+            return finishResult('budget_exceeded', 'limit_reached', 'budget', {
+              error: {
+                code: 'BUD_HARD_LIMIT',
+                message: postLlmBudget.reason ?? 'Budget hard limit exceeded.',
+              },
+            });
+          }
+          if (postLlmBudget.action === 'require_approval') {
+            return finishResult('waiting_approval', 'escalated', 'policy_violation', {
+              error: {
+                code: 'POL_APPROVAL_REQUIRED',
+                message: postLlmBudget.reason ?? 'Budget hard limit requires approval.',
+              },
+            });
+          }
+        }
+
         // ReAct branch 1: Model emitted tool calls
         if (res.toolCalls.length > 0) {
           consecutiveEmptyTurns = 0;
@@ -899,6 +1308,21 @@ export async function executeReActAgentRun(
                 error: {
                   code: 'RUN_LOOP_DETECTED',
                   message: loopBeforeCall.details ?? 'Loop detector halted run.',
+                },
+              });
+            }
+
+            const toolKs = deps.killSwitchService?.checkBlocked({
+              orgId: input.ctx.orgId,
+              workspaceId,
+              agentId: input.agentId,
+              toolName: tc.name,
+            });
+            if (toolKs) {
+              return finishResult('cancelled', 'cancelled', 'policy_violation', {
+                error: {
+                  code: 'POL_DENIED',
+                  message: `Tool invocation halted by ${toolKs.scopeType} kill switch (${toolKs.scopeId}): ${toolKs.reason}`,
                 },
               });
             }
@@ -957,6 +1381,16 @@ export async function executeReActAgentRun(
 
               const toolCost = toolRes.dryRun ? 0 : toolRes.costMicroUsd;
               totalCost += toolCost;
+              if (toolCost > 0) {
+                deps.budgetManager?.recordSpend({
+                  orgId: input.ctx.orgId,
+                  workspaceId,
+                  projectId: input.projectId,
+                  agentId: input.agentId,
+                  costMicroUsd: toolCost,
+                  tokens: 0,
+                });
+              }
 
               const tStep = recordStep({
                 type: tc.name === 'ask_human' ? 'handoff' : 'tool_call',

@@ -1,6 +1,6 @@
 # 0008 — JSONata Expression Language for Workflows
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Requirement / decision refs: D8, DOC-Q-009, N.3, FR-WF-1..5
 

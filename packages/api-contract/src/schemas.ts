@@ -1170,3 +1170,108 @@ export const KbQueryResponseWireSchema = z
     ),
   })
   .openapi('KbQueryResponse');
+
+// ---------- S0.6 Hardening Schemas (Secrets, Budgets, Kill Switches, Audit Verify) ----------
+
+export const SecretMetadataWireSchema = z
+  .object({
+    id: z.string(),
+    ref: z.string(),
+    org_id: z.string(),
+    provider: z.enum(['db', 'vault']),
+    name: z.string(),
+    environment_id: z.string().nullable(),
+    key_version: z.number().int(),
+    kek_version: z.number().int().optional(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('SecretMetadata');
+
+export const PutSecretRequestSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    value: z.string().min(1),
+    environment_id: z.string().optional(),
+  })
+  .openapi('PutSecretRequest');
+
+export const RotateSecretRequestSchema = z
+  .object({
+    value: z.string().min(1),
+  })
+  .openapi('RotateSecretRequest');
+
+export const BudgetWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string().nullable(),
+    project_id: z.string().nullable(),
+    agent_id: z.string().nullable(),
+    scope_type: z.enum(['org', 'workspace', 'project', 'agent']),
+    scope_id: z.string(),
+    period: z.enum(['daily', 'weekly', 'monthly']),
+    soft_limit_micro_usd: z.number().int().nullable(),
+    hard_limit_micro_usd: z.number().int().nullable(),
+    soft_limit_tokens: z.number().int().nullable(),
+    hard_limit_tokens: z.number().int().nullable(),
+    spent_micro_usd: z.number().int(),
+    spent_tokens: z.number().int(),
+    action_on_breach: z.enum(['downgrade_model', 'require_approval', 'stop']),
+    alert_emitted_at: z.string().nullable(),
+    created_by: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Budget');
+
+export const UpsertBudgetRequestSchema = z
+  .object({
+    scope_type: z.enum(['org', 'workspace', 'project', 'agent']),
+    scope_id: z.string().min(1),
+    period: z.enum(['daily', 'weekly', 'monthly']).default('monthly'),
+    workspace_id: z.string().nullable().optional(),
+    project_id: z.string().nullable().optional(),
+    agent_id: z.string().nullable().optional(),
+    soft_limit_micro_usd: z.number().int().min(0).nullable().optional(),
+    hard_limit_micro_usd: z.number().int().min(0).nullable().optional(),
+    soft_limit_tokens: z.number().int().min(0).nullable().optional(),
+    hard_limit_tokens: z.number().int().min(0).nullable().optional(),
+    action_on_breach: z.enum(['downgrade_model', 'require_approval', 'stop']).default('stop'),
+  })
+  .openapi('UpsertBudgetRequest');
+
+export const KillSwitchWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string().nullable(),
+    scope_type: z.enum(['global', 'workspace', 'agent', 'tool']),
+    scope_id: z.string(),
+    active: z.boolean(),
+    reason: z.string(),
+    activated_by: z.string(),
+    activated_at: z.string(),
+    deactivated_by: z.string().nullable(),
+    deactivated_at: z.string().nullable(),
+  })
+  .openapi('KillSwitch');
+
+export const ActivateKillSwitchRequestSchema = z
+  .object({
+    scope_type: z.enum(['global', 'workspace', 'agent', 'tool']),
+    scope_id: z.string().optional(),
+    workspace_id: z.string().nullable().optional(),
+    reason: z.string().min(1).max(500),
+  })
+  .openapi('ActivateKillSwitchRequest');
+
+export const AuditVerifyResponseSchema = z
+  .object({
+    valid: z.boolean(),
+    checked_count: z.number().int(),
+    broken_at_seq: z.number().int().optional(),
+    reason: z.string().optional(),
+  })
+  .openapi('AuditVerifyResponse');

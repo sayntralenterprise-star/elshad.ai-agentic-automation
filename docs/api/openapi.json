@@ -4060,6 +4060,420 @@
         "required": [
           "query"
         ]
+      },
+      "SecretMetadata": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "db",
+              "vault"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_version": {
+            "type": "integer"
+          },
+          "kek_version": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ref",
+          "org_id",
+          "provider",
+          "name",
+          "environment_id",
+          "key_version",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PutSecretRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ]
+      },
+      "RotateSecretRequest": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "value"
+        ]
+      },
+      "Budget": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "org",
+              "workspace",
+              "project",
+              "agent"
+            ]
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly",
+              "monthly"
+            ]
+          },
+          "soft_limit_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "hard_limit_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "soft_limit_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "hard_limit_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "spent_micro_usd": {
+            "type": "integer"
+          },
+          "spent_tokens": {
+            "type": "integer"
+          },
+          "action_on_breach": {
+            "type": "string",
+            "enum": [
+              "downgrade_model",
+              "require_approval",
+              "stop"
+            ]
+          },
+          "alert_emitted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "agent_id",
+          "scope_type",
+          "scope_id",
+          "period",
+          "soft_limit_micro_usd",
+          "hard_limit_micro_usd",
+          "soft_limit_tokens",
+          "hard_limit_tokens",
+          "spent_micro_usd",
+          "spent_tokens",
+          "action_on_breach",
+          "alert_emitted_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "UpsertBudgetRequest": {
+        "type": "object",
+        "properties": {
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "org",
+              "workspace",
+              "project",
+              "agent"
+            ]
+          },
+          "scope_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly",
+              "monthly"
+            ],
+            "default": "monthly"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "soft_limit_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "hard_limit_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "soft_limit_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "hard_limit_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "action_on_breach": {
+            "type": "string",
+            "enum": [
+              "downgrade_model",
+              "require_approval",
+              "stop"
+            ],
+            "default": "stop"
+          }
+        },
+        "required": [
+          "scope_type",
+          "scope_id"
+        ]
+      },
+      "KillSwitch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "global",
+              "workspace",
+              "agent",
+              "tool"
+            ]
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "activated_by": {
+            "type": "string"
+          },
+          "activated_at": {
+            "type": "string"
+          },
+          "deactivated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deactivated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "scope_type",
+          "scope_id",
+          "active",
+          "reason",
+          "activated_by",
+          "activated_at",
+          "deactivated_by",
+          "deactivated_at"
+        ]
+      },
+      "ActivateKillSwitchRequest": {
+        "type": "object",
+        "properties": {
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "global",
+              "workspace",
+              "agent",
+              "tool"
+            ]
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "scope_type",
+          "reason"
+        ]
+      },
+      "AuditVerifyResponse": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "checked_count": {
+            "type": "integer"
+          },
+          "broken_at_seq": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "valid",
+          "checked_count"
+        ]
       }
     },
     "parameters": {}
@@ -7736,6 +8150,485 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/KbQueryResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "operationId": "secrets.list",
+        "summary": "List write-only secret metadata (no plaintext returned)",
+        "tags": [
+          "Security"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SecretMetadata"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "secrets.put",
+        "summary": "Encrypt and store a write-only credential using envelope AES-256-GCM",
+        "tags": [
+          "Security"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutSecretRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadata"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{id}/rotate": {
+      "post": {
+        "operationId": "secrets.rotate",
+        "summary": "Rotate a secret value and increment its envelope key version",
+        "tags": [
+          "Security"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecretRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadata"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{id}": {
+      "delete": {
+        "operationId": "secrets.delete",
+        "summary": "Delete a stored secret",
+        "tags": [
+          "Security"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/budgets": {
+      "get": {
+        "operationId": "budgets.list",
+        "summary": "List hierarchical cost and token budgets",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Budget"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "budgets.upsert",
+        "summary": "Create or update a soft/hard budget limit",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBudgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Budget"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/killswitches": {
+      "get": {
+        "operationId": "killswitches.list",
+        "summary": "List active and historical emergency kill switches",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/KillSwitch"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "killswitches.activate",
+        "summary": "Activate an emergency global, workspace, agent, or tool kill switch",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/killswitches/{id}/deactivate": {
+      "post": {
+        "operationId": "killswitches.deactivate",
+        "summary": "Deactivate an active emergency kill switch",
+        "tags": [
+          "Governance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/verify": {
+      "get": {
+        "operationId": "audit.verify",
+        "summary": "Verify SHA-256 hash-chain integrity across organization audit events",
+        "tags": [
+          "Audit"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerifyResponse"
                 }
               }
             }

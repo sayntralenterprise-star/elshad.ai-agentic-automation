@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BuiltInRole } from '@elshad/authz';
 import { createTestConfig } from '@elshad/config';
 import { verifyAuditEventsChain } from '@elshad/db';
+import { scanForSecretLeaks } from '@elshad/platform-kit';
 import { buildApiServer } from './index.js';
 import { InMemoryIamAuditStore } from './store.js';
 
@@ -1301,6 +1302,217 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
       headers: { cookie: cookieB },
     });
     expect(orgBGetKb.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('enforces write-only envelope secrets, 1-step hard budgets, <= 5s kill switch & audit chain verification [E0.6-1..3]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's06-a@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    store.seedOrganization({
+      slug: 's06-org-b',
+      name: 'S06 Org B',
+      adminEmail: 's06-b@elshad.local',
+      adminPassword: 'Password123!',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's06-a@elshad.local', password: 'Password123!' },
+    });
+    const cookieA = parseCookie(loginA.headers['set-cookie']);
+    const csrfA = loginA.json().csrf_token as string;
+
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's06-b@elshad.local', password: 'Password123!' },
+    });
+    const cookieB = parseCookie(loginB.headers['set-cookie']);
+    const csrfB = loginB.json().csrf_token as string;
+
+    // 1. Write-only envelope secret create & rotate (no plaintext leaked)
+    const rawSecretV1 = 'sk-topsecret-stripe-token-9988';
+    const rawSecretV2 = 'sk-rotated-stripe-token-7766';
+    const secCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/secrets',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'sec-put-1' },
+      payload: { name: 'stripe_api_key', value: rawSecretV1 },
+    });
+    expect(secCreate.statusCode).toBe(201);
+    const secretMeta = secCreate.json();
+    expect(secretMeta.key_version).toBe(1);
+    expect(secretMeta.ref).toMatch(/^secret:\/\/db\//);
+
+    const secRotate = await app.inject({
+      method: 'POST',
+      url: `/api/v1/secrets/${secretMeta.id}/rotate`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'sec-rot-1' },
+      payload: { value: rawSecretV2 },
+    });
+    expect(secRotate.statusCode).toBe(200);
+    expect(secRotate.json().key_version).toBe(2);
+
+    const secList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/secrets',
+      headers: { cookie: cookieA },
+    });
+    expect(secList.statusCode).toBe(200);
+    expect(secList.json().data).toHaveLength(1);
+
+    // Cross-org delete denied with 404
+    const orgBDelSec = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/secrets/${secretMeta.id}`,
+      headers: { cookie: cookieB, 'x-csrf-token': csrfB },
+    });
+    expect(orgBDelSec.statusCode).toBe(404);
+
+    // 2. Create an agent and enforce a hard micro-USD budget stopping runaway execution in 1 step
+    const agentCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-agt-1' },
+      payload: {
+        definition: {
+          name: 'hardening-test-agent',
+          version: '1.0.0',
+          autonomy_level: 2,
+          model: { tier: 'standard', provider: 'mock', model: 'mock/react-default' },
+          prompt: { system: 'Be brief.' },
+          tools: [{ tool: 'current_time', approval: 'auto', scope: {} }],
+        },
+      },
+    });
+    expect(agentCreate.statusCode).toBe(201);
+    const agentId = agentCreate.json().id as string;
+
+    const budgetRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/budgets',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-bud-1' },
+      payload: {
+        scope_type: 'agent',
+        scope_id: agentId,
+        soft_limit_micro_usd: 50,
+        hard_limit_micro_usd: 100,
+        action_on_breach: 'stop',
+      },
+    });
+    expect(budgetRes.statusCode).toBe(200);
+
+    const runawayRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-run-bud' },
+      payload: {
+        input: { prompt: 'Run runaway tools.' },
+        mock_turns: [
+          {
+            kind: 'tool_calls',
+            calls: [{ id: 'tc_1', name: 'current_time', arguments: {} }],
+            tokensIn: 600,
+            tokensOut: 200,
+          },
+        ],
+      },
+    });
+    expect(runawayRun.statusCode).toBe(201);
+    const runObj = runawayRun.json();
+    expect(runObj.status).toBe('budget_exceeded');
+
+    const runSteps = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${runObj.id}/steps`,
+      headers: { cookie: cookieA },
+    });
+    expect(runSteps.statusCode).toBe(200);
+    expect(runSteps.json().data).toHaveLength(1);
+
+    // 3. Emergency kill switch halts runs within <= 5s and deactivating restores execution
+    const ksT0 = performance.now();
+    const ksActivate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/killswitches',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-ks-act' },
+      payload: {
+        scope_type: 'global',
+        reason: 'Emergency incident response',
+      },
+    });
+    expect(ksActivate.statusCode).toBe(200);
+    const ksId = ksActivate.json().id as string;
+
+    const blockedRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-run-ks' },
+      payload: { input: { prompt: 'Should halt' } },
+    });
+    expect(performance.now() - ksT0).toBeLessThan(5000);
+    expect(blockedRun.statusCode).toBe(403);
+    expect(blockedRun.json().error.code).toBe('POL_DENIED');
+
+    // Also deactivate & remove tight agent budget, then confirm recovery
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/killswitches/${ksId}/deactivate`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-ks-deact' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/budgets',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-bud-2' },
+      payload: {
+        scope_type: 'agent',
+        scope_id: agentId,
+        hard_limit_micro_usd: 1_000_000,
+        action_on_breach: 'stop',
+      },
+    });
+    const recoveredRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 's06-run-ok' },
+      payload: {
+        input: { prompt: 'All clear' },
+        mock_turns: [{ kind: 'answer', content: 'System healthy', tokensIn: 20, tokensOut: 10 }],
+      },
+    });
+    expect(recoveredRun.statusCode).toBe(201);
+    expect(recoveredRun.json().status).toBe('succeeded');
+
+    // 4. Audit verify & zero secrets leaked across API payloads and audit events
+    const auditEventsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit-events?limit=200',
+      headers: { cookie: cookieA },
+    });
+    const scanReport = scanForSecretLeaks(
+      [secCreate.json(), secRotate.json(), secList.json(), runObj, runSteps.json(), auditEventsRes.json()],
+      [rawSecretV1, rawSecretV2],
+    );
+    expect(scanReport.clean).toBe(true);
+    expect(scanReport.findings).toHaveLength(0);
+
+    const verifyRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit/verify',
+      headers: { cookie: cookieA },
+    });
+    expect(verifyRes.statusCode).toBe(200);
+    expect(verifyRes.json().valid).toBe(true);
+    expect(verifyRes.json().checked_count).toBeGreaterThanOrEqual(6);
 
     await app.close();
   });

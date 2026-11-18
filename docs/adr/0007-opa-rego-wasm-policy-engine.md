@@ -1,6 +1,6 @@
 # 0007 — OPA/Rego Compiled to WASM Policy Engine
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Requirement / decision refs: D7, FR-GOV-4..9, NFR-2, NFR-10
 

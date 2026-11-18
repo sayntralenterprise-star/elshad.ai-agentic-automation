@@ -1,6 +1,6 @@
 # 0010 — Postgres Partitioned Traces with Object Storage Payload Offload
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Requirement / decision refs: D10, D25, FR-OBS-1..4, NFR-2, NFR-11, DOC-Q-017, DOC-Q-018
 

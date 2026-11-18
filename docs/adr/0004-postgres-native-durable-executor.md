@@ -1,6 +1,6 @@
 # 0004 — Postgres-Native Durable Executor behind `ExecutionEngine`
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Requirement / decision refs: D4, FR-ORC-1..11, NFR-6, NFR-16, DOC-Q-002, DOC-Q-005, DOC-Q-014, DOC-Q-017, DOC-Q-018
 

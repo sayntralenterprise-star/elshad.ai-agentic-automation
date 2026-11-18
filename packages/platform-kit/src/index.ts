@@ -138,7 +138,7 @@ export class InMemoryObjectStore implements ObjectStore {
   }
 }
 
-export type SecretRef = `secret://db/${string}`;
+export type SecretRef = `secret://db/${string}` | `secret://vault/${string}`;
 
 export interface SecretMeta {
   name: string;
@@ -148,10 +148,14 @@ export interface SecretMeta {
 export type SecretPurpose = 'tool_call' | 'provider_call' | 'webhook_sign';
 
 export interface SecretRecordMetadata {
+  id: string;
   ref: SecretRef;
   orgId: string;
+  provider: 'db' | 'vault';
   name: string;
+  environmentId?: string | null;
   keyVersion: number;
+  kekVersion?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -162,12 +166,16 @@ export interface SecretsProvider {
   rotate(ctx: TenantContext, ref: SecretRef, value: Uint8Array): Promise<SecretRef>;
   delete(ctx: TenantContext, ref: SecretRef): Promise<void>;
   getMetadata(ctx: TenantContext, ref: SecretRef): Promise<SecretRecordMetadata | null>;
+  listMetadata?(ctx: TenantContext): Promise<SecretRecordMetadata[]>;
 }
 
 interface StoredEnvelope {
+  id: string;
   orgId: string;
+  environmentId: string | null;
   name: string;
   keyVersion: number;
+  kekVersion: number;
   wrappedDek: Buffer;
   dekIv: Buffer;
   dekTag: Buffer;
@@ -178,31 +186,54 @@ interface StoredEnvelope {
   updatedAt: string;
 }
 
+function deriveKekFromMaterial(masterKeyMaterial: string): Buffer {
+  if (masterKeyMaterial.length < 32) {
+    throw new PlatformError('SYS_INTERNAL', 'Master key material must be at least 32 chars');
+  }
+  return createHash('sha256').update(masterKeyMaterial, 'utf8').digest();
+}
+
 /**
- * Envelope encryption secrets provider using AES-256-GCM (PRD D13, F.3).
+ * Envelope encryption secrets provider using AES-256-GCM with versioned KEK rotation (PRD D13, F.3).
  */
 export class EnvelopeSecretsProvider implements SecretsProvider {
-  private readonly kek: Buffer;
+  private readonly keks = new Map<number, Buffer>();
+  private currentKekVersion = 1;
   private readonly records = new Map<SecretRef, StoredEnvelope>();
 
   constructor(
     masterKeyMaterial: string,
     private readonly clock: Clock = new SystemClock(),
   ) {
-    if (masterKeyMaterial.length < 32) {
-      throw new PlatformError('SYS_INTERNAL', 'Master key material must be at least 32 chars');
-    }
-    this.kek = createHash('sha256').update(masterKeyMaterial, 'utf8').digest();
+    this.keks.set(1, deriveKekFromMaterial(masterKeyMaterial));
+  }
+
+  /**
+   * Rotates the Key Encryption Key while retaining prior KEK versions so existing secrets keep decrypting.
+   */
+  rotateMasterKey(newKeyMaterial: string): number {
+    const nextVersion = this.currentKekVersion + 1;
+    this.keks.set(nextVersion, deriveKekFromMaterial(newKeyMaterial));
+    this.currentKekVersion = nextVersion;
+    return nextVersion;
   }
 
   private encryptEnvelope(
+    id: string,
     orgId: string,
+    environmentId: string | null,
     name: string,
     plaintext: Uint8Array,
     keyVersion: number,
     createdAt: string,
     updatedAt: string,
   ): StoredEnvelope {
+    const kekVersion = this.currentKekVersion;
+    const kek = this.keks.get(kekVersion);
+    if (!kek) {
+      throw new PlatformError('SYS_INTERNAL', `Missing KEK version ${kekVersion}`);
+    }
+
     const dek = randomBytes(32);
     const dataIv = randomBytes(12);
     const dataCipher = createCipheriv('aes-256-gcm', dek, dataIv);
@@ -211,16 +242,19 @@ export class EnvelopeSecretsProvider implements SecretsProvider {
     const dataTag = dataCipher.getAuthTag();
 
     const dekIv = randomBytes(12);
-    const dekCipher = createCipheriv('aes-256-gcm', this.kek, dekIv);
+    const dekCipher = createCipheriv('aes-256-gcm', kek, dekIv);
     const wrappedDek = Buffer.concat([dekCipher.update(dek), dekCipher.final()]);
     const dekTag = dekCipher.getAuthTag();
 
     dek.fill(0);
 
     return {
+      id,
       orgId,
+      environmentId,
       name,
       keyVersion,
+      kekVersion,
       wrappedDek,
       dekIv,
       dekTag,
@@ -233,10 +267,29 @@ export class EnvelopeSecretsProvider implements SecretsProvider {
   }
 
   async put(ctx: TenantContext, value: Uint8Array, meta: SecretMeta): Promise<SecretRef> {
+    for (const [existingRef, env] of this.records.entries()) {
+      if (
+        env.orgId === ctx.orgId &&
+        env.name === meta.name &&
+        env.environmentId === (meta.environmentId ?? null)
+      ) {
+        await this.rotate(ctx, existingRef, value);
+        return existingRef;
+      }
+    }
     const id = generateUuidv7(this.clock.now().getTime());
     const ref: SecretRef = `secret://db/${id}`;
     const nowIso = this.clock.now().toISOString();
-    const env = this.encryptEnvelope(ctx.orgId, meta.name, value, 1, nowIso, nowIso);
+    const env = this.encryptEnvelope(
+      id,
+      ctx.orgId,
+      meta.environmentId ?? null,
+      meta.name,
+      value,
+      1,
+      nowIso,
+      nowIso,
+    );
     this.records.set(ref, env);
     return ref;
   }
@@ -247,7 +300,12 @@ export class EnvelopeSecretsProvider implements SecretsProvider {
       throw new PlatformError('RES_NOT_FOUND', `Secret not found: ${ref}`);
     }
 
-    const dekDecipher = createDecipheriv('aes-256-gcm', this.kek, env.dekIv);
+    const kek = this.keks.get(env.kekVersion);
+    if (!kek) {
+      throw new PlatformError('SYS_INTERNAL', `Missing KEK version ${env.kekVersion}`);
+    }
+
+    const dekDecipher = createDecipheriv('aes-256-gcm', kek, env.dekIv);
     dekDecipher.setAuthTag(env.dekTag);
     const dek = Buffer.concat([dekDecipher.update(env.wrappedDek), dekDecipher.final()]);
 
@@ -269,7 +327,9 @@ export class EnvelopeSecretsProvider implements SecretsProvider {
     }
     const nowIso = this.clock.now().toISOString();
     const updated = this.encryptEnvelope(
+      existing.id,
       ctx.orgId,
+      existing.environmentId,
       existing.name,
       value,
       existing.keyVersion + 1,
@@ -293,14 +353,260 @@ export class EnvelopeSecretsProvider implements SecretsProvider {
       return null;
     }
     return {
+      id: existing.id,
       ref,
       orgId: existing.orgId,
+      provider: 'db',
       name: existing.name,
+      environmentId: existing.environmentId,
       keyVersion: existing.keyVersion,
+      kekVersion: existing.kekVersion,
       createdAt: existing.createdAt,
       updatedAt: existing.updatedAt,
     };
   }
+
+  async listMetadata(ctx: TenantContext): Promise<SecretRecordMetadata[]> {
+    const out: SecretRecordMetadata[] = [];
+    for (const [ref, existing] of this.records.entries()) {
+      if (existing.orgId !== ctx.orgId) continue;
+      out.push({
+        id: existing.id,
+        ref,
+        orgId: existing.orgId,
+        provider: 'db',
+        name: existing.name,
+        environmentId: existing.environmentId,
+        keyVersion: existing.keyVersion,
+        kekVersion: existing.kekVersion,
+        createdAt: existing.createdAt,
+        updatedAt: existing.updatedAt,
+      });
+    }
+    return out;
+  }
+}
+
+export interface VaultTransport {
+  request(opts: {
+    method: 'GET' | 'POST' | 'DELETE';
+    path: string;
+    body?: Record<string, unknown>;
+  }): Promise<{ status: number; data?: Record<string, unknown> }>;
+}
+
+/**
+ * HashiCorp Vault KV v2 adapter implementing the SecretsProvider contract (D13, C.7, E0.6-1).
+ */
+export class VaultSecretsProvider implements SecretsProvider {
+  private readonly address: string;
+  private readonly token: string;
+  private readonly mount: string;
+  private readonly clock: Clock;
+  private readonly transport: VaultTransport;
+  private readonly metaIndex = new Map<SecretRef, SecretRecordMetadata>();
+
+  constructor(opts: {
+    address: string;
+    token?: string;
+    mount?: string;
+    clock?: Clock;
+    transport?: VaultTransport;
+  }) {
+    this.address = opts.address.replace(/\/+$/, '');
+    this.token = opts.token ?? '';
+    this.mount = opts.mount ?? 'secret';
+    this.clock = opts.clock ?? new SystemClock();
+    this.transport = opts.transport ?? {
+      request: async ({ method, path, body }) => {
+        const res = await fetch(`${this.address}${path}`, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.token ? { 'X-Vault-Token': this.token } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = res.status === 204 ? undefined : ((await res.json()) as Record<string, unknown>);
+        return { status: res.status, data };
+      },
+    };
+  }
+
+  private kvPath(orgId: string, id: string): string {
+    return `/v1/${this.mount}/data/${orgId}/${id}`;
+  }
+
+  async put(ctx: TenantContext, value: Uint8Array, meta: SecretMeta): Promise<SecretRef> {
+    const id = generateUuidv7(this.clock.now().getTime());
+    const ref: SecretRef = `secret://vault/${id}`;
+    const b64 = Buffer.from(value).toString('base64');
+    const res = await this.transport.request({
+      method: 'POST',
+      path: this.kvPath(ctx.orgId, id),
+      body: { data: { value_b64: b64, name: meta.name } },
+    });
+    if (res.status >= 400) {
+      throw new PlatformError('SYS_INTERNAL', `Vault write failed (${res.status}).`);
+    }
+    const nowIso = this.clock.now().toISOString();
+    this.metaIndex.set(ref, {
+      id,
+      ref,
+      orgId: ctx.orgId,
+      provider: 'vault',
+      name: meta.name,
+      environmentId: meta.environmentId ?? null,
+      keyVersion: 1,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+    return ref;
+  }
+
+  async resolve(ctx: TenantContext, ref: SecretRef, _purpose: SecretPurpose): Promise<Uint8Array> {
+    const meta = this.metaIndex.get(ref);
+    if (!meta || meta.orgId !== ctx.orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Secret not found: ${ref}`);
+    }
+    const id = ref.replace('secret://vault/', '');
+    const res = await this.transport.request({
+      method: 'GET',
+      path: this.kvPath(ctx.orgId, id),
+    });
+    if (res.status === 404 || !res.data) {
+      throw new PlatformError('RES_NOT_FOUND', `Secret not found in Vault: ${ref}`);
+    }
+    const payload = (res.data['data'] as Record<string, unknown> | undefined)?.['data'] as
+      | Record<string, unknown>
+      | undefined;
+    const b64 = payload?.['value_b64'] ?? (res.data['data'] as Record<string, unknown> | undefined)?.['value_b64'];
+    if (typeof b64 !== 'string') {
+      throw new PlatformError('SYS_INTERNAL', `Vault payload missing secret bytes for ${ref}`);
+    }
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+
+  async rotate(ctx: TenantContext, ref: SecretRef, value: Uint8Array): Promise<SecretRef> {
+    const existing = this.metaIndex.get(ref);
+    if (!existing || existing.orgId !== ctx.orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Secret not found: ${ref}`);
+    }
+    const id = ref.replace('secret://vault/', '');
+    const b64 = Buffer.from(value).toString('base64');
+    const res = await this.transport.request({
+      method: 'POST',
+      path: this.kvPath(ctx.orgId, id),
+      body: { data: { value_b64: b64, name: existing.name } },
+    });
+    if (res.status >= 400) {
+      throw new PlatformError('SYS_INTERNAL', `Vault rotate failed (${res.status}).`);
+    }
+    this.metaIndex.set(ref, {
+      ...existing,
+      keyVersion: existing.keyVersion + 1,
+      updatedAt: this.clock.now().toISOString(),
+    });
+    return ref;
+  }
+
+  async delete(ctx: TenantContext, ref: SecretRef): Promise<void> {
+    const existing = this.metaIndex.get(ref);
+    if (!existing || existing.orgId !== ctx.orgId) return;
+    const id = ref.replace('secret://vault/', '');
+    await this.transport.request({
+      method: 'DELETE',
+      path: this.kvPath(ctx.orgId, id),
+    });
+    this.metaIndex.delete(ref);
+  }
+
+  async getMetadata(ctx: TenantContext, ref: SecretRef): Promise<SecretRecordMetadata | null> {
+    const existing = this.metaIndex.get(ref);
+    if (!existing || existing.orgId !== ctx.orgId) return null;
+    return { ...existing };
+  }
+
+  async listMetadata(ctx: TenantContext): Promise<SecretRecordMetadata[]> {
+    return [...this.metaIndex.values()]
+      .filter((m) => m.orgId === ctx.orgId)
+      .map((m) => ({ ...m }));
+  }
+}
+
+export interface SecretScanFinding {
+  readonly path: string;
+  readonly reason: 'known_secret_leak' | 'pattern_secret_leak';
+}
+
+export interface SecretScanReport {
+  readonly clean: boolean;
+  readonly scannedValues: number;
+  readonly findings: SecretScanFinding[];
+}
+
+const LEAK_PATTERNS: readonly RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{12,}\b/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+];
+
+/**
+ * Recursively scans logs, trace spans, run steps, prompts, and UI payloads for plaintext secret leakage (E0.6-1, S.3).
+ */
+export function scanForSecretLeaks(
+  payloads: readonly unknown[],
+  knownSecrets: readonly string[] = [],
+): SecretScanReport {
+  const activeSecrets = knownSecrets.filter((s) => s.length >= 6);
+  const findings: SecretScanFinding[] = [];
+  let scannedValues = 0;
+
+  const visit = (val: unknown, path: string): void => {
+    if (typeof val === 'string') {
+      scannedValues += 1;
+      if (
+        val.startsWith('secret://db/') ||
+        val.startsWith('secret://vault/') ||
+        val.includes('[REDACTED:')
+      ) {
+        return;
+      }
+      for (const sec of activeSecrets) {
+        if (val.includes(sec)) {
+          findings.push({ path, reason: 'known_secret_leak' });
+          return;
+        }
+      }
+      for (const rx of LEAK_PATTERNS) {
+        if (rx.test(val)) {
+          findings.push({ path, reason: 'pattern_secret_leak' });
+          return;
+        }
+      }
+      return;
+    }
+
+    if (Array.isArray(val)) {
+      val.forEach((entry, i) => visit(entry, `${path}[${i}]`));
+      return;
+    }
+
+    if (val && typeof val === 'object') {
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        visit(v, `${path}.${k}`);
+      }
+    }
+  };
+
+  payloads.forEach((p, idx) => visit(p, `$[${idx}]`));
+  return {
+    clean: findings.length === 0,
+    scannedValues,
+    findings,
+  };
 }
 
 export interface Cache {

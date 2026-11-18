@@ -558,6 +558,62 @@ export interface KbQueryResponseDto {
   }>;
 }
 
+export interface SecretMetadataDto {
+  id: string;
+  ref: string;
+  orgId: string;
+  provider: 'db' | 'vault';
+  name: string;
+  environmentId: string | null;
+  keyVersion: number;
+  kekVersion?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BudgetDto {
+  id: string;
+  orgId: string;
+  workspaceId: string | null;
+  projectId: string | null;
+  agentId: string | null;
+  scopeType: 'org' | 'workspace' | 'project' | 'agent';
+  scopeId: string;
+  period: 'daily' | 'weekly' | 'monthly';
+  softLimitMicroUsd: number | null;
+  hardLimitMicroUsd: number | null;
+  softLimitTokens: number | null;
+  hardLimitTokens: number | null;
+  spentMicroUsd: number;
+  spentTokens: number;
+  actionOnBreach: 'downgrade_model' | 'require_approval' | 'stop';
+  alertEmittedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KillSwitchDto {
+  id: string;
+  orgId: string;
+  workspaceId: string | null;
+  scopeType: 'global' | 'workspace' | 'agent' | 'tool';
+  scopeId: string;
+  active: boolean;
+  reason: string;
+  activatedBy: string;
+  activatedAt: string;
+  deactivatedBy: string | null;
+  deactivatedAt: string | null;
+}
+
+export interface AuditVerifyDto {
+  valid: boolean;
+  checkedCount: number;
+  brokenAtSeq?: number;
+  reason?: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -1023,6 +1079,14 @@ export class PlatformClient {
         nextCursor: res.next_cursor ?? null,
       };
     },
+    verify: async (): Promise<AuditVerifyDto> => {
+      const res = await this.request<Record<string, unknown>>('GET', '/api/v1/audit/verify');
+      return mapAuditVerify(res);
+    },
+  };
+
+  readonly audit = {
+    verify: async (): Promise<AuditVerifyDto> => this.auditEvents.verify(),
   };
 
   readonly runs = {
@@ -1750,6 +1814,135 @@ export class PlatformClient {
       };
     },
   };
+
+  readonly secrets = {
+    list: async (): Promise<SecretMetadataDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/secrets',
+      );
+      return res.data.map(mapSecretMetadata);
+    },
+    put: async (
+      input: { name: string; value: string; environmentId?: string },
+      idempotencyKey = `sdk-secret-put-${Date.now()}`,
+    ): Promise<SecretMetadataDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/secrets', {
+        body: {
+          name: input.name,
+          value: input.value,
+          environment_id: input.environmentId,
+        },
+        idempotencyKey,
+      });
+      return mapSecretMetadata(res);
+    },
+    rotate: async (
+      id: string,
+      value: string,
+      idempotencyKey = `sdk-secret-rot-${Date.now()}`,
+    ): Promise<SecretMetadataDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/secrets/${id}/rotate`,
+        {
+          body: { value },
+          idempotencyKey,
+        },
+      );
+      return mapSecretMetadata(res);
+    },
+    delete: async (id: string): Promise<void> => {
+      await this.request<void>('DELETE', `/api/v1/secrets/${id}`);
+    },
+  };
+
+  readonly budgets = {
+    list: async (): Promise<BudgetDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/budgets',
+      );
+      return res.data.map(mapBudget);
+    },
+    upsert: async (
+      input: {
+        scopeType: 'org' | 'workspace' | 'project' | 'agent';
+        scopeId: string;
+        period?: 'daily' | 'weekly' | 'monthly';
+        workspaceId?: string | null;
+        projectId?: string | null;
+        agentId?: string | null;
+        softLimitMicroUsd?: number | null;
+        hardLimitMicroUsd?: number | null;
+        softLimitTokens?: number | null;
+        hardLimitTokens?: number | null;
+        actionOnBreach?: 'downgrade_model' | 'require_approval' | 'stop';
+      },
+      idempotencyKey = `sdk-budget-upsert-${Date.now()}`,
+    ): Promise<BudgetDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/budgets', {
+        body: {
+          scope_type: input.scopeType,
+          scope_id: input.scopeId,
+          period: input.period ?? 'monthly',
+          workspace_id: input.workspaceId,
+          project_id: input.projectId,
+          agent_id: input.agentId,
+          soft_limit_micro_usd: input.softLimitMicroUsd,
+          hard_limit_micro_usd: input.hardLimitMicroUsd,
+          soft_limit_tokens: input.softLimitTokens,
+          hard_limit_tokens: input.hardLimitTokens,
+          action_on_breach: input.actionOnBreach ?? 'stop',
+        },
+        idempotencyKey,
+      });
+      return mapBudget(res);
+    },
+  };
+
+  readonly killswitches = {
+    list: async (): Promise<KillSwitchDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/killswitches',
+      );
+      return res.data.map(mapKillSwitch);
+    },
+    activate: async (
+      input: {
+        scopeType: 'global' | 'workspace' | 'agent' | 'tool';
+        scopeId?: string;
+        workspaceId?: string | null;
+        reason: string;
+      },
+      idempotencyKey = `sdk-ks-act-${Date.now()}`,
+    ): Promise<KillSwitchDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/killswitches', {
+        body: {
+          scope_type: input.scopeType,
+          scope_id: input.scopeId,
+          workspace_id: input.workspaceId,
+          reason: input.reason,
+        },
+        idempotencyKey,
+      });
+      return mapKillSwitch(res);
+    },
+    deactivate: async (
+      id: string,
+      idempotencyKey = `sdk-ks-deact-${Date.now()}`,
+    ): Promise<KillSwitchDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/killswitches/${id}/deactivate`,
+        {
+          idempotencyKey,
+        },
+      );
+      return mapKillSwitch(res);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -2109,5 +2302,69 @@ function mapCitationChip(c: Record<string, unknown>): CitationChipDto {
     score: Number(c.score ?? 0),
     snippet: String(c.snippet),
     content: String(c.content),
+  };
+}
+
+function mapSecretMetadata(s: Record<string, unknown>): SecretMetadataDto {
+  return {
+    id: String(s.id),
+    ref: String(s.ref),
+    orgId: String(s.org_id),
+    provider: s.provider as 'db' | 'vault',
+    name: String(s.name),
+    environmentId: s.environment_id ? String(s.environment_id) : null,
+    keyVersion: Number(s.key_version ?? 1),
+    kekVersion: s.kek_version !== undefined ? Number(s.kek_version) : undefined,
+    createdAt: String(s.created_at),
+    updatedAt: String(s.updated_at),
+  };
+}
+
+function mapBudget(b: Record<string, unknown>): BudgetDto {
+  return {
+    id: String(b.id),
+    orgId: String(b.org_id),
+    workspaceId: b.workspace_id ? String(b.workspace_id) : null,
+    projectId: b.project_id ? String(b.project_id) : null,
+    agentId: b.agent_id ? String(b.agent_id) : null,
+    scopeType: b.scope_type as BudgetDto['scopeType'],
+    scopeId: String(b.scope_id),
+    period: b.period as BudgetDto['period'],
+    softLimitMicroUsd: b.soft_limit_micro_usd !== null && b.soft_limit_micro_usd !== undefined ? Number(b.soft_limit_micro_usd) : null,
+    hardLimitMicroUsd: b.hard_limit_micro_usd !== null && b.hard_limit_micro_usd !== undefined ? Number(b.hard_limit_micro_usd) : null,
+    softLimitTokens: b.soft_limit_tokens !== null && b.soft_limit_tokens !== undefined ? Number(b.soft_limit_tokens) : null,
+    hardLimitTokens: b.hard_limit_tokens !== null && b.hard_limit_tokens !== undefined ? Number(b.hard_limit_tokens) : null,
+    spentMicroUsd: Number(b.spent_micro_usd ?? 0),
+    spentTokens: Number(b.spent_tokens ?? 0),
+    actionOnBreach: b.action_on_breach as BudgetDto['actionOnBreach'],
+    alertEmittedAt: b.alert_emitted_at ? String(b.alert_emitted_at) : null,
+    createdBy: String(b.created_by),
+    createdAt: String(b.created_at),
+    updatedAt: String(b.updated_at),
+  };
+}
+
+function mapKillSwitch(k: Record<string, unknown>): KillSwitchDto {
+  return {
+    id: String(k.id),
+    orgId: String(k.org_id),
+    workspaceId: k.workspace_id ? String(k.workspace_id) : null,
+    scopeType: k.scope_type as KillSwitchDto['scopeType'],
+    scopeId: String(k.scope_id),
+    active: Boolean(k.active),
+    reason: String(k.reason),
+    activatedBy: String(k.activated_by),
+    activatedAt: String(k.activated_at),
+    deactivatedBy: k.deactivated_by ? String(k.deactivated_by) : null,
+    deactivatedAt: k.deactivated_at ? String(k.deactivated_at) : null,
+  };
+}
+
+function mapAuditVerify(v: Record<string, unknown>): AuditVerifyDto {
+  return {
+    valid: Boolean(v.valid),
+    checkedCount: Number(v.checked_count ?? 0),
+    brokenAtSeq: v.broken_at_seq !== undefined ? Number(v.broken_at_seq) : undefined,
+    reason: v.reason ? String(v.reason) : undefined,
   };
 }

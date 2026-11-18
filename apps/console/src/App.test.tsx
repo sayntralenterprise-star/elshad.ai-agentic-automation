@@ -8,12 +8,14 @@ import {
   PlatformClient,
   type AgentDto,
   type ApiKeyDto,
+  type BudgetDto,
   type CitationChipDto,
   type ConversationSessionDto,
   type DlqItemDto,
   type KbChunkDto,
   type KbDocumentDto,
   type KbSourceDto,
+  type KillSwitchDto,
   type KnowledgeBaseDetailDto,
   type KnowledgeBaseDto,
   type MeDto,
@@ -21,6 +23,7 @@ import {
   type ModelCapabilityDto,
   type RunDto,
   type RunStepDto,
+  type SecretMetadataDto,
   type ToolContractDto,
   type TriggerDto,
   type WorkflowDto,
@@ -875,6 +878,127 @@ function createMockClient(
     };
   };
 
+  const secretList: SecretMetadataDto[] = [];
+  const budgetList: BudgetDto[] = [];
+  const killSwitchList: KillSwitchDto[] = [];
+
+  client.secrets.list = async () => structuredClone(secretList);
+  client.secrets.put = async (input) => {
+    void input.value;
+    const now = '2026-11-18T12:10:00.000Z';
+    const existingIdx = secretList.findIndex((s) => s.name === input.name);
+    if (existingIdx >= 0) {
+      const next: SecretMetadataDto = {
+        ...secretList[existingIdx]!,
+        keyVersion: secretList[existingIdx]!.keyVersion + 1,
+        updatedAt: now,
+      };
+      secretList[existingIdx] = next;
+      return structuredClone(next);
+    }
+    const created: SecretMetadataDto = {
+      id: `sec_${secretList.length + 1}`,
+      ref: `secret://db/ws_1/${input.name}`,
+      orgId: 'org_1',
+      provider: 'db',
+      name: input.name,
+      environmentId: input.environmentId ?? null,
+      keyVersion: 1,
+      kekVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    secretList.unshift(created);
+    return structuredClone(created);
+  };
+  client.secrets.rotate = async (id, value) => {
+    void value;
+    const idx = secretList.findIndex((s) => s.id === id);
+    if (idx < 0) throw new Error('secret not found');
+    const updated: SecretMetadataDto = {
+      ...secretList[idx]!,
+      keyVersion: secretList[idx]!.keyVersion + 1,
+      updatedAt: '2026-11-18T12:11:00.000Z',
+    };
+    secretList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.secrets.delete = async (id) => {
+    const idx = secretList.findIndex((s) => s.id === id);
+    if (idx >= 0) secretList.splice(idx, 1);
+  };
+
+  client.budgets.list = async () => structuredClone(budgetList);
+  client.budgets.upsert = async (input) => {
+    const now = '2026-11-18T12:10:00.000Z';
+    const idx = budgetList.findIndex(
+      (b) => b.scopeType === input.scopeType && b.scopeId === input.scopeId,
+    );
+    const entry: BudgetDto = {
+      id: idx >= 0 ? budgetList[idx]!.id : `bdg_${budgetList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: input.projectId ?? null,
+      agentId: input.agentId ?? null,
+      scopeType: input.scopeType,
+      scopeId: input.scopeId,
+      period: input.period ?? 'monthly',
+      softLimitMicroUsd: input.softLimitMicroUsd ?? null,
+      hardLimitMicroUsd: input.hardLimitMicroUsd ?? null,
+      softLimitTokens: input.softLimitTokens ?? null,
+      hardLimitTokens: input.hardLimitTokens ?? null,
+      spentMicroUsd: idx >= 0 ? budgetList[idx]!.spentMicroUsd : 0,
+      spentTokens: idx >= 0 ? budgetList[idx]!.spentTokens : 0,
+      actionOnBreach: input.actionOnBreach ?? 'stop',
+      alertEmittedAt: null,
+      createdBy: 'prn_1',
+      createdAt: idx >= 0 ? budgetList[idx]!.createdAt : now,
+      updatedAt: now,
+    };
+    if (idx >= 0) {
+      budgetList[idx] = entry;
+    } else {
+      budgetList.unshift(entry);
+    }
+    return structuredClone(entry);
+  };
+
+  client.killswitches.list = async () => structuredClone(killSwitchList);
+  client.killswitches.activate = async (input) => {
+    const entry: KillSwitchDto = {
+      id: `ks_${killSwitchList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? null,
+      scopeType: input.scopeType,
+      scopeId: input.scopeId ?? '*',
+      active: true,
+      reason: input.reason,
+      activatedBy: 'prn_1',
+      activatedAt: '2026-11-18T12:12:00.000Z',
+      deactivatedBy: null,
+      deactivatedAt: null,
+    };
+    killSwitchList.unshift(entry);
+    return structuredClone(entry);
+  };
+  client.killswitches.deactivate = async (id) => {
+    const idx = killSwitchList.findIndex((k) => k.id === id);
+    if (idx < 0) throw new Error('kill switch not found');
+    const updated: KillSwitchDto = {
+      ...killSwitchList[idx]!,
+      active: false,
+      deactivatedBy: 'prn_1',
+      deactivatedAt: '2026-11-18T12:13:00.000Z',
+    };
+    killSwitchList[idx] = updated;
+    return structuredClone(updated);
+  };
+
+  client.audit.verify = async () => ({
+    valid: true,
+    checkedCount: 4,
+  });
+
   return client;
 }
 
@@ -1202,6 +1326,62 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
         /Right-to-erasure completed for "user_alice": 1 memory items and 1 session summaries purged/,
       ),
     ).toBeTruthy();
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('stores/rotates write-only secrets, saves budgets, toggles emergency kill switches, and verifies audit chain [E0.6-1..3]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/governance" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Immutable Audit Log' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /Secrets Vault \(Write-Only\)/i })).toBeTruthy();
+
+    // 1. Write-only secret store & rotate (plaintext must never render back)
+    await user.type(screen.getByLabelText('Secret Value (Write-Only)'), 'sk-ui-never-shown-999');
+    await user.click(screen.getByRole('button', { name: 'Store Secret' }));
+    expect(
+      (await screen.findAllByText(/secret:\/\/db\/ws_1\/stripe_api_key/)).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText(/v1/)).length).toBeGreaterThanOrEqual(1);
+    expect(container.textContent).not.toContain('sk-ui-never-shown-999');
+
+    await user.click(screen.getByRole('button', { name: 'Rotate' }));
+    await user.type(
+      await screen.findByLabelText('New Secret Value for Rotation'),
+      'sk-ui-rotated-888',
+    );
+    await user.click(screen.getByRole('button', { name: 'Confirm Rotate' }));
+    expect(
+      await screen.findByText(/Rotated "stripe_api_key" to key version v2\./),
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain('sk-ui-rotated-888');
+
+    // 2. Hierarchical budget configuration (N.2.6)
+    await user.click(screen.getByRole('button', { name: 'Save Budget' }));
+    expect(
+      await screen.findByText(/Saved workspace budget \(ws_1\): hard limit 1000000 micro-USD \(stop\)/),
+    ).toBeTruthy();
+    expect(await screen.findByText(/spent 0 \/ hard 1000000/)).toBeTruthy();
+
+    // 3. Emergency kill switch activation banner + deactivation
+    await user.click(screen.getByRole('button', { name: 'Activate Kill Switch' }));
+    const banner = await screen.findByTestId('killswitch-banner');
+    expect(banner.textContent).toContain('Emergency Kill Switch Active (1) in DEV');
+
+    await user.click(screen.getByRole('button', { name: 'Deactivate Kill Switch' }));
+    expect(await screen.findByText(/Deactivated kill switch \(global:\*\)/)).toBeTruthy();
+    expect(screen.queryByTestId('killswitch-banner')).toBeNull();
+
+    // 4. Audit hash-chain integrity check
+    await user.click(screen.getByRole('button', { name: 'Verify Audit Chain' }));
+    expect(await screen.findByText('Verified (4 events)')).toBeTruthy();
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

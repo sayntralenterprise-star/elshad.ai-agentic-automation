@@ -10,7 +10,9 @@ import {
 import { MockModelProvider, ModelGateway } from '@elshad/model-kit';
 import { InMemoryToolRegistry, ToolGateway } from '@elshad/tool-kit';
 import {
+  BudgetManager,
   InMemoryUsageLedger,
+  KillSwitchService,
   buildAgentContext,
   detectAgentLoop,
   diffAgentDefinitions,
@@ -277,5 +279,119 @@ describe('@elshad/runtime-core ReAct loop, context budget, loops & usage ledger 
     expect(result.status).toBe('failed');
     expect(result.terminationReason).toBe('limit_reached');
     expect(result.error?.code).toBe('RUN_LOOP_DETECTED');
+  });
+
+  it('stops runaway agent within 1 step on hard budget, supports model downgrade & enforces kill switches <= 5s [E0.6-2, E0.6-3]', async () => {
+    const mock = new MockModelProvider();
+    mock.setHandler(() => ({
+      kind: 'tool_calls',
+      calls: [{ id: 'tc_1', name: 'current_time', arguments: {} }],
+      tokensIn: 500,
+      tokensOut: 200,
+    }));
+
+    const modelGateway = new ModelGateway();
+    modelGateway.registerProvider(mock);
+    const toolGateway = new ToolGateway();
+    const usageLedger = new InMemoryUsageLedger();
+    const budgetManager = new BudgetManager();
+    const killSwitchService = new KillSwitchService();
+
+    // Hard budget of 100 micro-USD stops after single LLM call (>100 micro-USD) before tool call
+    budgetManager.upsertBudget(ctx, {
+      scopeType: 'agent',
+      scopeId: 'agt_runaway',
+      softLimitMicroUsd: 50,
+      hardLimitMicroUsd: 100,
+      actionOnBreach: 'stop',
+    });
+
+    const events: string[] = [];
+    const stoppedRun = await executeReActAgentRun(
+      {
+        ctx,
+        projectId: 'prj_1',
+        environmentId: 'env_1',
+        agentId: 'agt_runaway',
+        definition: makeBaseDefinition(),
+        userInput: 'Run runaway loop.',
+        onEvent: (e) => events.push(e.type),
+      },
+      { modelGateway, toolGateway, usageLedger, budgetManager, killSwitchService },
+    );
+
+    expect(stoppedRun.status).toBe('budget_exceeded');
+    expect(stoppedRun.terminationReason).toBe('limit_reached');
+    expect(stoppedRun.error?.code).toBe('BUD_HARD_LIMIT');
+    expect(stoppedRun.steps).toHaveLength(1);
+    expect(stoppedRun.usage.toolCalls).toBe(0);
+    expect(events).toContain('budget.soft_limit');
+    expect(JSON.stringify(stoppedRun.steps)).not.toMatch(/\bsk-|AKIA|ghp_/);
+
+    // Downgrade model action switches tier to fast when already at limit
+    mock.setHandler(() => ({
+      kind: 'answer',
+      content: 'Downgraded answer.',
+      tokensIn: 40,
+      tokensOut: 10,
+    }));
+    budgetManager.upsertBudget(ctx, {
+      scopeType: 'agent',
+      scopeId: 'agt_downgrade',
+      hardLimitTokens: 0,
+      actionOnBreach: 'downgrade_model',
+    });
+    const downgradedRun = await executeReActAgentRun(
+      {
+        ctx,
+        projectId: 'prj_1',
+        environmentId: 'env_1',
+        agentId: 'agt_downgrade',
+        definition: makeBaseDefinition(),
+        userInput: 'Answer with downgrade.',
+      },
+      { modelGateway, toolGateway, usageLedger, budgetManager, killSwitchService },
+    );
+    expect(downgradedRun.status).toBe('succeeded');
+    expect(downgradedRun.steps[0]?.summary['model']).toBe('mock/react-fast');
+
+    // Emergency per-agent kill switch halts run immediately (< 5s target)
+    const ksStart = performance.now();
+    const ks = killSwitchService.activate(ctx, {
+      scopeType: 'agent',
+      scopeId: 'agt_killed',
+      reason: 'Runaway production incident',
+    });
+    const killedRun = await executeReActAgentRun(
+      {
+        ctx,
+        projectId: 'prj_1',
+        environmentId: 'env_1',
+        agentId: 'agt_killed',
+        definition: makeBaseDefinition(),
+        userInput: 'Should abort immediately.',
+      },
+      { modelGateway, toolGateway, usageLedger, budgetManager, killSwitchService },
+    );
+    expect(performance.now() - ksStart).toBeLessThan(5000);
+    expect(killedRun.status).toBe('cancelled');
+    expect(killedRun.error?.code).toBe('POL_DENIED');
+    expect(killedRun.steps).toHaveLength(0);
+
+    // Deactivate kill switch restores execution
+    killSwitchService.deactivate(ctx, ks.id);
+    mock.setHandler(() => ({ kind: 'answer', content: 'Recovered.', tokensIn: 20, tokensOut: 10 }));
+    const recoveredRun = await executeReActAgentRun(
+      {
+        ctx,
+        projectId: 'prj_1',
+        environmentId: 'env_1',
+        agentId: 'agt_killed',
+        definition: makeBaseDefinition(),
+        userInput: 'Run normally now.',
+      },
+      { modelGateway, toolGateway, usageLedger, budgetManager, killSwitchService },
+    );
+    expect(recoveredRun.status).toBe('succeeded');
   });
 });

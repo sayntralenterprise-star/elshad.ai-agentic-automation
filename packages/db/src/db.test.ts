@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Pool, PoolClient } from 'pg';
@@ -114,6 +115,14 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(sql06).toContain('kb_chunks_embedding_1536_hnsw');
     expect(sql06).toContain('(embedding::vector(1536)) vector_cosine_ops');
     expect(sql06).toContain('TO platform_app');
+
+    const sql07 = readFileSync(join(migrationsDir, '0007_s06_hardening.sql'), 'utf8');
+    const s06Tables = ['secrets', 'budgets', 'killswitches'];
+    for (const tbl of s06Tables) {
+      expect(sql07).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql07).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql07).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {
@@ -208,5 +217,20 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
       "SELECT set_config('app.org_id', $1, true)",
       'ROLLBACK',
     ]);
+  });
+
+  it('executes backup/restore DR drill verifying SHA-256 manifest and audit chain [E0.6-4]', () => {
+    const scriptPath = join(__dirname, '..', '..', '..', 'deploy', 'scripts', 'backup-restore.mjs');
+    const stdout = execFileSync('node', [scriptPath, '--drill'], { encoding: 'utf8' });
+    const parsed = JSON.parse(stdout.trim()) as {
+      ok: boolean;
+      sha256: string;
+      auditCheckedCount: number;
+      counts: Record<string, number>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.sha256).toHaveLength(64);
+    expect(parsed.auditCheckedCount).toBe(1);
+    expect(parsed.counts['secrets']).toBe(1);
   });
 });

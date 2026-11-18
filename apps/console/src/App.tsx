@@ -35,6 +35,7 @@ import {
 } from '@elshad/sdk-ts';
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import { AgentStudioView } from './AgentStudioView.js';
+import { GovernanceHardeningView } from './GovernanceHardeningView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
 import { WorkflowCanvasView } from './WorkflowCanvasView.js';
@@ -820,7 +821,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <div style={{ display: 'grid', gap: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h1 style={{ margin: 0, fontSize: '22px' }}>{t('home.title')}</h1>
-                  <StatusChip label="Slice S0.5 Active" tone="success" />
+                  <StatusChip label="Slice S0.6 Active (Phase 0 Complete)" tone="success" />
                 </div>
 
                 <div
@@ -883,6 +884,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     <li>First ReAct agent &amp; Model Gateway — available under Agents</li>
                     <li>Workflow Canvas, YAML round-trip &amp; triggers — available under Workflows</li>
                     <li>pgvector Knowledge Bases, citations &amp; scoped Memory Explorer — available under Knowledge &amp; Memory</li>
+                    <li>Envelope secrets vault, 1-step budgets &amp; emergency kill switches — available under Governance</li>
                   </ul>
                 </section>
               </div>
@@ -1134,6 +1136,11 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     </tbody>
                   </table>
                 )}
+                <GovernanceHardeningView
+                  client={client}
+                  workspaceId={activeWorkspace?.id}
+                  environment={env}
+                />
               </div>
             )}
 
