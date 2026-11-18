@@ -800,3 +800,373 @@ export const NodeDescriptorWireSchema = z
     outputs: z.array(z.string()),
   })
   .openapi('WorkflowNodeDescriptor');
+
+// ---------- S0.5 Memory & Knowledge Base Schemas ----------
+
+export const MemoryScopeWireSchema = z.enum([
+  'run',
+  'session',
+  'user',
+  'agent',
+  'project',
+  'org',
+]);
+
+export const MemoryKindWireSchema = z.enum(['episodic', 'semantic', 'procedural']);
+
+export const SensitivityLevelWireSchema = z.enum([
+  'public',
+  'internal',
+  'confidential',
+  'restricted',
+  'pii',
+]);
+
+export const MemoryProvenanceWireSchema = z.object({
+  source_run_id: z.string().optional(),
+  source_step_id: z.string().optional(),
+  source_doc_id: z.string().optional(),
+  source_principal_id: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  created_via: z.enum(['auto_extract', 'explicit_tool', 'human', 'system']).optional(),
+});
+
+export const MemoryItemWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string().nullable(),
+    scope: MemoryScopeWireSchema,
+    scope_id: z.string().nullable(),
+    subject_id: z.string().nullable(),
+    kind: MemoryKindWireSchema,
+    content: z.string(),
+    content_hash: z.string(),
+    embedding_dim: z.number().int(),
+    metadata: z.record(z.string(), z.unknown()),
+    sensitivity: SensitivityLevelWireSchema,
+    provenance: MemoryProvenanceWireSchema,
+    importance: z.number(),
+    contradicts_id: z.string().nullable(),
+    ttl_at: z.string().nullable(),
+    pinned: z.boolean(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('MemoryItem');
+
+export const PutMemoryItemRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    project_id: z.string().optional(),
+    scope: MemoryScopeWireSchema,
+    scope_id: z.string().nullable().optional(),
+    subject_id: z.string().nullable().optional(),
+    kind: MemoryKindWireSchema.default('semantic'),
+    content: z.string().min(1),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    sensitivity: SensitivityLevelWireSchema.default('internal'),
+    provenance: MemoryProvenanceWireSchema.optional(),
+    importance: z.number().min(0).max(1).default(0.5),
+    ttl_at: z.string().nullable().optional(),
+    pinned: z.boolean().default(false),
+  })
+  .openapi('PutMemoryItemRequest');
+
+export const UpdateMemoryItemRequestSchema = z
+  .object({
+    content: z.string().min(1).optional(),
+    pinned: z.boolean().optional(),
+    importance: z.number().min(0).max(1).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('UpdateMemoryItemRequest');
+
+export const SearchMemoryRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    query: z.string().min(1),
+    top_k: z.number().int().min(1).max(50).default(5),
+    min_score: z.number().min(0).max(1).default(0),
+    scope: MemoryScopeWireSchema.optional(),
+    scope_id: z.string().optional(),
+    allowed_scopes: z
+      .array(
+        z.object({
+          scope: MemoryScopeWireSchema,
+          scope_id: z.string().optional(),
+        }),
+      )
+      .optional(),
+    kind: MemoryKindWireSchema.optional(),
+    subject_id: z.string().optional(),
+    max_sensitivity: SensitivityLevelWireSchema.optional(),
+    metadata_filter: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('SearchMemoryRequest');
+
+export const ScoredMemoryItemWireSchema = z
+  .object({
+    item: MemoryItemWireSchema,
+    score: z.number(),
+    breakdown: z.object({
+      cosine: z.number(),
+      bm25_norm: z.number(),
+      recency_decay: z.number(),
+      importance: z.number(),
+    }),
+  })
+  .openapi('ScoredMemoryItem');
+
+export const EraseSubjectRequestSchema = z
+  .object({
+    subject_id: z.string().min(1),
+  })
+  .openapi('EraseSubjectRequest');
+
+export const ErasureReportWireSchema = z
+  .object({
+    org_id: z.string(),
+    subject_id: z.string(),
+    deleted_memory_items: z.number().int(),
+    deleted_sessions: z.number().int(),
+    erased_at: z.string(),
+  })
+  .openapi('ErasureReport');
+
+export const AppendConversationSessionRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    session_id: z.string().optional(),
+    agent_id: z.string().nullable().optional(),
+    subject_id: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+    messages: z
+      .array(
+        z.object({
+          role: z.enum(['user', 'assistant', 'system', 'tool']),
+          content: z.string().min(1),
+        }),
+      )
+      .min(1),
+    compact_threshold_tokens: z.number().int().min(20).max(200_000).optional(),
+    keep_recent_messages: z.number().int().min(1).max(100).optional(),
+  })
+  .openapi('AppendConversationSessionRequest');
+
+export const ConversationSessionWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string().nullable(),
+    agent_id: z.string().nullable(),
+    subject_id: z.string().nullable(),
+    title: z.string().nullable(),
+    messages: z.array(
+      z.object({
+        id: z.string(),
+        role: z.enum(['user', 'assistant', 'system', 'tool']),
+        content: z.string(),
+        ts: z.string(),
+      }),
+    ),
+    rolling_summary: z.string(),
+    preserved_identifiers: z.array(z.string()),
+    token_count: z.number().int(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('ConversationSession');
+
+export const CreateKnowledgeBaseRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    project_id: z.string().optional(),
+    name: z.string().min(1).max(128),
+    description: z.string().max(1000).optional(),
+    embedding_model: z.string().default('mock/text-embedding-3-small'),
+    embedding_dim: z.number().int().min(64).max(3072).default(1536),
+    chunk_target_tokens: z.number().int().min(30).max(2000).default(400),
+    chunk_max_tokens: z.number().int().min(60).max(4000).default(800),
+    chunk_overlap_tokens: z.number().int().min(0).max(400).default(60),
+    sensitivity: SensitivityLevelWireSchema.default('internal'),
+  })
+  .openapi('CreateKnowledgeBaseRequest');
+
+export const KnowledgeBaseWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    embedding_model: z.string(),
+    embedding_dim: z.number().int(),
+    chunk_target_tokens: z.number().int(),
+    chunk_max_tokens: z.number().int(),
+    chunk_overlap_tokens: z.number().int(),
+    sensitivity: SensitivityLevelWireSchema,
+    created_by: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('KnowledgeBase');
+
+export const KbSourceWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    kb_id: z.string(),
+    name: z.string(),
+    kind: z.enum(['file', 'url', 'manual']),
+    uri: z.string().nullable(),
+    mime_type: z.string(),
+    sync_status: z.enum(['pending', 'syncing', 'synced', 'failed']),
+    access_principals: z.array(z.string()),
+    last_synced_at: z.string().nullable(),
+    last_error: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('KbSource');
+
+export const KbDocumentWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    kb_id: z.string(),
+    source_id: z.string(),
+    external_key: z.string(),
+    title: z.string(),
+    mime_type: z.string(),
+    content_hash: z.string(),
+    byte_size: z.number().int(),
+    chunk_count: z.number().int(),
+    metadata: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('KbDocument');
+
+export const KbChunkWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    kb_id: z.string(),
+    source_id: z.string(),
+    doc_id: z.string(),
+    chunk_index: z.number().int(),
+    section_path: z.array(z.string()),
+    page: z.number().int().nullable(),
+    char_start: z.number().int(),
+    char_end: z.number().int(),
+    token_count: z.number().int(),
+    content: z.string(),
+    content_hash: z.string(),
+    embedding_dim: z.number().int(),
+    metadata: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })
+  .openapi('KbChunk');
+
+export const KnowledgeBaseDetailWireSchema = KnowledgeBaseWireSchema.extend({
+  sources: z.array(KbSourceWireSchema),
+  documents: z.array(KbDocumentWireSchema),
+  chunks: z.array(KbChunkWireSchema),
+}).openapi('KnowledgeBaseDetail');
+
+export const KbSyncReportWireSchema = z
+  .object({
+    kb_id: z.string(),
+    source_id: z.string(),
+    doc_id: z.string(),
+    added_chunks: z.number().int(),
+    unchanged_chunks: z.number().int(),
+    deleted_chunks: z.number().int(),
+    re_embedded_chunks: z.number().int(),
+    synced_at: z.string(),
+  })
+  .openapi('KbSyncReport');
+
+export const IngestKbDocumentRequestSchema = z
+  .object({
+    source_name: z.string().optional(),
+    kind: z.enum(['file', 'url', 'manual']).default('file'),
+    uri: z.string().optional(),
+    external_key: z.string().optional(),
+    title: z.string().min(1),
+    mime_type: z.string().default('text/markdown'),
+    content: z.string().optional(),
+    access_principals: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('IngestKbDocumentRequest');
+
+export const KbIngestResponseWireSchema = z
+  .object({
+    source: KbSourceWireSchema,
+    document: KbDocumentWireSchema,
+    sync_report: KbSyncReportWireSchema,
+  })
+  .openapi('KbIngestResponse');
+
+export const KbSyncRequestSchema = z
+  .object({
+    doc_id: z.string(),
+    content: z.string().min(1),
+    title: z.string().optional(),
+  })
+  .openapi('KbSyncRequest');
+
+export const KbQueryRequestSchema = z
+  .object({
+    query: z.string().min(1),
+    top_k: z.number().int().min(1).max(20).default(5),
+    min_score: z.number().min(0).max(1).default(0),
+  })
+  .openapi('KbQueryRequest');
+
+export const CitationChipWireSchema = z
+  .object({
+    citation_id: z.string(),
+    chunk_id: z.string(),
+    doc_id: z.string(),
+    doc_title: z.string(),
+    section_path: z.array(z.string()),
+    char_range: z.object({
+      start: z.number().int(),
+      end: z.number().int(),
+    }),
+    score: z.number(),
+    snippet: z.string(),
+    content: z.string(),
+  })
+  .openapi('CitationChip');
+
+export const KbQueryResponseWireSchema = z
+  .object({
+    kb_id: z.string(),
+    query: z.string(),
+    answer: z.string(),
+    citations: z.array(CitationChipWireSchema),
+    results: z.array(
+      z.object({
+        chunk: KbChunkWireSchema,
+        doc_title: z.string(),
+        score: z.number(),
+        breakdown: z.object({
+          cosine: z.number(),
+          bm25_norm: z.number(),
+          recency_decay: z.number(),
+          importance: z.number(),
+        }),
+      }),
+    ),
+  })
+  .openapi('KbQueryResponse');

@@ -363,6 +363,201 @@ export interface WorkflowNodeDescriptorDto {
   outputs: string[];
 }
 
+export type MemoryScopeDto = 'run' | 'session' | 'user' | 'agent' | 'project' | 'org';
+export type MemoryKindDto = 'episodic' | 'semantic' | 'procedural';
+export type SensitivityLevelDto = 'public' | 'internal' | 'confidential' | 'restricted' | 'pii';
+
+export interface MemoryProvenanceDto {
+  sourceRunId?: string;
+  sourceStepId?: string;
+  sourceDocId?: string;
+  sourcePrincipalId?: string;
+  confidence?: number;
+  createdVia?: 'auto_extract' | 'explicit_tool' | 'human' | 'system';
+}
+
+export interface MemoryItemDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string | null;
+  scope: MemoryScopeDto;
+  scopeId: string | null;
+  subjectId: string | null;
+  kind: MemoryKindDto;
+  content: string;
+  contentHash: string;
+  embeddingDim: number;
+  metadata: Record<string, unknown>;
+  sensitivity: SensitivityLevelDto;
+  provenance: MemoryProvenanceDto;
+  importance: number;
+  contradictsId: string | null;
+  ttlAt: string | null;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScoredMemoryItemDto {
+  item: MemoryItemDto;
+  score: number;
+  breakdown: {
+    cosine: number;
+    bm25Norm: number;
+    recencyDecay: number;
+    importance: number;
+  };
+}
+
+export interface ErasureReportDto {
+  orgId: string;
+  subjectId: string;
+  deletedMemoryItems: number;
+  deletedSessions: number;
+  erasedAt: string;
+}
+
+export interface ConversationSessionDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string | null;
+  agentId: string | null;
+  subjectId: string | null;
+  title: string | null;
+  messages: Array<{
+    id: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    ts: string;
+  }>;
+  rollingSummary: string;
+  preservedIdentifiers: string[];
+  tokenCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeBaseDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  embeddingModel: string;
+  embeddingDim: number;
+  chunkTargetTokens: number;
+  chunkMaxTokens: number;
+  chunkOverlapTokens: number;
+  sensitivity: SensitivityLevelDto;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbSourceDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  kbId: string;
+  name: string;
+  kind: 'file' | 'url' | 'manual';
+  uri: string | null;
+  mimeType: string;
+  syncStatus: 'pending' | 'syncing' | 'synced' | 'failed';
+  accessPrincipals: string[];
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbDocumentDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  kbId: string;
+  sourceId: string;
+  externalKey: string;
+  title: string;
+  mimeType: string;
+  contentHash: string;
+  byteSize: number;
+  chunkCount: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbChunkDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  kbId: string;
+  sourceId: string;
+  docId: string;
+  chunkIndex: number;
+  sectionPath: string[];
+  page: number | null;
+  charStart: number;
+  charEnd: number;
+  tokenCount: number;
+  content: string;
+  contentHash: string;
+  embeddingDim: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface KnowledgeBaseDetailDto extends KnowledgeBaseDto {
+  sources: KbSourceDto[];
+  documents: KbDocumentDto[];
+  chunks: KbChunkDto[];
+}
+
+export interface KbSyncReportDto {
+  kbId: string;
+  sourceId: string;
+  docId: string;
+  addedChunks: number;
+  unchangedChunks: number;
+  deletedChunks: number;
+  reEmbeddedChunks: number;
+  syncedAt: string;
+}
+
+export interface CitationChipDto {
+  citationId: string;
+  chunkId: string;
+  docId: string;
+  docTitle: string;
+  sectionPath: string[];
+  charRange: { start: number; end: number };
+  score: number;
+  snippet: string;
+  content: string;
+}
+
+export interface KbQueryResponseDto {
+  kbId: string;
+  query: string;
+  answer: string;
+  citations: CitationChipDto[];
+  results: Array<{
+    chunk: KbChunkDto;
+    docTitle: string;
+    score: number;
+    breakdown: {
+      cosine: number;
+      bm25Norm: number;
+      recencyDecay: number;
+      importance: number;
+    };
+  }>;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -1207,6 +1402,354 @@ export class PlatformClient {
       return res.data.map(mapTrigger);
     },
   };
+
+  readonly memory = {
+    put: async (
+      input: {
+        workspaceId?: string;
+        projectId?: string;
+        scope: MemoryScopeDto;
+        scopeId?: string | null;
+        subjectId?: string | null;
+        kind?: MemoryKindDto;
+        content: string;
+        metadata?: Record<string, unknown>;
+        sensitivity?: SensitivityLevelDto;
+        importance?: number;
+        ttlAt?: string | null;
+        pinned?: boolean;
+      },
+      idempotencyKey: string,
+    ): Promise<MemoryItemDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/memory/items', {
+        body: {
+          workspace_id: input.workspaceId,
+          project_id: input.projectId,
+          scope: input.scope,
+          scope_id: input.scopeId,
+          subject_id: input.subjectId,
+          kind: input.kind ?? 'semantic',
+          content: input.content,
+          metadata: input.metadata,
+          sensitivity: input.sensitivity ?? 'internal',
+          importance: input.importance ?? 0.5,
+          ttl_at: input.ttlAt,
+          pinned: input.pinned ?? false,
+        },
+        idempotencyKey,
+      });
+      return mapMemoryItem(res);
+    },
+    list: async (
+      filter: {
+        scope?: MemoryScopeDto;
+        scopeId?: string;
+        kind?: MemoryKindDto;
+        subjectId?: string;
+        sensitivity?: SensitivityLevelDto;
+        maxSensitivity?: SensitivityLevelDto;
+        q?: string;
+        cursor?: string;
+        limit?: number;
+      } = {},
+    ): Promise<{ items: MemoryItemDto[]; nextCursor: string | null }> => {
+      const params = new URLSearchParams();
+      if (filter.scope) params.set('scope', filter.scope);
+      if (filter.scopeId) params.set('scope_id', filter.scopeId);
+      if (filter.kind) params.set('kind', filter.kind);
+      if (filter.subjectId) params.set('subject_id', filter.subjectId);
+      if (filter.sensitivity) params.set('sensitivity', filter.sensitivity);
+      if (filter.maxSensitivity) params.set('max_sensitivity', filter.maxSensitivity);
+      if (filter.q) params.set('q', filter.q);
+      if (filter.cursor) params.set('cursor', filter.cursor);
+      if (filter.limit !== undefined) params.set('limit', String(filter.limit));
+      const qs = params.toString();
+      const res = await this.request<{
+        items: Record<string, unknown>[];
+        next_cursor: string | null;
+      }>('GET', `/api/v1/memory/items${qs ? `?${qs}` : ''}`);
+      return {
+        items: res.items.map(mapMemoryItem),
+        nextCursor: res.next_cursor ?? null,
+      };
+    },
+    update: async (
+      id: string,
+      patch: {
+        content?: string;
+        pinned?: boolean;
+        importance?: number;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<MemoryItemDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'PATCH',
+        `/api/v1/memory/items/${id}`,
+        { body: patch },
+      );
+      return mapMemoryItem(res);
+    },
+    delete: async (id: string): Promise<void> => {
+      await this.request<void>('DELETE', `/api/v1/memory/items/${id}`);
+    },
+    search: async (
+      input: {
+        workspaceId?: string;
+        query: string;
+        topK?: number;
+        minScore?: number;
+        scope?: MemoryScopeDto;
+        scopeId?: string;
+        allowedScopes?: Array<{ scope: MemoryScopeDto; scopeId?: string }>;
+        kind?: MemoryKindDto;
+        subjectId?: string;
+        maxSensitivity?: SensitivityLevelDto;
+        metadataFilter?: Record<string, unknown>;
+      },
+      idempotencyKey = `sdk-mem-search-${Date.now()}`,
+    ): Promise<ScoredMemoryItemDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'POST',
+        '/api/v1/memory/search',
+        {
+          body: {
+            workspace_id: input.workspaceId,
+            query: input.query,
+            top_k: input.topK ?? 5,
+            min_score: input.minScore ?? 0,
+            scope: input.scope,
+            scope_id: input.scopeId,
+            allowed_scopes: input.allowedScopes?.map((s) => ({
+              scope: s.scope,
+              scope_id: s.scopeId,
+            })),
+            kind: input.kind,
+            subject_id: input.subjectId,
+            max_sensitivity: input.maxSensitivity,
+            metadata_filter: input.metadataFilter,
+          },
+          idempotencyKey,
+        },
+      );
+      return res.data.map(mapScoredMemoryItem);
+    },
+    eraseSubject: async (
+      subjectId: string,
+      idempotencyKey: string,
+    ): Promise<ErasureReportDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/memory/erase', {
+        body: { subject_id: subjectId },
+        idempotencyKey,
+      });
+      return {
+        orgId: String(res.org_id),
+        subjectId: String(res.subject_id),
+        deletedMemoryItems: Number(res.deleted_memory_items ?? 0),
+        deletedSessions: Number(res.deleted_sessions ?? 0),
+        erasedAt: String(res.erased_at),
+      };
+    },
+    appendSession: async (
+      input: {
+        workspaceId?: string;
+        sessionId?: string;
+        agentId?: string | null;
+        subjectId?: string | null;
+        title?: string | null;
+        messages: Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
+        compactThresholdTokens?: number;
+        keepRecentMessages?: number;
+      },
+      idempotencyKey: string,
+    ): Promise<ConversationSessionDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/memory/sessions', {
+        body: {
+          workspace_id: input.workspaceId,
+          session_id: input.sessionId,
+          agent_id: input.agentId,
+          subject_id: input.subjectId,
+          title: input.title,
+          messages: input.messages,
+          compact_threshold_tokens: input.compactThresholdTokens,
+          keep_recent_messages: input.keepRecentMessages,
+        },
+        idempotencyKey,
+      });
+      return mapConversationSession(res);
+    },
+    getSession: async (id: string): Promise<ConversationSessionDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/memory/sessions/${id}`,
+      );
+      return mapConversationSession(res);
+    },
+  };
+
+  readonly knowledgeBases = {
+    list: async (): Promise<KnowledgeBaseDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/knowledge-bases',
+      );
+      return res.data.map(mapKnowledgeBase);
+    },
+    create: async (
+      input: {
+        workspaceId?: string;
+        projectId?: string;
+        name: string;
+        description?: string;
+        embeddingModel?: string;
+        embeddingDim?: number;
+        chunkTargetTokens?: number;
+        chunkMaxTokens?: number;
+        chunkOverlapTokens?: number;
+        sensitivity?: SensitivityLevelDto;
+      },
+      idempotencyKey: string,
+    ): Promise<KnowledgeBaseDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/knowledge-bases',
+        {
+          body: {
+            workspace_id: input.workspaceId,
+            project_id: input.projectId,
+            name: input.name,
+            description: input.description,
+            embedding_model: input.embeddingModel,
+            embedding_dim: input.embeddingDim,
+            chunk_target_tokens: input.chunkTargetTokens,
+            chunk_max_tokens: input.chunkMaxTokens,
+            chunk_overlap_tokens: input.chunkOverlapTokens,
+            sensitivity: input.sensitivity,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapKnowledgeBase(res);
+    },
+    get: async (id: string): Promise<KnowledgeBaseDetailDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/knowledge-bases/${id}`,
+      );
+      return {
+        ...mapKnowledgeBase(res),
+        sources: Array.isArray(res.sources)
+          ? res.sources.map((s) => mapKbSource(s as Record<string, unknown>))
+          : [],
+        documents: Array.isArray(res.documents)
+          ? res.documents.map((d) => mapKbDocument(d as Record<string, unknown>))
+          : [],
+        chunks: Array.isArray(res.chunks)
+          ? res.chunks.map((c) => mapKbChunk(c as Record<string, unknown>))
+          : [],
+      };
+    },
+    ingestDocument: async (
+      kbId: string,
+      input: {
+        sourceName?: string;
+        kind?: 'file' | 'url' | 'manual';
+        uri?: string;
+        externalKey?: string;
+        title: string;
+        mimeType?: string;
+        content?: string;
+        accessPrincipals?: string[];
+        metadata?: Record<string, unknown>;
+      },
+      idempotencyKey: string,
+    ): Promise<{ source: KbSourceDto; document: KbDocumentDto; syncReport: KbSyncReportDto }> => {
+      const res = await this.request<{
+        source: Record<string, unknown>;
+        document: Record<string, unknown>;
+        sync_report: Record<string, unknown>;
+      }>('POST', `/api/v1/knowledge-bases/${kbId}/documents`, {
+        body: {
+          source_name: input.sourceName,
+          kind: input.kind ?? 'file',
+          uri: input.uri,
+          external_key: input.externalKey,
+          title: input.title,
+          mime_type: input.mimeType ?? 'text/markdown',
+          content: input.content,
+          access_principals: input.accessPrincipals,
+          metadata: input.metadata,
+        },
+        idempotencyKey,
+      });
+      return {
+        source: mapKbSource(res.source),
+        document: mapKbDocument(res.document),
+        syncReport: mapKbSyncReport(res.sync_report),
+      };
+    },
+    syncDocument: async (
+      kbId: string,
+      input: { docId: string; content: string; title?: string },
+      idempotencyKey: string,
+    ): Promise<KbSyncReportDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/knowledge-bases/${kbId}/sync`,
+        {
+          body: {
+            doc_id: input.docId,
+            content: input.content,
+            title: input.title,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapKbSyncReport(res);
+    },
+    query: async (
+      kbId: string,
+      input: { query: string; topK?: number; minScore?: number },
+      idempotencyKey = `sdk-kb-query-${Date.now()}`,
+    ): Promise<KbQueryResponseDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/knowledge-bases/${kbId}/query`,
+        {
+          body: {
+            query: input.query,
+            top_k: input.topK ?? 5,
+            min_score: input.minScore ?? 0,
+          },
+          idempotencyKey,
+        },
+      );
+      return {
+        kbId: String(res.kb_id),
+        query: String(res.query),
+        answer: String(res.answer),
+        citations: Array.isArray(res.citations)
+          ? res.citations.map((c) => mapCitationChip(c as Record<string, unknown>))
+          : [],
+        results: Array.isArray(res.results)
+          ? res.results.map((r) => {
+              const row = r as Record<string, unknown>;
+              const bd = (row.breakdown ?? {}) as Record<string, unknown>;
+              return {
+                chunk: mapKbChunk(row.chunk as Record<string, unknown>),
+                docTitle: String(row.doc_title),
+                score: Number(row.score ?? 0),
+                breakdown: {
+                  cosine: Number(bd.cosine ?? 0),
+                  bm25Norm: Number(bd.bm25_norm ?? 0),
+                  recencyDecay: Number(bd.recency_decay ?? 1),
+                  importance: Number(bd.importance ?? 0.7),
+                },
+              };
+            })
+          : [],
+      };
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -1386,5 +1929,185 @@ function mapTrigger(t: Record<string, unknown>): TriggerDto {
     testMode: Boolean(t.test_mode),
     lastFiredAt: t.last_fired_at ? String(t.last_fired_at) : null,
     nextFireAt: t.next_fire_at ? String(t.next_fire_at) : null,
+  };
+}
+
+function mapMemoryItem(m: Record<string, unknown>): MemoryItemDto {
+  const prov = (m.provenance ?? {}) as Record<string, unknown>;
+  return {
+    id: String(m.id),
+    orgId: String(m.org_id),
+    workspaceId: String(m.workspace_id),
+    projectId: m.project_id ? String(m.project_id) : null,
+    scope: m.scope as MemoryScopeDto,
+    scopeId: m.scope_id ? String(m.scope_id) : null,
+    subjectId: m.subject_id ? String(m.subject_id) : null,
+    kind: m.kind as MemoryKindDto,
+    content: String(m.content),
+    contentHash: String(m.content_hash),
+    embeddingDim: Number(m.embedding_dim ?? 1536),
+    metadata: (m.metadata ?? {}) as Record<string, unknown>,
+    sensitivity: m.sensitivity as SensitivityLevelDto,
+    provenance: {
+      sourceRunId: prov.source_run_id ? String(prov.source_run_id) : undefined,
+      sourceStepId: prov.source_step_id ? String(prov.source_step_id) : undefined,
+      sourceDocId: prov.source_doc_id ? String(prov.source_doc_id) : undefined,
+      sourcePrincipalId: prov.source_principal_id ? String(prov.source_principal_id) : undefined,
+      confidence: prov.confidence !== undefined ? Number(prov.confidence) : undefined,
+      createdVia: prov.created_via as MemoryProvenanceDto['createdVia'],
+    },
+    importance: Number(m.importance ?? 0.5),
+    contradictsId: m.contradicts_id ? String(m.contradicts_id) : null,
+    ttlAt: m.ttl_at ? String(m.ttl_at) : null,
+    pinned: Boolean(m.pinned),
+    createdAt: String(m.created_at),
+    updatedAt: String(m.updated_at),
+  };
+}
+
+function mapScoredMemoryItem(s: Record<string, unknown>): ScoredMemoryItemDto {
+  const bd = (s.breakdown ?? {}) as Record<string, unknown>;
+  return {
+    item: mapMemoryItem(s.item as Record<string, unknown>),
+    score: Number(s.score ?? 0),
+    breakdown: {
+      cosine: Number(bd.cosine ?? 0),
+      bm25Norm: Number(bd.bm25_norm ?? 0),
+      recencyDecay: Number(bd.recency_decay ?? 1),
+      importance: Number(bd.importance ?? 0.5),
+    },
+  };
+}
+
+function mapConversationSession(s: Record<string, unknown>): ConversationSessionDto {
+  return {
+    id: String(s.id),
+    orgId: String(s.org_id),
+    workspaceId: String(s.workspace_id),
+    projectId: s.project_id ? String(s.project_id) : null,
+    agentId: s.agent_id ? String(s.agent_id) : null,
+    subjectId: s.subject_id ? String(s.subject_id) : null,
+    title: s.title ? String(s.title) : null,
+    messages: Array.isArray(s.messages)
+      ? (s.messages as ConversationSessionDto['messages'])
+      : [],
+    rollingSummary: String(s.rolling_summary ?? ''),
+    preservedIdentifiers: Array.isArray(s.preserved_identifiers)
+      ? s.preserved_identifiers.map(String)
+      : [],
+    tokenCount: Number(s.token_count ?? 0),
+    createdAt: String(s.created_at),
+    updatedAt: String(s.updated_at),
+  };
+}
+
+function mapKnowledgeBase(kb: Record<string, unknown>): KnowledgeBaseDto {
+  return {
+    id: String(kb.id),
+    orgId: String(kb.org_id),
+    workspaceId: String(kb.workspace_id),
+    projectId: String(kb.project_id),
+    name: String(kb.name),
+    description: kb.description ? String(kb.description) : null,
+    embeddingModel: String(kb.embedding_model),
+    embeddingDim: Number(kb.embedding_dim ?? 1536),
+    chunkTargetTokens: Number(kb.chunk_target_tokens ?? 400),
+    chunkMaxTokens: Number(kb.chunk_max_tokens ?? 800),
+    chunkOverlapTokens: Number(kb.chunk_overlap_tokens ?? 60),
+    sensitivity: kb.sensitivity as SensitivityLevelDto,
+    createdBy: String(kb.created_by),
+    createdAt: String(kb.created_at),
+    updatedAt: String(kb.updated_at),
+  };
+}
+
+function mapKbSource(src: Record<string, unknown>): KbSourceDto {
+  return {
+    id: String(src.id),
+    orgId: String(src.org_id),
+    workspaceId: String(src.workspace_id),
+    kbId: String(src.kb_id),
+    name: String(src.name),
+    kind: src.kind as KbSourceDto['kind'],
+    uri: src.uri ? String(src.uri) : null,
+    mimeType: String(src.mime_type),
+    syncStatus: src.sync_status as KbSourceDto['syncStatus'],
+    accessPrincipals: Array.isArray(src.access_principals) ? src.access_principals.map(String) : [],
+    lastSyncedAt: src.last_synced_at ? String(src.last_synced_at) : null,
+    lastError: src.last_error ? String(src.last_error) : null,
+    createdAt: String(src.created_at),
+    updatedAt: String(src.updated_at),
+  };
+}
+
+function mapKbDocument(doc: Record<string, unknown>): KbDocumentDto {
+  return {
+    id: String(doc.id),
+    orgId: String(doc.org_id),
+    workspaceId: String(doc.workspace_id),
+    kbId: String(doc.kb_id),
+    sourceId: String(doc.source_id),
+    externalKey: String(doc.external_key),
+    title: String(doc.title),
+    mimeType: String(doc.mime_type),
+    contentHash: String(doc.content_hash),
+    byteSize: Number(doc.byte_size ?? 0),
+    chunkCount: Number(doc.chunk_count ?? 0),
+    metadata: (doc.metadata ?? {}) as Record<string, unknown>,
+    createdAt: String(doc.created_at),
+    updatedAt: String(doc.updated_at),
+  };
+}
+
+function mapKbChunk(ch: Record<string, unknown>): KbChunkDto {
+  return {
+    id: String(ch.id),
+    orgId: String(ch.org_id),
+    workspaceId: String(ch.workspace_id),
+    kbId: String(ch.kb_id),
+    sourceId: String(ch.source_id),
+    docId: String(ch.doc_id),
+    chunkIndex: Number(ch.chunk_index ?? 0),
+    sectionPath: Array.isArray(ch.section_path) ? ch.section_path.map(String) : [],
+    page: ch.page !== null && ch.page !== undefined ? Number(ch.page) : null,
+    charStart: Number(ch.char_start ?? 0),
+    charEnd: Number(ch.char_end ?? 0),
+    tokenCount: Number(ch.token_count ?? 0),
+    content: String(ch.content),
+    contentHash: String(ch.content_hash),
+    embeddingDim: Number(ch.embedding_dim ?? 1536),
+    metadata: (ch.metadata ?? {}) as Record<string, unknown>,
+    createdAt: String(ch.created_at),
+  };
+}
+
+function mapKbSyncReport(r: Record<string, unknown>): KbSyncReportDto {
+  return {
+    kbId: String(r.kb_id),
+    sourceId: String(r.source_id),
+    docId: String(r.doc_id),
+    addedChunks: Number(r.added_chunks ?? 0),
+    unchangedChunks: Number(r.unchanged_chunks ?? 0),
+    deletedChunks: Number(r.deleted_chunks ?? 0),
+    reEmbeddedChunks: Number(r.re_embedded_chunks ?? 0),
+    syncedAt: String(r.synced_at),
+  };
+}
+
+function mapCitationChip(c: Record<string, unknown>): CitationChipDto {
+  const cr = (c.char_range ?? {}) as Record<string, unknown>;
+  return {
+    citationId: String(c.citation_id),
+    chunkId: String(c.chunk_id),
+    docId: String(c.doc_id),
+    docTitle: String(c.doc_title),
+    sectionPath: Array.isArray(c.section_path) ? c.section_path.map(String) : [],
+    charRange: {
+      start: Number(cr.start ?? 0),
+      end: Number(cr.end ?? 0),
+    },
+    score: Number(c.score ?? 0),
+    snippet: String(c.snippet),
+    content: String(c.content),
   };
 }

@@ -16,6 +16,7 @@ COPY packages/config/package.json packages/config/
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
 COPY packages/execution/package.json packages/execution/
+COPY packages/memory-kit/package.json packages/memory-kit/
 COPY packages/model-kit/package.json packages/model-kit/
 COPY packages/platform-kit/package.json packages/platform-kit/
 COPY packages/policy-kit/package.json packages/policy-kit/

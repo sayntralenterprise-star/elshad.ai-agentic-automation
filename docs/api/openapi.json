@@ -2750,6 +2750,1316 @@
           "event_id",
           "run_id"
         ]
+      },
+      "MemoryItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "run",
+              "session",
+              "user",
+              "agent",
+              "project",
+              "org"
+            ]
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "episodic",
+              "semantic",
+              "procedural"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "embedding_dim": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted",
+              "pii"
+            ]
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source_run_id": {
+                "type": "string"
+              },
+              "source_step_id": {
+                "type": "string"
+              },
+              "source_doc_id": {
+                "type": "string"
+              },
+              "source_principal_id": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "created_via": {
+                "type": "string",
+                "enum": [
+                  "auto_extract",
+                  "explicit_tool",
+                  "human",
+                  "system"
+                ]
+              }
+            }
+          },
+          "importance": {
+            "type": "number"
+          },
+          "contradicts_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ttl_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "scope",
+          "scope_id",
+          "subject_id",
+          "kind",
+          "content",
+          "content_hash",
+          "embedding_dim",
+          "metadata",
+          "sensitivity",
+          "provenance",
+          "importance",
+          "contradicts_id",
+          "ttl_at",
+          "pinned",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PutMemoryItemRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "run",
+              "session",
+              "user",
+              "agent",
+              "project",
+              "org"
+            ]
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "episodic",
+              "semantic",
+              "procedural"
+            ],
+            "default": "semantic"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted",
+              "pii"
+            ],
+            "default": "internal"
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source_run_id": {
+                "type": "string"
+              },
+              "source_step_id": {
+                "type": "string"
+              },
+              "source_doc_id": {
+                "type": "string"
+              },
+              "source_principal_id": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "created_via": {
+                "type": "string",
+                "enum": [
+                  "auto_extract",
+                  "explicit_tool",
+                  "human",
+                  "system"
+                ]
+              }
+            }
+          },
+          "importance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.5
+          },
+          "ttl_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pinned": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "scope",
+          "content"
+        ]
+      },
+      "UpdateMemoryItemRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "importance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "ScoredMemoryItem": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/MemoryItem"
+          },
+          "score": {
+            "type": "number"
+          },
+          "breakdown": {
+            "type": "object",
+            "properties": {
+              "cosine": {
+                "type": "number"
+              },
+              "bm25_norm": {
+                "type": "number"
+              },
+              "recency_decay": {
+                "type": "number"
+              },
+              "importance": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "cosine",
+              "bm25_norm",
+              "recency_decay",
+              "importance"
+            ]
+          }
+        },
+        "required": [
+          "item",
+          "score",
+          "breakdown"
+        ]
+      },
+      "SearchMemoryRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5
+          },
+          "min_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "run",
+              "session",
+              "user",
+              "agent",
+              "project",
+              "org"
+            ]
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "allowed_scopes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "run",
+                    "session",
+                    "user",
+                    "agent",
+                    "project",
+                    "org"
+                  ]
+                },
+                "scope_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "episodic",
+              "semantic",
+              "procedural"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "max_sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted",
+              "pii"
+            ]
+          },
+          "metadata_filter": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "ErasureReport": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "deleted_memory_items": {
+            "type": "integer"
+          },
+          "deleted_sessions": {
+            "type": "integer"
+          },
+          "erased_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "subject_id",
+          "deleted_memory_items",
+          "deleted_sessions",
+          "erased_at"
+        ]
+      },
+      "EraseSubjectRequest": {
+        "type": "object",
+        "properties": {
+          "subject_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "subject_id"
+        ]
+      },
+      "ConversationSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "system",
+                    "tool"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "role",
+                "content",
+                "ts"
+              ]
+            }
+          },
+          "rolling_summary": {
+            "type": "string"
+          },
+          "preserved_identifiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_count": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "agent_id",
+          "subject_id",
+          "title",
+          "messages",
+          "rolling_summary",
+          "preserved_identifiers",
+          "token_count",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "AppendConversationSessionRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "system",
+                    "tool"
+                  ]
+                },
+                "content": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ]
+            },
+            "minItems": 1
+          },
+          "compact_threshold_tokens": {
+            "type": "integer",
+            "minimum": 20,
+            "maximum": 200000
+          },
+          "keep_recent_messages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "messages"
+        ]
+      },
+      "KnowledgeBase": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "embedding_model": {
+            "type": "string"
+          },
+          "embedding_dim": {
+            "type": "integer"
+          },
+          "chunk_target_tokens": {
+            "type": "integer"
+          },
+          "chunk_max_tokens": {
+            "type": "integer"
+          },
+          "chunk_overlap_tokens": {
+            "type": "integer"
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted",
+              "pii"
+            ]
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "project_id",
+          "name",
+          "description",
+          "embedding_model",
+          "embedding_dim",
+          "chunk_target_tokens",
+          "chunk_max_tokens",
+          "chunk_overlap_tokens",
+          "sensitivity",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateKnowledgeBaseRequest": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "embedding_model": {
+            "type": "string",
+            "default": "mock/text-embedding-3-small"
+          },
+          "embedding_dim": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 3072,
+            "default": 1536
+          },
+          "chunk_target_tokens": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 2000,
+            "default": 400
+          },
+          "chunk_max_tokens": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 4000,
+            "default": 800
+          },
+          "chunk_overlap_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 400,
+            "default": 60
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted",
+              "pii"
+            ],
+            "default": "internal"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "KnowledgeBaseDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/KnowledgeBase"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "sources": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/KbSource"
+                }
+              },
+              "documents": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/KbDocument"
+                }
+              },
+              "chunks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/KbChunk"
+                }
+              }
+            },
+            "required": [
+              "sources",
+              "documents",
+              "chunks"
+            ]
+          }
+        ]
+      },
+      "KbSource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "kb_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "url",
+              "manual"
+            ]
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "sync_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "syncing",
+              "synced",
+              "failed"
+            ]
+          },
+          "access_principals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "kb_id",
+          "name",
+          "kind",
+          "uri",
+          "mime_type",
+          "sync_status",
+          "access_principals",
+          "last_synced_at",
+          "last_error",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "KbDocument": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "kb_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "external_key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "byte_size": {
+            "type": "integer"
+          },
+          "chunk_count": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "kb_id",
+          "source_id",
+          "external_key",
+          "title",
+          "mime_type",
+          "content_hash",
+          "byte_size",
+          "chunk_count",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "KbChunk": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "kb_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "chunk_index": {
+            "type": "integer"
+          },
+          "section_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "char_start": {
+            "type": "integer"
+          },
+          "char_end": {
+            "type": "integer"
+          },
+          "token_count": {
+            "type": "integer"
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "embedding_dim": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "kb_id",
+          "source_id",
+          "doc_id",
+          "chunk_index",
+          "section_path",
+          "page",
+          "char_start",
+          "char_end",
+          "token_count",
+          "content",
+          "content_hash",
+          "embedding_dim",
+          "metadata",
+          "created_at"
+        ]
+      },
+      "KbIngestResponse": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/KbSource"
+          },
+          "document": {
+            "$ref": "#/components/schemas/KbDocument"
+          },
+          "sync_report": {
+            "$ref": "#/components/schemas/KbSyncReport"
+          }
+        },
+        "required": [
+          "source",
+          "document",
+          "sync_report"
+        ]
+      },
+      "KbSyncReport": {
+        "type": "object",
+        "properties": {
+          "kb_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "added_chunks": {
+            "type": "integer"
+          },
+          "unchanged_chunks": {
+            "type": "integer"
+          },
+          "deleted_chunks": {
+            "type": "integer"
+          },
+          "re_embedded_chunks": {
+            "type": "integer"
+          },
+          "synced_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_id",
+          "source_id",
+          "doc_id",
+          "added_chunks",
+          "unchanged_chunks",
+          "deleted_chunks",
+          "re_embedded_chunks",
+          "synced_at"
+        ]
+      },
+      "IngestKbDocumentRequest": {
+        "type": "object",
+        "properties": {
+          "source_name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "url",
+              "manual"
+            ],
+            "default": "file"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "external_key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mime_type": {
+            "type": "string",
+            "default": "text/markdown"
+          },
+          "content": {
+            "type": "string"
+          },
+          "access_principals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "KbSyncRequest": {
+        "type": "object",
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "KbQueryResponse": {
+        "type": "object",
+        "properties": {
+          "kb_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CitationChip"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chunk": {
+                  "$ref": "#/components/schemas/KbChunk"
+                },
+                "doc_title": {
+                  "type": "string"
+                },
+                "score": {
+                  "type": "number"
+                },
+                "breakdown": {
+                  "type": "object",
+                  "properties": {
+                    "cosine": {
+                      "type": "number"
+                    },
+                    "bm25_norm": {
+                      "type": "number"
+                    },
+                    "recency_decay": {
+                      "type": "number"
+                    },
+                    "importance": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "cosine",
+                    "bm25_norm",
+                    "recency_decay",
+                    "importance"
+                  ]
+                }
+              },
+              "required": [
+                "chunk",
+                "doc_title",
+                "score",
+                "breakdown"
+              ]
+            }
+          }
+        },
+        "required": [
+          "kb_id",
+          "query",
+          "answer",
+          "citations",
+          "results"
+        ]
+      },
+      "CitationChip": {
+        "type": "object",
+        "properties": {
+          "citation_id": {
+            "type": "string"
+          },
+          "chunk_id": {
+            "type": "string"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "doc_title": {
+            "type": "string"
+          },
+          "section_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "char_range": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer"
+              },
+              "end": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "score": {
+            "type": "number"
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "citation_id",
+          "chunk_id",
+          "doc_id",
+          "doc_title",
+          "section_path",
+          "char_range",
+          "score",
+          "snippet",
+          "content"
+        ]
+      },
+      "KbQueryRequest": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 5
+          },
+          "min_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0
+          }
+        },
+        "required": [
+          "query"
+        ]
       }
     },
     "parameters": {}
@@ -5592,6 +6902,840 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/items": {
+      "post": {
+        "operationId": "memory.put",
+        "summary": "Store a persistent scoped memory item with embedding",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutMemoryItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryItem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "memory.list",
+        "summary": "List scoped memory items with faceted filters",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "run",
+                "session",
+                "user",
+                "agent",
+                "project",
+                "org"
+              ]
+            },
+            "required": false,
+            "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "scope_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "episodic",
+                "semantic",
+                "procedural"
+              ]
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "subject_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted",
+                "pii"
+              ]
+            },
+            "required": false,
+            "name": "sensitivity",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted",
+                "pii"
+              ]
+            },
+            "required": false,
+            "name": "max_sensitivity",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MemoryItem"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/items/{id}": {
+      "patch": {
+        "operationId": "memory.update",
+        "summary": "Update memory item content, pin state, or importance",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemoryItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryItem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "memory.delete",
+        "summary": "Delete a memory item",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/search": {
+      "post": {
+        "operationId": "memory.search",
+        "summary": "Hybrid N.2.10 memory search with scope and sensitivity pre-filtering",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchMemoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ScoredMemoryItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/erase": {
+      "post": {
+        "operationId": "memory.erase",
+        "summary": "Right-to-erasure deletion across memory items and session summaries",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EraseSubjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/sessions": {
+      "post": {
+        "operationId": "memory.sessions.append",
+        "summary": "Append turns to a conversation session with identifier-preserving rolling summary",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendConversationSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/sessions/{id}": {
+      "get": {
+        "operationId": "memory.sessions.get",
+        "summary": "Inspect a conversation session and its rolling summary",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases": {
+      "get": {
+        "operationId": "kb.list",
+        "summary": "List workspace knowledge bases",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/KnowledgeBase"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "kb.create",
+        "summary": "Create a knowledge base with chunking and embedding config",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKnowledgeBaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeBase"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{id}": {
+      "get": {
+        "operationId": "kb.get",
+        "summary": "Get knowledge base details including sources, documents, and active chunks",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeBaseDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{id}/documents": {
+      "post": {
+        "operationId": "kb.ingest_document",
+        "summary": "Ingest a file, manual document, or SSRF-checked URL into a knowledge base",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestKbDocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbIngestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{id}/sync": {
+      "post": {
+        "operationId": "kb.sync",
+        "summary": "Re-sync a KB document embedding only changed chunks by content hash",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KbSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbSyncReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{id}/query": {
+      "post": {
+        "operationId": "kb.query",
+        "summary": "Query a knowledge base and return cited chunks",
+        "tags": [
+          "Knowledge Bases"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KbQueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbQueryResponse"
                 }
               }
             }

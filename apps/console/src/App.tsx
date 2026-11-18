@@ -35,6 +35,7 @@ import {
 } from '@elshad/sdk-ts';
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import { AgentStudioView } from './AgentStudioView.js';
+import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
 import { WorkflowCanvasView } from './WorkflowCanvasView.js';
 import { t } from './i18n.js';
@@ -819,7 +820,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <div style={{ display: 'grid', gap: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h1 style={{ margin: 0, fontSize: '22px' }}>{t('home.title')}</h1>
-                  <StatusChip label="Slice S0.4 Active" tone="success" />
+                  <StatusChip label="Slice S0.5 Active" tone="success" />
                 </div>
 
                 <div
@@ -881,6 +882,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     <li>Durable run engine &amp; trace viewer — available under Runs</li>
                     <li>First ReAct agent &amp; Model Gateway — available under Agents</li>
                     <li>Workflow Canvas, YAML round-trip &amp; triggers — available under Workflows</li>
+                    <li>pgvector Knowledge Bases, citations &amp; scoped Memory Explorer — available under Knowledge &amp; Memory</li>
                   </ul>
                 </section>
               </div>
@@ -1135,6 +1137,15 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               </div>
             )}
 
+            {section === 'knowledge' && (
+              <KnowledgeMemoryView
+                client={client}
+                workspaceId={activeWorkspace?.id}
+                projectId={projects[0]?.id}
+                environment={env}
+              />
+            )}
+
             {section === 'workflows' && (
               <WorkflowCanvasView
                 client={client}
@@ -1212,7 +1223,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'governance' &&
               section !== 'runs' &&
               section !== 'agents' &&
-              section !== 'workflows' && (
+              section !== 'workflows' &&
+              section !== 'knowledge' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}

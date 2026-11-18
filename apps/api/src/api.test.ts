@@ -1095,4 +1095,213 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('supports Knowledge Base chunking/incremental sync/citations, session rolling summary, hybrid search, erasure & cross-org isolation [E0.5-1..4]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's05-a@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    store.seedOrganization({
+      slug: 's05-org-b',
+      name: 'S05 Org B',
+      adminEmail: 's05-b@elshad.local',
+      adminPassword: 'Password123!',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's05-a@elshad.local', password: 'Password123!' },
+    });
+    const cookieA = parseCookie(loginA.headers['set-cookie']);
+    const csrfA = loginA.json().csrf_token as string;
+
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's05-b@elshad.local', password: 'Password123!' },
+    });
+    const cookieB = parseCookie(loginB.headers['set-cookie']);
+
+    // 1. Verify built-in kb_search tool is registered
+    const toolsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tools',
+      headers: { cookie: cookieA },
+    });
+    expect(toolsRes.statusCode).toBe(200);
+    expect(toolsRes.json().data.map((t: { name: string }) => t.name)).toContain('kb_search');
+
+    // 2. Create Knowledge Base
+    const createKbRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/knowledge-bases',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'kb-create-1' },
+      payload: {
+        name: 'Platform Runbooks',
+        description: 'Operational policies and incident playbooks',
+        embedding_dim: 128,
+        chunk_target_tokens: 45,
+        chunk_max_tokens: 180,
+        chunk_overlap_tokens: 8,
+      },
+    });
+    expect(createKbRes.statusCode).toBe(201);
+    const kbId = createKbRes.json().id as string;
+
+    // 3. Ingest structured Markdown document
+    const v1Doc = [
+      '# Refund Policy',
+      '',
+      'Standard billing refunds settle in 5 business days with supervisor review.',
+      '',
+      '# Webhook Signatures',
+      '',
+      'All webhook payloads require HMAC-SHA256 verification and replay nonce protection.',
+    ].join('\n');
+
+    const ingestRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/knowledge-bases/${kbId}/documents`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'kb-ingest-1' },
+      payload: {
+        source_name: 'ops-runbook.md',
+        title: 'Ops Runbook',
+        mime_type: 'text/markdown',
+        content: v1Doc,
+      },
+    });
+    expect(ingestRes.statusCode).toBe(201);
+    const docId = ingestRes.json().document.id as string;
+    expect(ingestRes.json().sync_report.added_chunks).toBe(2);
+
+    // 4. Incremental re-sync changes ONLY 1 chunk
+    const v2Doc = v1Doc.replace(
+      'Standard billing refunds settle in 5 business days with supervisor review.',
+      'Priority enterprise refunds settle in 24 hours after finance approval.',
+    );
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/knowledge-bases/${kbId}/sync`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'kb-sync-1' },
+      payload: { doc_id: docId, content: v2Doc },
+    });
+    expect(syncRes.statusCode).toBe(200);
+    expect(syncRes.json().re_embedded_chunks).toBe(1);
+    expect(syncRes.json().unchanged_chunks).toBe(1);
+
+    // 5. Query KB & check citation chip + [cit:<chunk_id>] in answer
+    const queryRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/knowledge-bases/${kbId}/query`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'kb-query-1' },
+      payload: { query: 'priority enterprise refunds settle 24 hours', top_k: 3 },
+    });
+    expect(queryRes.statusCode).toBe(200);
+    const qBody = queryRes.json();
+    expect(qBody.citations.length).toBeGreaterThan(0);
+    expect(qBody.answer).toContain(`[cit:${qBody.citations[0].chunk_id}]`);
+
+    // 6. Session rolling summary preserves T-10492 & INV-9981
+    const sesRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/sessions',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'ses-append-1' },
+      payload: {
+        subject_id: 'subj_cust_77',
+        title: 'Escalation Session',
+        compact_threshold_tokens: 40,
+        keep_recent_messages: 1,
+        messages: [
+          { role: 'user', content: 'Checking ticket T-10492 and invoice INV-9981 for $240.00 refund.' },
+          { role: 'assistant', content: 'Verified invoice INV-9981 and prepared refund escalation.' },
+          { role: 'user', content: 'Please confirm final ETA.' },
+        ],
+      },
+    });
+    expect(sesRes.statusCode).toBe(200);
+    const session = sesRes.json();
+    expect(session.rolling_summary).toContain('T-10492');
+    expect(session.rolling_summary).toContain('INV-9981');
+    expect(session.preserved_identifiers).toEqual(expect.arrayContaining(['T-10492', 'INV-9981', '$240.00']));
+
+    const sesGetRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/memory/sessions/${session.id}`,
+      headers: { cookie: cookieA },
+    });
+    expect(sesGetRes.statusCode).toBe(200);
+
+    // 7. Put scoped memory items, hybrid search, and erase subject with audit verification
+    const memPut1 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/items',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'mem-put-1' },
+      payload: {
+        scope: 'user',
+        scope_id: 'subj_cust_77',
+        subject_id: 'subj_cust_77',
+        kind: 'semantic',
+        content: 'Customer prefers priority Slack alerts for enterprise invoice delays.',
+        sensitivity: 'internal',
+        importance: 0.9,
+      },
+    });
+    expect(memPut1.statusCode).toBe(201);
+
+    const memSearch = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/search',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'mem-search-1' },
+      payload: {
+        query: 'enterprise invoice Slack alerts',
+        scope: 'user',
+        scope_id: 'subj_cust_77',
+        top_k: 5,
+      },
+    });
+    expect(memSearch.statusCode).toBe(200);
+    expect(memSearch.json().data.length).toBe(1);
+    expect(memSearch.json().data[0].item.id).toBe(memPut1.json().id);
+
+    const eraseRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/erase',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'mem-erase-1' },
+      payload: { subject_id: 'subj_cust_77' },
+    });
+    expect(eraseRes.statusCode).toBe(200);
+    expect(eraseRes.json().deleted_memory_items).toBe(1);
+    expect(eraseRes.json().deleted_sessions).toBe(1);
+
+    const sesAfterErase = await app.inject({
+      method: 'GET',
+      url: `/api/v1/memory/sessions/${session.id}`,
+      headers: { cookie: cookieA },
+    });
+    expect(sesAfterErase.statusCode).toBe(404);
+
+    const auditRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit-events?action=memory.erase',
+      headers: { cookie: cookieA },
+    });
+    expect(auditRes.statusCode).toBe(200);
+    expect(auditRes.json().data.some((e: { action: string }) => e.action === 'memory.erase')).toBe(true);
+
+    // 8. Cross-org KB & Memory isolation
+    const orgBGetKb = await app.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge-bases/${kbId}`,
+      headers: { cookie: cookieB },
+    });
+    expect(orgBGetKb.statusCode).toBe(404);
+
+    await app.close();
+  });
 });

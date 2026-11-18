@@ -229,6 +229,9 @@ importers:
       '@elshad/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@elshad/memory-kit':
+        specifier: workspace:*
+        version: link:../../packages/memory-kit
       '@elshad/model-kit':
         specifier: workspace:*
         version: link:../../packages/model-kit
@@ -359,6 +362,9 @@ importers:
       '@elshad/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@elshad/memory-kit':
+        specifier: workspace:*
+        version: link:../../packages/memory-kit
       '@elshad/model-kit':
         specifier: workspace:*
         version: link:../../packages/model-kit
@@ -449,6 +455,27 @@ importers:
       '@elshad/telemetry':
         specifier: workspace:*
         version: link:../telemetry
+
+  packages/memory-kit:
+    dependencies:
+      '@elshad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/model-kit':
+        specifier: workspace:*
+        version: link:../model-kit
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      '@elshad/tool-kit':
+        specifier: workspace:*
+        version: link:../tool-kit
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.7
 
   packages/model-kit:
     dependencies:

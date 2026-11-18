@@ -8,6 +8,7 @@
     "@elshad/db": "workspace:*",
     "@elshad/domain": "workspace:*",
     "@elshad/execution": "workspace:*",
+    "@elshad/memory-kit": "workspace:*",
     "@elshad/model-kit": "workspace:*",
     "@elshad/platform-kit": "workspace:*",
     "@elshad/policy-kit": "workspace:*",

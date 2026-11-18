@@ -96,6 +96,24 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     }
     expect(sql05).toContain('triggers_env_path_uidx');
     expect(sql05).toContain('TO platform_app');
+
+    const sql06 = readFileSync(join(migrationsDir, '0006_s05_memory_and_kb.sql'), 'utf8');
+    const s05Tables = [
+      'memory_items',
+      'sessions_conversation',
+      'knowledge_bases',
+      'kb_sources',
+      'kb_documents',
+      'kb_chunks',
+    ];
+    for (const tbl of s05Tables) {
+      expect(sql06).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql06).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql06).toContain('memory_embedding_1536_hnsw');
+    expect(sql06).toContain('kb_chunks_embedding_1536_hnsw');
+    expect(sql06).toContain('(embedding::vector(1536)) vector_cosine_ops');
+    expect(sql06).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {

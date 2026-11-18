@@ -8,8 +8,16 @@ import {
   PlatformClient,
   type AgentDto,
   type ApiKeyDto,
+  type CitationChipDto,
+  type ConversationSessionDto,
   type DlqItemDto,
+  type KbChunkDto,
+  type KbDocumentDto,
+  type KbSourceDto,
+  type KnowledgeBaseDetailDto,
+  type KnowledgeBaseDto,
   type MeDto,
+  type MemoryItemDto,
   type ModelCapabilityDto,
   type RunDto,
   type RunStepDto,
@@ -617,6 +625,256 @@ function createMockClient(
   };
   client.triggers.list = async () => structuredClone(triggers);
 
+  // S0.5 Mocks
+  const kbs: KnowledgeBaseDto[] = [];
+  const kbSources = new Map<string, KbSourceDto[]>();
+  const kbDocs = new Map<string, KbDocumentDto[]>();
+  const kbChunks = new Map<string, KbChunkDto[]>();
+  const memItems: MemoryItemDto[] = [];
+  const sessions: ConversationSessionDto[] = [];
+
+  client.knowledgeBases.list = async () => structuredClone(kbs);
+  client.knowledgeBases.create = async (input) => {
+    const kb: KnowledgeBaseDto = {
+      id: `kb_${kbs.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: input.projectId ?? 'prj_1',
+      name: input.name,
+      description: input.description ?? null,
+      embeddingModel: input.embeddingModel ?? 'mock/text-embedding-3-small',
+      embeddingDim: input.embeddingDim ?? 1536,
+      chunkTargetTokens: input.chunkTargetTokens ?? 400,
+      chunkMaxTokens: input.chunkMaxTokens ?? 800,
+      chunkOverlapTokens: input.chunkOverlapTokens ?? 60,
+      sensitivity: input.sensitivity ?? 'internal',
+      createdBy: 'prn_1',
+      createdAt: '2026-11-18T12:00:00Z',
+      updatedAt: '2026-11-18T12:00:00Z',
+    };
+    kbs.push(kb);
+    kbSources.set(kb.id, []);
+    kbDocs.set(kb.id, []);
+    kbChunks.set(kb.id, []);
+    return structuredClone(kb);
+  };
+  client.knowledgeBases.get = async (id) => {
+    const kb = kbs.find((k) => k.id === id);
+    if (!kb) throw new Error('KB not found');
+    const detail: KnowledgeBaseDetailDto = {
+      ...kb,
+      sources: kbSources.get(id) ?? [],
+      documents: kbDocs.get(id) ?? [],
+      chunks: kbChunks.get(id) ?? [],
+    };
+    return structuredClone(detail);
+  };
+  client.knowledgeBases.ingestDocument = async (kbId, input) => {
+    const src: KbSourceDto = {
+      id: 'src_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      kbId,
+      name: input.sourceName ?? input.title,
+      kind: input.kind ?? 'file',
+      uri: input.uri ?? null,
+      mimeType: input.mimeType ?? 'text/markdown',
+      syncStatus: 'synced',
+      accessPrincipals: [],
+      lastSyncedAt: '2026-11-18T12:01:00Z',
+      lastError: null,
+      createdAt: '2026-11-18T12:01:00Z',
+      updatedAt: '2026-11-18T12:01:00Z',
+    };
+    const doc: KbDocumentDto = {
+      id: 'doc_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      kbId,
+      sourceId: src.id,
+      externalKey: input.title,
+      title: input.title,
+      mimeType: input.mimeType ?? 'text/markdown',
+      contentHash: 'abc123def456',
+      byteSize: (input.content ?? '').length,
+      chunkCount: 2,
+      metadata: {},
+      createdAt: '2026-11-18T12:01:00Z',
+      updatedAt: '2026-11-18T12:01:00Z',
+    };
+    const c1: KbChunkDto = {
+      id: 'chk_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      kbId,
+      sourceId: src.id,
+      docId: doc.id,
+      chunkIndex: 0,
+      sectionPath: ['Refund SLA'],
+      page: null,
+      charStart: 0,
+      charEnd: 95,
+      tokenCount: 16,
+      content: '[Section: Refund SLA]\nStandard refunds complete within 5 business days with finance signoff.',
+      contentHash: 'hash_c1',
+      embeddingDim: 1536,
+      metadata: {},
+      createdAt: '2026-11-18T12:01:00Z',
+    };
+    kbSources.set(kbId, [src]);
+    kbDocs.set(kbId, [doc]);
+    kbChunks.set(kbId, [c1]);
+    return {
+      source: structuredClone(src),
+      document: structuredClone(doc),
+      syncReport: {
+        kbId,
+        sourceId: src.id,
+        docId: doc.id,
+        addedChunks: 2,
+        unchangedChunks: 0,
+        deletedChunks: 0,
+        reEmbeddedChunks: 2,
+        syncedAt: '2026-11-18T12:01:00Z',
+      },
+    };
+  };
+  client.knowledgeBases.syncDocument = async (kbId, input) => ({
+    kbId,
+    sourceId: 'src_1',
+    docId: input.docId,
+    addedChunks: 1,
+    unchangedChunks: 1,
+    deletedChunks: 0,
+    reEmbeddedChunks: 1,
+    syncedAt: '2026-11-18T12:02:00Z',
+  });
+  client.knowledgeBases.query = async (kbId, input) => {
+    const chunks = kbChunks.get(kbId) ?? [];
+    const docs = kbDocs.get(kbId) ?? [];
+    const ch = chunks[0]!;
+    const doc = docs[0]!;
+    const cit: CitationChipDto = {
+      citationId: 'cit_1',
+      chunkId: ch.id,
+      docId: doc.id,
+      docTitle: doc.title,
+      sectionPath: ch.sectionPath,
+      charRange: { start: ch.charStart, end: ch.charEnd },
+      score: 0.912,
+      snippet: 'Standard refunds complete within 5 business days with finance signoff.',
+      content: ch.content,
+    };
+    return {
+      kbId,
+      query: input.query,
+      answer: `${cit.snippet} [cit:${ch.id}]`,
+      citations: [cit],
+      results: [
+        {
+          chunk: structuredClone(ch),
+          docTitle: doc.title,
+          score: 0.912,
+          breakdown: { cosine: 0.9, bm25Norm: 1, recencyDecay: 1, importance: 0.7 },
+        },
+      ],
+    };
+  };
+
+  client.memory.list = async () => ({
+    items: structuredClone(memItems),
+    nextCursor: null,
+  });
+  client.memory.put = async (input) => {
+    const item: MemoryItemDto = {
+      id: `mem_${memItems.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: input.projectId ?? 'prj_1',
+      scope: input.scope,
+      scopeId: input.scopeId ?? null,
+      subjectId: input.subjectId ?? null,
+      kind: input.kind ?? 'semantic',
+      content: input.content,
+      contentHash: 'hash_m1',
+      embeddingDim: 1536,
+      metadata: input.metadata ?? {},
+      sensitivity: input.sensitivity ?? 'internal',
+      provenance: { createdVia: 'system' },
+      importance: input.importance ?? 0.5,
+      contradictsId: null,
+      ttlAt: null,
+      pinned: Boolean(input.pinned),
+      createdAt: '2026-11-18T12:03:00Z',
+      updatedAt: '2026-11-18T12:03:00Z',
+    };
+    memItems.push(item);
+    return structuredClone(item);
+  };
+  client.memory.update = async (id, patch) => {
+    const idx = memItems.findIndex((m) => m.id === id);
+    if (idx < 0) throw new Error('not found');
+    memItems[idx] = { ...memItems[idx]!, pinned: patch.pinned ?? memItems[idx]!.pinned };
+    return structuredClone(memItems[idx]!);
+  };
+  client.memory.delete = async (id) => {
+    const idx = memItems.findIndex((m) => m.id === id);
+    if (idx >= 0) memItems.splice(idx, 1);
+  };
+  client.memory.search = async () =>
+    memItems.map((m) => ({
+      item: structuredClone(m),
+      score: 0.88,
+      breakdown: { cosine: 0.85, bm25Norm: 0.9, recencyDecay: 1, importance: 0.8 },
+    }));
+  client.memory.appendSession = async (input) => {
+    const ses: ConversationSessionDto = {
+      id: input.sessionId ?? `ses_${sessions.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: 'prj_1',
+      agentId: null,
+      subjectId: input.subjectId ?? null,
+      title: input.title ?? null,
+      messages: input.messages.map((m, i) => ({
+        id: `msg_${i + 1}`,
+        role: m.role,
+        content: m.content,
+        ts: '2026-11-18T12:04:00Z',
+      })),
+      rollingSummary: 'Compacted escalation context.\n[Preserved IDs: T-10492, INV-9981, $149.95]',
+      preservedIdentifiers: ['T-10492', 'INV-9981', '$149.95'],
+      tokenCount: 32,
+      createdAt: '2026-11-18T12:04:00Z',
+      updatedAt: '2026-11-18T12:04:00Z',
+    };
+    sessions.push(ses);
+    return structuredClone(ses);
+  };
+  client.memory.eraseSubject = async (subjectId) => {
+    let delMem = 0;
+    for (let i = memItems.length - 1; i >= 0; i -= 1) {
+      if (memItems[i]!.subjectId === subjectId || memItems[i]!.scopeId === subjectId) {
+        memItems.splice(i, 1);
+        delMem += 1;
+      }
+    }
+    let delSes = 0;
+    for (let i = sessions.length - 1; i >= 0; i -= 1) {
+      if (sessions[i]!.subjectId === subjectId) {
+        sessions.splice(i, 1);
+        delSes += 1;
+      }
+    }
+    return {
+      orgId: 'org_1',
+      subjectId,
+      deletedMemoryItems: delMem,
+      deletedSessions: delSes,
+      erasedAt: '2026-11-18T12:05:00Z',
+    };
+  };
+
   return client;
 }
 
@@ -887,6 +1145,63 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     const culledNodes = screen.getAllByTestId('canvas-node');
     expect(culledNodes.length).toBeGreaterThan(0);
     expect(culledNodes.length).toBeLessThan(60);
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('creates KB, ingests & re-syncs doc, renders clickable citation chips, explores memory & erases subject cleanly [E0.5-1..4]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/knowledge" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /Knowledge & Memory/i })).toBeTruthy();
+
+    // Create Knowledge Base
+    const createKbBtns = screen.getAllByRole('button', { name: /\+ New Knowledge Base/i });
+    await user.click(createKbBtns[0]!);
+    await user.click(await screen.findByRole('button', { name: 'Create Knowledge Base' }));
+    expect(await screen.findByText(/Created Knowledge Base "Operations Runbook KB"/)).toBeTruthy();
+
+    // Ingest Document & run Incremental Re-sync
+    await user.click(screen.getByRole('button', { name: 'Ingest Document' }));
+    expect(await screen.findByText(/Ingested "Support SLA Handbook" \(2 chunks embedded\)/)).toBeTruthy();
+
+    await user.click(await screen.findByRole('button', { name: 'Re-sync Document' }));
+    expect(
+      await screen.findByText(/Incremental re-sync: 1 re-embedded, 1 unchanged, 0 deleted/),
+    ).toBeTruthy();
+
+    // Ask this KB & inspect Citation Chip
+    await user.click(screen.getByRole('button', { name: 'Ask KB' }));
+    const answerEl = await screen.findByTestId('kb-query-answer');
+    expect(answerEl.textContent).toContain('[cit:chk_1]');
+    const chips = await screen.findAllByTestId('citation-chip');
+    expect(chips.length).toBeGreaterThan(0);
+    await user.click(chips[0]!);
+    const passagePanel = await screen.findByTestId('cited-passage-panel');
+    expect(passagePanel.textContent).toContain('Cited Passage: Support SLA Handbook');
+
+    // Switch to Memory Explorer tab
+    await user.click(screen.getByRole('tab', { name: /Memory Explorer/i }));
+    await user.click(await screen.findByRole('button', { name: '+ Add Memory Item' }));
+    expect(await screen.findByText(/Stored user memory item mem_1/)).toBeTruthy();
+
+    // Session Rolling Summary with preserved IDs
+    await user.click(screen.getByRole('button', { name: /Append & Compact Session/i }));
+    expect((await screen.findAllByText(/T-10492, INV-9981/)).length).toBeGreaterThanOrEqual(1);
+
+    // Right-to-Erasure removes memory item & session summary
+    await user.click(screen.getByRole('button', { name: 'Erase Subject Memory' }));
+    expect(
+      await screen.findByText(
+        /Right-to-erasure completed for "user_alice": 1 memory items and 1 session summaries purged/,
+      ),
+    ).toBeTruthy();
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

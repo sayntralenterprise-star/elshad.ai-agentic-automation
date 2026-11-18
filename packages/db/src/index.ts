@@ -459,6 +459,125 @@ export interface TriggerEventsTable {
   received_at: Date;
 }
 
+export interface MemoryItemsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string | null;
+  scope: 'run' | 'session' | 'user' | 'agent' | 'project' | 'org';
+  scope_id: string | null;
+  subject_id: string | null;
+  kind: 'episodic' | 'semantic' | 'procedural';
+  content: string;
+  content_hash: string;
+  embedding_dim: number;
+  embedding: string | null;
+  metadata: Record<string, unknown>;
+  sensitivity: 'public' | 'internal' | 'confidential' | 'restricted' | 'pii';
+  provenance: Record<string, unknown>;
+  importance: number;
+  contradicts_id: string | null;
+  ttl_at: Date | null;
+  pinned: boolean;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface SessionsConversationTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string | null;
+  agent_id: string | null;
+  subject_id: string | null;
+  title: string | null;
+  messages: unknown[];
+  rolling_summary: string;
+  preserved_identifiers: string[];
+  token_count: number;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface KnowledgeBasesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  embedding_model: string;
+  embedding_dim: number;
+  chunk_target_tokens: number;
+  chunk_max_tokens: number;
+  chunk_overlap_tokens: number;
+  sensitivity: 'public' | 'internal' | 'confidential' | 'restricted' | 'pii';
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface KbSourcesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  kb_id: string;
+  name: string;
+  kind: 'file' | 'url' | 'manual';
+  uri: string | null;
+  mime_type: string;
+  sync_status: 'pending' | 'syncing' | 'synced' | 'failed';
+  access_principals: string[];
+  last_synced_at: Date | null;
+  last_error: string | null;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface KbDocumentsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  kb_id: string;
+  source_id: string;
+  external_key: string;
+  title: string;
+  mime_type: string;
+  content_hash: string;
+  byte_size: number;
+  chunk_count: number;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface KbChunksTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  kb_id: string;
+  source_id: string;
+  doc_id: string;
+  chunk_index: number;
+  section_path: string[];
+  page: number | null;
+  char_start: number;
+  char_end: number;
+  token_count: number;
+  content: string;
+  content_hash: string;
+  embedding_dim: number;
+  embedding: string | null;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  deleted_at: Date | null;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -492,6 +611,12 @@ export interface Database {
   workflow_versions: WorkflowVersionsTable;
   triggers: TriggersTable;
   trigger_events: TriggerEventsTable;
+  memory_items: MemoryItemsTable;
+  sessions_conversation: SessionsConversationTable;
+  knowledge_bases: KnowledgeBasesTable;
+  kb_sources: KbSourcesTable;
+  kb_documents: KbDocumentsTable;
+  kb_chunks: KbChunksTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

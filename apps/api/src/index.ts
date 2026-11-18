@@ -47,6 +47,24 @@ import {
   type ModelCapability,
 } from '@elshad/model-kit';
 import {
+  ConversationSessionStore,
+  InMemoryMemoryBackend,
+  KnowledgeBaseService,
+  createKbSearchTool,
+  type CitationChip,
+  type ConversationSession,
+  type KbChunk,
+  type KbDocument,
+  type KbSource,
+  type KbSyncReport,
+  type KnowledgeBase,
+  type MemoryItem,
+  type MemoryKind,
+  type MemoryScope,
+  type ScoredMemoryItem,
+  type SensitivityLevel,
+} from '@elshad/memory-kit';
+import {
   InMemoryCache,
   SlidingWindowRateLimiter,
   type Cache,
@@ -115,6 +133,9 @@ export interface ApiServerOptions {
   usageLedger?: UsageLedger;
   nodeRegistry?: NodeRegistry;
   triggerService?: TriggerService;
+  memoryBackend?: InMemoryMemoryBackend;
+  sessionStore?: ConversationSessionStore;
+  kbService?: KnowledgeBaseService;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -160,6 +181,9 @@ export function buildApiServer(opts: ApiServerOptions): {
   toolGateway: ToolGateway;
   usageLedger: UsageLedger;
   triggerService: TriggerService;
+  memoryBackend: InMemoryMemoryBackend;
+  sessionStore: ConversationSessionStore;
+  kbService: KnowledgeBaseService;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -182,6 +206,14 @@ export function buildApiServer(opts: ApiServerOptions): {
   const effectLedger: EffectLedger = opts.effectLedger ?? new InMemoryEffectLedger(clock);
   const toolRegistry = new InMemoryToolRegistry(true);
   const toolGateway = opts.toolGateway ?? new ToolGateway({ registry: toolRegistry, clock });
+  const memoryBackend = opts.memoryBackend ?? new InMemoryMemoryBackend({ clock, idGen });
+  const sessionStore = opts.sessionStore ?? new ConversationSessionStore({ clock, idGen });
+  memoryBackend.attachSessionEraseHook((orgId, subjectId) =>
+    sessionStore.eraseBySubject(orgId, subjectId),
+  );
+  const kbService = opts.kbService ?? new KnowledgeBaseService({ clock, idGen });
+  const kbSearchTool = createKbSearchTool(kbService);
+  toolGateway.registry.register(kbSearchTool.contract, kbSearchTool.executor);
   const modelGateway =
     opts.modelGateway ??
     (() => {
@@ -2507,5 +2539,623 @@ export function buildApiServer(opts: ApiServerOptions): {
     });
   });
 
-  return { app, store, executionEngine, modelGateway, toolGateway, usageLedger, triggerService };
+  // ---------- S0.5 Memory & Knowledge Base Endpoints ----------
+
+  function formatMemoryItemWire(m: MemoryItem): Record<string, unknown> {
+    return {
+      id: m.id,
+      org_id: m.orgId,
+      workspace_id: m.workspaceId,
+      project_id: m.projectId,
+      scope: m.scope,
+      scope_id: m.scopeId,
+      subject_id: m.subjectId,
+      kind: m.kind,
+      content: m.content,
+      content_hash: m.contentHash,
+      embedding_dim: m.embeddingDim,
+      metadata: m.metadata,
+      sensitivity: m.sensitivity,
+      provenance: {
+        ...(m.provenance.sourceRunId ? { source_run_id: m.provenance.sourceRunId } : {}),
+        ...(m.provenance.sourceStepId ? { source_step_id: m.provenance.sourceStepId } : {}),
+        ...(m.provenance.sourceDocId ? { source_doc_id: m.provenance.sourceDocId } : {}),
+        ...(m.provenance.sourcePrincipalId
+          ? { source_principal_id: m.provenance.sourcePrincipalId }
+          : {}),
+        ...(m.provenance.confidence !== undefined
+          ? { confidence: m.provenance.confidence }
+          : {}),
+        ...(m.provenance.createdVia ? { created_via: m.provenance.createdVia } : {}),
+      },
+      importance: m.importance,
+      contradicts_id: m.contradictsId,
+      ttl_at: m.ttlAt,
+      pinned: m.pinned,
+      created_at: m.createdAt,
+      updated_at: m.updatedAt,
+    };
+  }
+
+  function formatScoredMemoryItemWire(s: ScoredMemoryItem): Record<string, unknown> {
+    return {
+      item: formatMemoryItemWire(s.item),
+      score: s.score,
+      breakdown: {
+        cosine: s.breakdown.cosine,
+        bm25_norm: s.breakdown.bm25Norm,
+        recency_decay: s.breakdown.recencyDecay,
+        importance: s.breakdown.importance,
+      },
+    };
+  }
+
+  function formatConversationSessionWire(s: ConversationSession): Record<string, unknown> {
+    return {
+      id: s.id,
+      org_id: s.orgId,
+      workspace_id: s.workspaceId,
+      project_id: s.projectId,
+      agent_id: s.agentId,
+      subject_id: s.subjectId,
+      title: s.title,
+      messages: s.messages,
+      rolling_summary: s.rollingSummary,
+      preserved_identifiers: s.preservedIdentifiers,
+      token_count: s.tokenCount,
+      created_at: s.createdAt,
+      updated_at: s.updatedAt,
+    };
+  }
+
+  function formatKnowledgeBaseWire(kb: KnowledgeBase): Record<string, unknown> {
+    return {
+      id: kb.id,
+      org_id: kb.orgId,
+      workspace_id: kb.workspaceId,
+      project_id: kb.projectId,
+      name: kb.name,
+      description: kb.description,
+      embedding_model: kb.embeddingModel,
+      embedding_dim: kb.embeddingDim,
+      chunk_target_tokens: kb.chunkTargetTokens,
+      chunk_max_tokens: kb.chunkMaxTokens,
+      chunk_overlap_tokens: kb.chunkOverlapTokens,
+      sensitivity: kb.sensitivity,
+      created_by: kb.createdBy,
+      created_at: kb.createdAt,
+      updated_at: kb.updatedAt,
+    };
+  }
+
+  function formatKbSourceWire(src: KbSource): Record<string, unknown> {
+    return {
+      id: src.id,
+      org_id: src.orgId,
+      workspace_id: src.workspaceId,
+      kb_id: src.kbId,
+      name: src.name,
+      kind: src.kind,
+      uri: src.uri,
+      mime_type: src.mimeType,
+      sync_status: src.syncStatus,
+      access_principals: src.accessPrincipals,
+      last_synced_at: src.lastSyncedAt,
+      last_error: src.lastError,
+      created_at: src.createdAt,
+      updated_at: src.updatedAt,
+    };
+  }
+
+  function formatKbDocumentWire(doc: KbDocument): Record<string, unknown> {
+    return {
+      id: doc.id,
+      org_id: doc.orgId,
+      workspace_id: doc.workspaceId,
+      kb_id: doc.kbId,
+      source_id: doc.sourceId,
+      external_key: doc.externalKey,
+      title: doc.title,
+      mime_type: doc.mimeType,
+      content_hash: doc.contentHash,
+      byte_size: doc.byteSize,
+      chunk_count: doc.chunkCount,
+      metadata: doc.metadata,
+      created_at: doc.createdAt,
+      updated_at: doc.updatedAt,
+    };
+  }
+
+  function formatKbChunkWire(ch: KbChunk): Record<string, unknown> {
+    return {
+      id: ch.id,
+      org_id: ch.orgId,
+      workspace_id: ch.workspaceId,
+      kb_id: ch.kbId,
+      source_id: ch.sourceId,
+      doc_id: ch.docId,
+      chunk_index: ch.chunkIndex,
+      section_path: ch.sectionPath,
+      page: ch.page,
+      char_start: ch.charStart,
+      char_end: ch.charEnd,
+      token_count: ch.tokenCount,
+      content: ch.content,
+      content_hash: ch.contentHash,
+      embedding_dim: ch.embeddingDim,
+      metadata: ch.metadata,
+      created_at: ch.createdAt,
+    };
+  }
+
+  function formatKbSyncReportWire(r: KbSyncReport): Record<string, unknown> {
+    return {
+      kb_id: r.kbId,
+      source_id: r.sourceId,
+      doc_id: r.docId,
+      added_chunks: r.addedChunks,
+      unchanged_chunks: r.unchangedChunks,
+      deleted_chunks: r.deletedChunks,
+      re_embedded_chunks: r.reEmbeddedChunks,
+      synced_at: r.syncedAt,
+    };
+  }
+
+  function formatCitationChipWire(c: CitationChip): Record<string, unknown> {
+    return {
+      citation_id: c.citationId,
+      chunk_id: c.chunkId,
+      doc_id: c.docId,
+      doc_title: c.docTitle,
+      section_path: c.sectionPath,
+      char_range: c.charRange,
+      score: c.score,
+      snippet: c.snippet,
+      content: c.content,
+    };
+  }
+
+  app.post('/api/v1/memory/items', async (req, reply) => {
+    const routePath = '/api/v1/memory/items';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      project_id?: string;
+      scope: MemoryScope;
+      scope_id?: string | null;
+      subject_id?: string | null;
+      kind: MemoryKind;
+      content: string;
+      metadata?: Record<string, unknown>;
+      sensitivity: SensitivityLevel;
+      provenance?: {
+        source_run_id?: string;
+        source_step_id?: string;
+        source_doc_id?: string;
+        source_principal_id?: string;
+        confidence?: number;
+        created_via?: 'auto_extract' | 'explicit_tool' | 'human' | 'system';
+      };
+      importance: number;
+      ttl_at?: string | null;
+      pinned: boolean;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const ctx = buildTenantContext(req, workspaceId);
+    const created = await memoryBackend.put(ctx, {
+      projectId: body.project_id ?? null,
+      scope: body.scope,
+      scopeId: body.scope_id ?? null,
+      subjectId: body.subject_id ?? null,
+      kind: body.kind,
+      content: body.content,
+      metadata: body.metadata,
+      sensitivity: body.sensitivity,
+      provenance: body.provenance
+        ? {
+            sourceRunId: body.provenance.source_run_id,
+            sourceStepId: body.provenance.source_step_id,
+            sourceDocId: body.provenance.source_doc_id,
+            sourcePrincipalId: body.provenance.source_principal_id,
+            confidence: body.provenance.confidence,
+            createdVia: body.provenance.created_via,
+          }
+        : undefined,
+      importance: body.importance,
+      ttlAt: body.ttl_at ?? null,
+      pinned: body.pinned,
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'memory.put',
+      resource: { type: 'memory_item', id: created.id, scope: created.scope },
+      decision: 'allow',
+    });
+
+    const formatted = formatMemoryItemWire(created);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.get('/api/v1/memory/items', async (req) => {
+    const routePath = '/api/v1/memory/items';
+    const contract = findContract('GET', routePath)!;
+    const query = validateWithSchema<{
+      scope?: MemoryScope;
+      scope_id?: string;
+      kind?: MemoryKind;
+      subject_id?: string;
+      sensitivity?: SensitivityLevel;
+      max_sensitivity?: SensitivityLevel;
+      q?: string;
+      cursor?: string;
+      limit?: number;
+    }>(contract.querySchema, req.query);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const page = await memoryBackend.list(
+      buildTenantContext(req, workspaceId),
+      {
+        scope: query.scope,
+        scopeId: query.scope_id,
+        kind: query.kind,
+        subjectId: query.subject_id,
+        sensitivity: query.sensitivity,
+        maxSensitivity: query.max_sensitivity,
+        q: query.q,
+      },
+      query.cursor,
+      query.limit ?? 50,
+    );
+    return {
+      items: page.items.map(formatMemoryItemWire),
+      next_cursor: page.nextCursor,
+    };
+  });
+
+  app.patch('/api/v1/memory/items/:id', async (req) => {
+    const routePath = '/api/v1/memory/items/{id}';
+    const contract = findContract('PATCH', routePath)!;
+    const body = validateWithSchema<{
+      content?: string;
+      pinned?: boolean;
+      importance?: number;
+      metadata?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+    const { id } = req.params as { id: string };
+    const updated = await memoryBackend.update(buildTenantContext(req), id, body);
+    return formatMemoryItemWire(updated);
+  });
+
+  app.delete('/api/v1/memory/items/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await memoryBackend.delete(buildTenantContext(req), id, { hard: true });
+    return reply.status(204).send();
+  });
+
+  app.post('/api/v1/memory/search', async (req) => {
+    const routePath = '/api/v1/memory/search';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      query: string;
+      top_k: number;
+      min_score: number;
+      scope?: MemoryScope;
+      scope_id?: string;
+      allowed_scopes?: Array<{ scope: MemoryScope; scope_id?: string }>;
+      kind?: MemoryKind;
+      subject_id?: string;
+      max_sensitivity?: SensitivityLevel;
+      metadata_filter?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const results = await memoryBackend.search(buildTenantContext(req, workspaceId), {
+      query: body.query,
+      topK: body.top_k,
+      minScore: body.min_score,
+      scope: body.scope,
+      scopeId: body.scope_id,
+      allowedScopes: body.allowed_scopes?.map((s) => ({
+        scope: s.scope,
+        scopeId: s.scope_id,
+      })),
+      kind: body.kind,
+      subjectId: body.subject_id,
+      maxSensitivity: body.max_sensitivity,
+      metadataFilter: body.metadata_filter,
+    });
+    const payload = { data: results.map(formatScoredMemoryItemWire) };
+    await persistIdempotencyIfNeeded(req, routePath, 200, payload);
+    return payload;
+  });
+
+  app.post('/api/v1/memory/erase', async (req) => {
+    const routePath = '/api/v1/memory/erase';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{ subject_id: string }>(contract.bodySchema, req.body);
+    const auth = req.platformState!.auth!;
+    const report = await memoryBackend.eraseSubject(buildTenantContext(req), body.subject_id);
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'memory.erase',
+      resource: {
+        type: 'memory_subject',
+        id: body.subject_id,
+        deleted_memory_items: report.deletedMemoryItems,
+        deleted_sessions: report.deletedSessions,
+      },
+      decision: 'allow',
+    });
+
+    const payload = {
+      org_id: report.orgId,
+      subject_id: report.subjectId,
+      deleted_memory_items: report.deletedMemoryItems,
+      deleted_sessions: report.deletedSessions,
+      erased_at: report.erasedAt,
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 200, payload);
+    return payload;
+  });
+
+  app.post('/api/v1/memory/sessions', async (req) => {
+    const routePath = '/api/v1/memory/sessions';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      session_id?: string;
+      agent_id?: string | null;
+      subject_id?: string | null;
+      title?: string | null;
+      messages: Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
+      compact_threshold_tokens?: number;
+      keep_recent_messages?: number;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const session = sessionStore.appendMessages(buildTenantContext(req, workspaceId), {
+      sessionId: body.session_id,
+      agentId: body.agent_id,
+      subjectId: body.subject_id,
+      title: body.title,
+      messages: body.messages,
+      compactThresholdTokens: body.compact_threshold_tokens,
+      keepRecentMessages: body.keep_recent_messages,
+    });
+    const formatted = formatConversationSessionWire(session);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.get('/api/v1/memory/sessions/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const found = sessionStore.get(buildTenantContext(req), id);
+    if (!found) {
+      throw new PlatformError('RES_NOT_FOUND', `Session ${id} not found.`);
+    }
+    return formatConversationSessionWire(found);
+  });
+
+  app.get('/api/v1/knowledge-bases', async (req) => {
+    const state = req.platformState!;
+    const list = kbService.listKnowledgeBases(buildTenantContext(req, state.workspaceId));
+    return { data: list.map(formatKnowledgeBaseWire) };
+  });
+
+  app.post('/api/v1/knowledge-bases', async (req, reply) => {
+    const routePath = '/api/v1/knowledge-bases';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      project_id?: string;
+      name: string;
+      description?: string;
+      embedding_model: string;
+      embedding_dim: number;
+      chunk_target_tokens: number;
+      chunk_max_tokens: number;
+      chunk_overlap_tokens: number;
+      sensitivity: SensitivityLevel;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    if (!workspaceId) {
+      throw new PlatformError('VAL_SCHEMA_MISMATCH', 'No active workspace available.');
+    }
+    const projects = await store.listProjects(orgId, workspaceId);
+    const projectId = body.project_id ?? projects[0]?.id ?? 'prj_default';
+
+    const kb = kbService.createKnowledgeBase(
+      { ...buildTenantContext(req, workspaceId), projectId: projectId as TenantContext['projectId'] },
+      {
+        projectId,
+        name: body.name,
+        description: body.description,
+        embeddingModel: body.embedding_model,
+        embeddingDim: body.embedding_dim,
+        chunkTargetTokens: body.chunk_target_tokens,
+        chunkMaxTokens: body.chunk_max_tokens,
+        chunkOverlapTokens: body.chunk_overlap_tokens,
+        sensitivity: body.sensitivity,
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'kb.create',
+      resource: { type: 'knowledge_base', id: kb.id, name: kb.name },
+      decision: 'allow',
+    });
+
+    const formatted = formatKnowledgeBaseWire(kb);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.get('/api/v1/knowledge-bases/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const detail = kbService.getKnowledgeBaseDetails(
+      buildTenantContext(req, req.platformState?.workspaceId),
+      id,
+    );
+    return {
+      ...formatKnowledgeBaseWire(detail.kb),
+      sources: detail.sources.map(formatKbSourceWire),
+      documents: detail.documents.map(formatKbDocumentWire),
+      chunks: detail.chunks.map(formatKbChunkWire),
+    };
+  });
+
+  app.post('/api/v1/knowledge-bases/:id/documents', async (req, reply) => {
+    const routePath = '/api/v1/knowledge-bases/{id}/documents';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      source_name?: string;
+      kind: 'file' | 'url' | 'manual';
+      uri?: string;
+      external_key?: string;
+      title: string;
+      mime_type: string;
+      content?: string;
+      access_principals?: string[];
+      metadata?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const res = await kbService.ingestDocument(buildTenantContext(req), id, {
+      sourceName: body.source_name,
+      kind: body.kind,
+      uri: body.uri,
+      externalKey: body.external_key,
+      title: body.title,
+      mimeType: body.mime_type,
+      content: body.content,
+      accessPrincipals: body.access_principals,
+      metadata: body.metadata,
+    });
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'kb.ingest',
+      resource: {
+        type: 'kb_document',
+        id: res.document.id,
+        kb_id: id,
+        chunk_count: res.document.chunkCount,
+      },
+      decision: 'allow',
+    });
+
+    const formatted = {
+      source: formatKbSourceWire(res.source),
+      document: formatKbDocumentWire(res.document),
+      sync_report: formatKbSyncReportWire(res.syncReport),
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.post('/api/v1/knowledge-bases/:id/sync', async (req) => {
+    const routePath = '/api/v1/knowledge-bases/{id}/sync';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      doc_id: string;
+      content: string;
+      title?: string;
+    }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const report = await kbService.syncDocumentContent(
+      buildTenantContext(req),
+      id,
+      body.doc_id,
+      body.content,
+      body.title,
+    );
+
+    await store.appendAudit(auth.context.org.id, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'kb.sync',
+      resource: {
+        type: 'kb_document',
+        id: body.doc_id,
+        kb_id: id,
+        re_embedded_chunks: report.reEmbeddedChunks,
+      },
+      decision: 'allow',
+    });
+
+    const formatted = formatKbSyncReportWire(report);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/knowledge-bases/:id/query', async (req) => {
+    const routePath = '/api/v1/knowledge-bases/{id}/query';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      query: string;
+      top_k: number;
+      min_score: number;
+    }>(contract.bodySchema, req.body);
+    const { id } = req.params as { id: string };
+
+    const res = await kbService.queryKnowledgeBase(buildTenantContext(req), {
+      kbId: id,
+      query: body.query,
+      topK: body.top_k,
+      minScore: body.min_score,
+    });
+
+    const formatted = {
+      kb_id: res.kbId,
+      query: res.query,
+      answer: res.answer,
+      citations: res.citations.map(formatCitationChipWire),
+      results: res.results.map((r) => ({
+        chunk: formatKbChunkWire(r.chunk),
+        doc_title: r.docTitle,
+        score: r.score,
+        breakdown: {
+          cosine: r.breakdown.cosine,
+          bm25_norm: r.breakdown.bm25Norm,
+          recency_decay: r.breakdown.recencyDecay,
+          importance: r.breakdown.importance,
+        },
+      })),
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  return {
+    app,
+    store,
+    executionEngine,
+    modelGateway,
+    toolGateway,
+    usageLedger,
+    triggerService,
+    memoryBackend,
+    sessionStore,
+    kbService,
+  };
 }
