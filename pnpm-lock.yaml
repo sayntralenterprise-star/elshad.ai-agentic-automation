@@ -247,6 +247,9 @@ importers:
       '@elshad/tool-kit':
         specifier: workspace:*
         version: link:../../packages/tool-kit
+      '@elshad/workflow-core':
+        specifier: workspace:*
+        version: link:../../packages/workflow-core
       '@fastify/cookie':
         specifier: ^11.1.5
         version: 11.1.5
@@ -374,6 +377,9 @@ importers:
       '@elshad/tool-kit':
         specifier: workspace:*
         version: link:../../packages/tool-kit
+      '@elshad/workflow-core':
+        specifier: workspace:*
+        version: link:../../packages/workflow-core
 
   packages/api-contract:
     dependencies:
@@ -555,6 +561,39 @@ importers:
       '@types/react-dom':
         specifier: ^19.3.0
         version: 19.3.0(@types/react@19.3.0)
+
+  packages/workflow-core:
+    dependencies:
+      '@elshad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@elshad/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@elshad/model-kit':
+        specifier: workspace:*
+        version: link:../model-kit
+      '@elshad/platform-kit':
+        specifier: workspace:*
+        version: link:../platform-kit
+      '@elshad/policy-kit':
+        specifier: workspace:*
+        version: link:../policy-kit
+      '@elshad/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@elshad/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      '@elshad/tool-kit':
+        specifier: workspace:*
+        version: link:../tool-kit
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.7
 
 packages:
 

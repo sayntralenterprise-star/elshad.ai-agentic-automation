@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { BuiltInRole } from '@elshad/authz';
 import { createTestConfig } from '@elshad/config';
@@ -847,6 +848,250 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
       headers: { cookie: cookieB },
     });
     expect(orgBGet.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('supports Workflow validation, YAML round-trip, HMAC webhook execution, replay rejection, test-from-here & cross-org isolation [E0.4-1..7]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's04-a@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    store.seedOrganization({
+      slug: 's04-org-b',
+      name: 'S04 Org B',
+      adminEmail: 's04-b@elshad.local',
+      adminPassword: 'Password123!',
+    });
+
+    const { app } = buildApiServer({ config, store });
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's04-a@elshad.local', password: 'Password123!' },
+    });
+    const cookieA = parseCookie(loginA.headers['set-cookie']);
+    const csrfA = loginA.json().csrf_token as string;
+
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's04-b@elshad.local', password: 'Password123!' },
+    });
+    const cookieB = parseCookie(loginB.headers['set-cookie']);
+
+    // 1. Built-in nodes catalog
+    const nodesRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workflows/nodes',
+      headers: { cookie: cookieA },
+    });
+    expect(nodesRes.statusCode).toBe(200);
+    expect(nodesRes.json().data.length).toBeGreaterThanOrEqual(15);
+
+    // Create triage agent used by ai.agent node
+    const agentRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'wf-agent-1' },
+      payload: {
+        definition: {
+          name: 'ticket-triage',
+          version: '1.0.0',
+          autonomy_level: 2,
+          model: { tier: 'standard', provider: 'mock', model: 'mock/react-default' },
+          prompt: { system: 'Return concise triage classification.' },
+          tools: [],
+        },
+      },
+    });
+    expect(agentRes.statusCode).toBe(201);
+
+    const webhookSecret = 'hmac-signing-secret-s04';
+    const triageGraph = {
+      schema_version: 1,
+      settings: { max_concurrency: 5, queue: 'default', timeout_ms: 900_000 },
+      nodes: [
+        {
+          id: 'n_hook',
+          type: 'trigger.webhook',
+          name: 'Ticket Hook',
+          position: { x: 0, y: 0 },
+          config: {
+            path: 'triage-ticket',
+            methods: ['POST'],
+            auth: { mode: 'hmac', secret: webhookSecret },
+          },
+        },
+        {
+          id: 'n_agent',
+          type: 'ai.agent',
+          name: 'Triage Agent',
+          position: { x: 240, y: 0 },
+          config: { agent: 'ticket-triage', input: '={{ $json.text }}' },
+        },
+        {
+          id: 'n_switch',
+          type: 'logic.switch',
+          name: 'Route Category',
+          position: { x: 480, y: 0 },
+          config: {
+            cases: [{ id: 'billing', expr: "$json.category = 'billing'" }],
+            default: true,
+          },
+        },
+        {
+          id: 'n_slack_billing',
+          type: 'human.notify',
+          name: 'Slack Billing',
+          position: { x: 740, y: -60 },
+          config: {
+            channel: 'slack',
+            template: 'Billing issue: {{ $json.answer }}',
+            recipients: ['#billing'],
+          },
+        },
+        {
+          id: 'n_slack_general',
+          type: 'human.notify',
+          name: 'Slack General',
+          position: { x: 740, y: 80 },
+          config: {
+            channel: 'slack',
+            template: 'General issue: {{ $json.answer }}',
+            recipients: ['#ops'],
+          },
+        },
+      ],
+      edges: [
+        { id: 'e1', from: { node: 'n_hook', port: 'main' }, to: { node: 'n_agent', port: 'in' } },
+        { id: 'e2', from: { node: 'n_agent', port: 'main' }, to: { node: 'n_switch', port: 'in' } },
+        {
+          id: 'e3',
+          from: { node: 'n_switch', port: 'billing' },
+          to: { node: 'n_slack_billing', port: 'in' },
+        },
+        {
+          id: 'e4',
+          from: { node: 'n_switch', port: 'default' },
+          to: { node: 'n_slack_general', port: 'in' },
+        },
+      ],
+      pinned_data: {},
+      notes: [],
+    };
+
+    // 2. Validate valid & invalid orphan graph
+    const valOk = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workflows:validate',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'wf-val-1' },
+      payload: { graph: triageGraph },
+    });
+    expect(valOk.statusCode).toBe(200);
+    expect(valOk.json().valid).toBe(true);
+
+    // 3. Create workflow & verify YAML generated losslessly
+    const createWf = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workflows',
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'wf-create-1' },
+      payload: { name: 'ticket-to-slack', graph: triageGraph },
+    });
+    expect(createWf.statusCode).toBe(201);
+    const wf = createWf.json();
+    const wfId = wf.id as string;
+    const v1Id = wf.versions[0].id as string;
+    expect(wf.versions[0].yaml_source).toContain('triage-ticket');
+
+    // 4. Publish workflow and activate webhook trigger
+    const pubRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workflows/${wfId}/versions/${v1Id}/publish`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'wf-pub-1' },
+      payload: { activate_triggers: true },
+    });
+    expect(pubRes.statusCode).toBe(200);
+    expect(pubRes.json().status).toBe('active');
+
+    const trigRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/triggers',
+      headers: { cookie: cookieA },
+    });
+    expect(trigRes.statusCode).toBe(200);
+    const trig = trigRes.json().data[0];
+    expect(trig.active).toBe(true);
+
+    // 5. Invoke public HMAC webhook trigger and verify replay rejection
+    const hookPayload = JSON.stringify({ text: 'Refund double charge', category: 'billing' });
+    const ts = Math.floor(Date.now() / 1000);
+    const hmacHex = createHmac('sha256', webhookSecret)
+      .update(`${ts}.${hookPayload}`, 'utf8')
+      .digest('hex');
+
+    const hookOk = await app.inject({
+      method: 'POST',
+      url: `/api/v1/hooks/${trig.external_id}`,
+      headers: {
+        'content-type': 'application/json',
+        'x-signature': `t=${ts},v1=${hmacHex}`,
+        'x-webhook-nonce': 'nonce-api-1',
+      },
+      payload: hookPayload,
+    });
+    expect(hookOk.statusCode).toBe(202);
+    expect(hookOk.json().status).toBe('accepted');
+    const hookRunId = hookOk.json().run_id as string;
+    expect(hookRunId).toBeTruthy();
+
+    const hookRunRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${hookRunId}`,
+      headers: { cookie: cookieA },
+    });
+    expect(hookRunRes.statusCode).toBe(200);
+    expect(hookRunRes.json().status).toBe('succeeded');
+
+    const hookReplay = await app.inject({
+      method: 'POST',
+      url: `/api/v1/hooks/${trig.external_id}`,
+      headers: {
+        'content-type': 'application/json',
+        'x-signature': `t=${ts},v1=${hmacHex}`,
+        'x-webhook-nonce': 'nonce-api-1',
+      },
+      payload: hookPayload,
+    });
+    expect(hookReplay.statusCode).toBe(409);
+    expect(hookReplay.json().error.code).toBe('RES_CONFLICT');
+
+    // 6. Test-from-here with pinned upstream output
+    const testFromHere = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workflows/${wfId}/runs`,
+      headers: { cookie: cookieA, 'x-csrf-token': csrfA, 'Idempotency-Key': 'wf-run-pin-1' },
+      payload: {
+        start_from_node_id: 'n_switch',
+        pinned_data: {
+          n_agent: [{ category: 'billing', answer: 'Pinned Billing Ticket' }],
+        },
+      },
+    });
+    expect(testFromHere.statusCode).toBe(201);
+    expect(testFromHere.json().status).toBe('succeeded');
+
+    // 7. Cross-org workflow isolation -> 404
+    const orgBGetWf = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workflows/${wfId}`,
+      headers: { cookie: cookieB },
+    });
+    expect(orgBGetWf.statusCode).toBe(404);
 
     await app.close();
   });

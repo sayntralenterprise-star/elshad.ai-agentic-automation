@@ -45,7 +45,7 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(db|execution|platform-kit|config|telemetry|authz|api-contract|policy-kit|model-kit|tool-kit|runtime-core)/',
+          '^packages/(db|execution|platform-kit|config|telemetry|authz|api-contract|policy-kit|model-kit|tool-kit|runtime-core|workflow-core)/',
           'node_modules/(pg|kysely|ioredis|nats|fastify)',
         ],
       },

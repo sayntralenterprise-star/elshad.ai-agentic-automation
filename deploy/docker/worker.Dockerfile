@@ -24,6 +24,7 @@ COPY packages/sdk-ts/package.json packages/sdk-ts/
 COPY packages/telemetry/package.json packages/telemetry/
 COPY packages/tool-kit/package.json packages/tool-kit/
 COPY packages/ui-kit/package.json packages/ui-kit/
+COPY packages/workflow-core/package.json packages/workflow-core/
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

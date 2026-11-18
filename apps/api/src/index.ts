@@ -81,6 +81,18 @@ import {
   type ToolContract,
 } from '@elshad/tool-kit';
 import {
+  NodeRegistry,
+  TriggerService,
+  WorkflowGraphSchema,
+  computeWorkflowHash,
+  executeWorkflowGraph,
+  parseWorkflowFromYaml,
+  serializeWorkflowToYaml,
+  validateWorkflowGraph,
+  type TriggerRecord,
+  type WorkflowGraph,
+} from '@elshad/workflow-core';
+import {
   InMemoryIamAuditStore,
   type AuthPrincipalContext,
   type IamAuditStore,
@@ -101,6 +113,8 @@ export interface ApiServerOptions {
   modelGateway?: ModelGateway;
   toolGateway?: ToolGateway;
   usageLedger?: UsageLedger;
+  nodeRegistry?: NodeRegistry;
+  triggerService?: TriggerService;
   cache?: Cache;
   clock?: Clock;
   idGen?: IdGen;
@@ -145,6 +159,7 @@ export function buildApiServer(opts: ApiServerOptions): {
   modelGateway: ModelGateway;
   toolGateway: ToolGateway;
   usageLedger: UsageLedger;
+  triggerService: TriggerService;
 } {
   const clock = opts.clock ?? new SystemClock();
   const idGen = opts.idGen ?? new SystemIdGen();
@@ -206,6 +221,40 @@ export function buildApiServer(opts: ApiServerOptions): {
   const agentsById = new Map<string, StoredAgent>();
   const workspaceCustomTools = new Map<string, ToolContract[]>();
 
+  const nodeRegistry = opts.nodeRegistry ?? new NodeRegistry(true);
+  const triggerService = opts.triggerService ?? new TriggerService({ clock, idGen });
+
+  interface StoredWorkflowVersion {
+    id: string;
+    workflow_id: string;
+    semver: string;
+    state: 'draft' | 'published' | 'retired';
+    schema_version: number;
+    graph: WorkflowGraph;
+    graph_hash: string;
+    yaml_source: string;
+    message: string | null;
+    created_by: string;
+    created_at: string;
+  }
+
+  interface StoredWorkflow {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    project_id: string;
+    owner_id: string;
+    name: string;
+    description: string | null;
+    status: 'draft' | 'active' | 'paused' | 'archived';
+    current_version_id: string | null;
+    versions: StoredWorkflowVersion[];
+    created_at: string;
+    updated_at: string;
+  }
+
+  const workflowsById = new Map<string, StoredWorkflow>();
+
   const rateLimitCfg = {
     public: opts.rateLimits?.public ?? 1200,
     auth: opts.rateLimits?.auth ?? 120,
@@ -219,6 +268,21 @@ export function buildApiServer(opts: ApiServerOptions): {
   >();
 
   const app = Fastify({ logger: false });
+
+  // Preserve raw JSON body string so public webhook HMAC signature verification hashes exact wire bytes.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    const text = typeof body === 'string' ? body : body.toString('utf8');
+    (req as FastifyRequest & { rawBodyText?: string }).rawBodyText = text;
+    if (!text.trim()) {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(text));
+    } catch (err) {
+      done(err as Error);
+    }
+  });
 
   void app.register(cookie);
   void app.register(cors, {
@@ -1869,5 +1933,579 @@ export function buildApiServer(opts: ApiServerOptions): {
     };
   });
 
-  return { app, store, executionEngine, modelGateway, toolGateway, usageLedger };
+  // ---------- S0.4 Workflows, JSONata, Triggers & Webhooks ----------
+
+  function parseWorkflowInput(raw: { graph?: unknown; yaml_source?: string }): WorkflowGraph {
+    let candidate: unknown = raw.graph;
+    if (!candidate && raw.yaml_source) {
+      candidate = parseWorkflowFromYaml(raw.yaml_source);
+    }
+    if (!candidate) {
+      throw new PlatformError('VAL_SCHEMA_MISMATCH', 'Either graph or yaml_source is required.');
+    }
+    const parsed = WorkflowGraphSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw new PlatformError('VAL_SCHEMA_MISMATCH', 'Workflow graph failed schema validation', {
+        issues: parsed.error.issues,
+      });
+    }
+    return parsed.data;
+  }
+
+  function formatWorkflowVersion(v: StoredWorkflowVersion): Record<string, unknown> {
+    return {
+      id: v.id,
+      workflow_id: v.workflow_id,
+      semver: v.semver,
+      state: v.state,
+      schema_version: v.schema_version,
+      graph: v.graph,
+      graph_hash: v.graph_hash,
+      yaml_source: v.yaml_source,
+      message: v.message,
+      created_by: v.created_by,
+      created_at: v.created_at,
+    };
+  }
+
+  function formatWorkflow(wf: StoredWorkflow): Record<string, unknown> {
+    const published =
+      wf.versions.find((v) => v.id === wf.current_version_id) ??
+      [...wf.versions].reverse().find((v) => v.state === 'published') ??
+      null;
+    const draft = [...wf.versions].reverse().find((v) => v.state === 'draft') ?? null;
+    return {
+      id: wf.id,
+      org_id: wf.org_id,
+      workspace_id: wf.workspace_id,
+      project_id: wf.project_id,
+      name: wf.name,
+      description: wf.description,
+      status: wf.status,
+      current_version_id: wf.current_version_id,
+      draft_version: draft ? formatWorkflowVersion(draft) : null,
+      published_version: published ? formatWorkflowVersion(published) : null,
+      versions: wf.versions.map(formatWorkflowVersion),
+      created_at: wf.created_at,
+      updated_at: wf.updated_at,
+    };
+  }
+
+  function formatTrigger(t: TriggerRecord): Record<string, unknown> {
+    return {
+      id: t.id,
+      org_id: t.orgId,
+      workspace_id: t.workspaceId,
+      environment_id: t.environmentId,
+      workflow_id: t.workflowId,
+      workflow_version_id: t.workflowVersionId,
+      node_id: t.nodeId,
+      kind: t.kind,
+      external_id: t.externalId,
+      path: t.path,
+      active: t.active,
+      test_mode: t.testMode,
+      last_fired_at: t.lastFiredAt,
+      next_fire_at: t.nextFireAt,
+    };
+  }
+
+  function resolveAgentForWorkflow(
+    orgId: string,
+    ref: string,
+  ): AgentDefinition | undefined {
+    const byId = agentsById.get(ref);
+    if (byId && byId.org_id === orgId) {
+      return (
+        byId.versions.find((v) => v.id === byId.current_version_id)?.definition ??
+        byId.versions[byId.versions.length - 1]?.definition
+      );
+    }
+    const byName = [...agentsById.values()].find((a) => a.org_id === orgId && a.name === ref);
+    if (!byName) return undefined;
+    return (
+      byName.versions.find((v) => v.id === byName.current_version_id)?.definition ??
+      byName.versions[byName.versions.length - 1]?.definition
+    );
+  }
+
+  app.get('/api/v1/workflows/nodes', async () => {
+    return {
+      data: nodeRegistry.list().map((h) => ({
+        type: h.type,
+        category: h.category,
+        label: h.label,
+        inputs: [...h.ports.inputs],
+        outputs: [...h.ports.outputs],
+      })),
+    };
+  });
+
+  app.post('/api/v1/workflows:validate', async (req) => {
+    const routePath = '/api/v1/workflows:validate';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      environment?: EnvironmentKind;
+      graph?: unknown;
+      yaml_source?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    const envs = workspaceId ? await store.listEnvironments(orgId, workspaceId) : [];
+    const envKind = body.environment ?? state.environment ?? 'dev';
+    const env = envs.find((e) => e.kind === envKind) ?? envs[0];
+    const usedPaths = new Set(
+      triggerService
+        .listByOrg(orgId, workspaceId)
+        .filter((t) => t.active && (!env || t.environmentId === env.id) && t.path)
+        .map((t) => t.path!),
+    );
+
+    const graph = parseWorkflowInput(body);
+    const valRes = validateWorkflowGraph(graph, nodeRegistry, usedPaths);
+    const payload = {
+      valid: valRes.valid,
+      errors: valRes.errors.map((e) => ({
+        severity: e.severity,
+        code: e.code,
+        message: e.message,
+        ...(e.nodeId ? { node_id: e.nodeId } : {}),
+        ...(e.edgeId ? { edge_id: e.edgeId } : {}),
+      })),
+      warnings: valRes.warnings.map((w) => ({
+        severity: w.severity,
+        code: w.code,
+        message: w.message,
+        ...(w.nodeId ? { node_id: w.nodeId } : {}),
+        ...(w.edgeId ? { edge_id: w.edgeId } : {}),
+      })),
+    };
+    await persistIdempotencyIfNeeded(req, routePath, 200, payload);
+    return payload;
+  });
+
+  app.get('/api/v1/workflows', async (req) => {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const wsFilter = state.workspaceId;
+    const data = [...workflowsById.values()]
+      .filter((w) => w.org_id === orgId && (!wsFilter || w.workspace_id === wsFilter))
+      .map(formatWorkflow);
+    return { data };
+  });
+
+  app.post('/api/v1/workflows', async (req, reply) => {
+    const routePath = '/api/v1/workflows';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      workspace_id?: string;
+      project_id?: string;
+      name: string;
+      description?: string;
+      semver: string;
+      graph?: unknown;
+      yaml_source?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = body.workspace_id ?? state.workspaceId ?? auth.context.workspaces[0]?.id;
+    if (!workspaceId) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible workspace found.');
+    }
+    const ws = await store.getWorkspace(orgId, workspaceId);
+    if (!ws) {
+      throw new PlatformError('RES_NOT_FOUND', `Workspace ${workspaceId} not found.`);
+    }
+
+    const projects = await store.listProjects(orgId, workspaceId);
+    const project = body.project_id
+      ? projects.find((p) => p.id === body.project_id)
+      : projects[0];
+    if (!project) {
+      throw new PlatformError('RES_NOT_FOUND', 'No accessible project found in workspace.');
+    }
+
+    const duplicate = [...workflowsById.values()].find(
+      (w) => w.org_id === orgId && w.project_id === project.id && w.name === body.name,
+    );
+    if (duplicate) {
+      throw new PlatformError('RES_CONFLICT', `Workflow "${body.name}" already exists in project.`);
+    }
+
+    const graph = parseWorkflowInput(body);
+    const val = validateWorkflowGraph(graph, nodeRegistry);
+    if (!val.valid) {
+      throw new PlatformError(
+        'VAL_GRAPH_INVALID',
+        `Workflow graph invalid: ${val.errors.map((e) => e.message).join('; ')}`,
+        { errors: val.errors },
+      );
+    }
+
+    const nowIso = clock.now().toISOString();
+    const wfId = idGen.uuidv7();
+    const verId = idGen.uuidv7();
+    const wf: StoredWorkflow = {
+      id: wfId,
+      org_id: orgId,
+      workspace_id: workspaceId,
+      project_id: project.id,
+      owner_id: auth.subject.principalId,
+      name: body.name,
+      description: body.description ?? null,
+      status: 'draft',
+      current_version_id: null,
+      versions: [
+        {
+          id: verId,
+          workflow_id: wfId,
+          semver: body.semver,
+          state: 'draft',
+          schema_version: 1,
+          graph,
+          graph_hash: computeWorkflowHash(graph),
+          yaml_source: serializeWorkflowToYaml(graph),
+          message: 'Initial draft',
+          created_by: auth.subject.principalId,
+          created_at: nowIso,
+        },
+      ],
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    workflowsById.set(wfId, wf);
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'workflow.create',
+      resource: { type: 'workflow', id: wfId, name: wf.name, workspace_id: workspaceId },
+      decision: 'allow',
+    });
+
+    const formatted = formatWorkflow(wf);
+    await persistIdempotencyIfNeeded(req, routePath, 201, formatted);
+    return reply.status(201).send(formatted);
+  });
+
+  app.get('/api/v1/workflows/:id', async (req) => {
+    const orgId = req.platformState!.auth!.context.org.id;
+    const { id } = req.params as { id: string };
+    const wf = workflowsById.get(id);
+    if (!wf || wf.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Workflow ${id} not found.`);
+    }
+    return formatWorkflow(wf);
+  });
+
+  app.patch('/api/v1/workflows/:id', async (req) => {
+    const routePath = '/api/v1/workflows/{id}';
+    const contract = findContract('PATCH', routePath)!;
+    const body = validateWithSchema<{
+      semver: string;
+      description?: string;
+      graph?: unknown;
+      yaml_source?: string;
+      message?: string;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const wf = workflowsById.get(id);
+    if (!wf || wf.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Workflow ${id} not found.`);
+    }
+
+    const graph = parseWorkflowInput(body);
+    const val = validateWorkflowGraph(graph, nodeRegistry);
+    if (!val.valid) {
+      throw new PlatformError(
+        'VAL_GRAPH_INVALID',
+        `Workflow graph invalid: ${val.errors.map((e) => e.message).join('; ')}`,
+        { errors: val.errors },
+      );
+    }
+
+    const nowIso = clock.now().toISOString();
+    const existingSameSemver = wf.versions.find((v) => v.semver === body.semver);
+    if (existingSameSemver) {
+      if (existingSameSemver.state !== 'draft') {
+        throw new PlatformError(
+          'RES_CONFLICT',
+          `Version ${existingSameSemver.semver} is already ${existingSameSemver.state}.`,
+        );
+      }
+      existingSameSemver.graph = graph;
+      existingSameSemver.graph_hash = computeWorkflowHash(graph);
+      existingSameSemver.yaml_source = serializeWorkflowToYaml(graph);
+      existingSameSemver.message = body.message ?? existingSameSemver.message;
+    } else {
+      wf.versions.push({
+        id: idGen.uuidv7(),
+        workflow_id: wf.id,
+        semver: body.semver,
+        state: 'draft',
+        schema_version: 1,
+        graph,
+        graph_hash: computeWorkflowHash(graph),
+        yaml_source: serializeWorkflowToYaml(graph),
+        message: body.message ?? 'Draft update',
+        created_by: auth.subject.principalId,
+        created_at: nowIso,
+      });
+    }
+
+    if (body.description !== undefined) {
+      wf.description = body.description;
+    }
+    wf.updated_at = nowIso;
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'workflow.update_draft',
+      resource: { type: 'workflow', id: wf.id, semver: body.semver },
+      decision: 'allow',
+    });
+
+    return formatWorkflow(wf);
+  });
+
+  app.post('/api/v1/workflows/:id/versions/:vid/publish', async (req) => {
+    const routePath = '/api/v1/workflows/{id}/versions/{vid}/publish';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      environment?: EnvironmentKind;
+      message?: string;
+      activate_triggers: boolean;
+    }>(contract.bodySchema, req.body ?? {});
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const { id, vid } = req.params as { id: string; vid: string };
+
+    const wf = workflowsById.get(id);
+    if (!wf || wf.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Workflow ${id} not found.`);
+    }
+
+    const target = wf.versions.find((v) => v.id === vid);
+    if (!target) {
+      throw new PlatformError('RES_NOT_FOUND', `Workflow version ${vid} not found.`);
+    }
+    if (target.state !== 'draft') {
+      throw new PlatformError(
+        'RES_CONFLICT',
+        `Workflow version ${target.semver} is already ${target.state}.`,
+      );
+    }
+
+    const envs = await store.listEnvironments(orgId, wf.workspace_id);
+    const envKind = body.environment ?? state.environment ?? 'dev';
+    const env = envs.find((e) => e.kind === envKind) ?? envs[0];
+    if (!env) {
+      throw new PlatformError('RES_NOT_FOUND', `Environment ${envKind} not found.`);
+    }
+
+    triggerService.registerWorkflowTriggers({
+      orgId,
+      workspaceId: wf.workspace_id,
+      environmentId: env.id,
+      workflowId: wf.id,
+      workflowVersionId: target.id,
+      graph: target.graph,
+      active: body.activate_triggers,
+    });
+
+    for (const v of wf.versions) {
+      if (v.state === 'published') v.state = 'retired';
+    }
+    target.state = 'published';
+    if (body.message) target.message = body.message;
+    wf.current_version_id = target.id;
+    wf.status = 'active';
+    wf.updated_at = clock.now().toISOString();
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'workflow.publish',
+      resource: {
+        type: 'workflow_version',
+        id: target.id,
+        workflow_id: wf.id,
+        semver: target.semver,
+      },
+      decision: 'allow',
+    });
+
+    const formatted = formatWorkflow(wf);
+    await persistIdempotencyIfNeeded(req, routePath, 200, formatted);
+    return formatted;
+  });
+
+  app.post('/api/v1/workflows/:id/runs', async (req, reply) => {
+    const routePath = '/api/v1/workflows/{id}/runs';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      environment?: EnvironmentKind;
+      version_id?: string;
+      trigger_payload: Record<string, unknown>;
+      pinned_data?: Record<string, unknown[]>;
+      start_from_node_id?: string;
+    }>(contract.bodySchema, req.body);
+
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const { id } = req.params as { id: string };
+
+    const wf = workflowsById.get(id);
+    if (!wf || wf.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Workflow ${id} not found.`);
+    }
+
+    const version =
+      (body.version_id
+        ? wf.versions.find((v) => v.id === body.version_id)
+        : wf.versions.find((v) => v.id === wf.current_version_id) ??
+          wf.versions[wf.versions.length - 1]) ?? null;
+    if (!version) {
+      throw new PlatformError('RES_NOT_FOUND', 'No runnable workflow version found.');
+    }
+
+    const envs = await store.listEnvironments(orgId, wf.workspace_id);
+    const envKind = body.environment ?? state.environment ?? 'dev';
+    const env = envs.find((e) => e.kind === envKind) ?? envs[0];
+    if (!env) {
+      throw new PlatformError('RES_NOT_FOUND', `Environment ${envKind} not found.`);
+    }
+
+    const tenantCtx = buildTenantContext(req, wf.workspace_id, env.id);
+    const execResult = await executeWorkflowGraph(
+      {
+        ctx: { ...tenantCtx, projectId: wf.project_id as TenantContext['projectId'] },
+        workflowId: wf.id,
+        workflowName: wf.name,
+        versionId: version.id,
+        graph: version.graph,
+        triggerPayload: body.trigger_payload,
+        pinnedData: body.pinned_data as Record<string, Record<string, unknown>[]> | undefined,
+        startFromNodeId: body.start_from_node_id,
+      },
+      {
+        registry: nodeRegistry,
+        executionEngine,
+        effectLedger,
+        modelGateway,
+        toolGateway,
+        usageLedger,
+        clock,
+        idGen,
+        resolveAgent: (agentRef) => resolveAgentForWorkflow(orgId, agentRef),
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'workflow.run',
+      resource: {
+        type: 'run',
+        id: execResult.runId,
+        workflow_id: wf.id,
+        version: version.semver,
+      },
+      decision: 'allow',
+    });
+
+    const latestRun = await executionEngine.getRun(orgId, execResult.runId);
+    await persistIdempotencyIfNeeded(req, routePath, 201, latestRun);
+    return reply.status(201).send(latestRun);
+  });
+
+  app.get('/api/v1/triggers', async (req) => {
+    const state = req.platformState!;
+    const auth = state.auth!;
+    const orgId = auth.context.org.id;
+    const data = triggerService.listByOrg(orgId, state.workspaceId).map(formatTrigger);
+    return { data };
+  });
+
+  app.post('/api/v1/hooks/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rawBody =
+      (req as FastifyRequest & { rawBodyText?: string }).rawBodyText ??
+      (req.body ? JSON.stringify(req.body) : '');
+
+    const normHeaders: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      normHeaders[k] = Array.isArray(v) ? v[0] : v;
+    }
+
+    const delivery = await triggerService.receiveWebhook({
+      externalIdOrPath: id,
+      method: req.method,
+      headers: normHeaders,
+      rawBody,
+    });
+
+    let runId: string | null = null;
+    if (delivery.shouldStartRun) {
+      const wf = workflowsById.get(delivery.trigger.workflowId);
+      const version = wf?.versions.find((v) => v.id === delivery.trigger.workflowVersionId);
+      if (wf && version) {
+        const hookCtx: TenantContext = {
+          orgId: wf.org_id as OrgId,
+          workspaceId: wf.workspace_id as WorkspaceId,
+          projectId: wf.project_id as TenantContext['projectId'],
+          environmentId: delivery.trigger.environmentId as EnvironmentId,
+          principal: {
+            id: wf.owner_id as PrincipalId,
+            type: 'service_account',
+          },
+          requestId: req.platformState?.requestId ?? `req_${idGen.uuidv7()}`,
+          traceId: req.platformState?.traceId ?? '00000000000000000000000000000000',
+        };
+        const execResult = await executeWorkflowGraph(
+          {
+            ctx: hookCtx,
+            workflowId: wf.id,
+            workflowName: wf.name,
+            versionId: version.id,
+            graph: version.graph,
+            triggerPayload: delivery.payload,
+          },
+          {
+            registry: nodeRegistry,
+            executionEngine,
+            effectLedger,
+            modelGateway,
+            toolGateway,
+            usageLedger,
+            clock,
+            idGen,
+            resolveAgent: (agentRef) => resolveAgentForWorkflow(wf.org_id, agentRef),
+          },
+        );
+        runId = execResult.runId;
+        delivery.event.runId = runId;
+      }
+    }
+
+    return reply.status(202).send({
+      status: delivery.shouldStartRun ? 'accepted' : 'captured_test',
+      trigger_id: delivery.trigger.id,
+      event_id: delivery.event.id,
+      run_id: runId,
+    });
+  });
+
+  return { app, store, executionEngine, modelGateway, toolGateway, usageLedger, triggerService };
 }

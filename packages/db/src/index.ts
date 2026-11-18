@@ -395,6 +395,70 @@ export interface UsageLedgerTable {
   ts: Date;
 }
 
+export interface WorkflowsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  owner_id: string;
+  status: 'draft' | 'active' | 'paused' | 'archived';
+  current_version_id: string | null;
+  labels: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface WorkflowVersionsTable {
+  id: string;
+  org_id: string;
+  workflow_id: string;
+  semver: string;
+  state: 'draft' | 'published' | 'retired';
+  schema_version: number;
+  graph: Record<string, unknown>;
+  graph_hash: string;
+  yaml_source: string | null;
+  message: string | null;
+  created_by: string;
+  created_at: Date;
+}
+
+export interface TriggersTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  environment_id: string;
+  workflow_id: string;
+  workflow_version_id: string;
+  node_id: string;
+  kind: 'webhook' | 'schedule' | 'manual';
+  external_id: string;
+  path: string | null;
+  config: Record<string, unknown>;
+  active: boolean;
+  test_mode: boolean;
+  last_fired_at: Date | null;
+  next_fire_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface TriggerEventsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  trigger_id: string;
+  run_id: string | null;
+  dedup_key: string;
+  payload: Record<string, unknown>;
+  headers: Record<string, unknown>;
+  status: 'accepted' | 'replayed' | 'rejected' | 'captured_test';
+  received_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -424,6 +488,10 @@ export interface Database {
   model_provider_keys: ModelProviderKeysTable;
   workspace_model_mappings: WorkspaceModelMappingsTable;
   usage_ledger: UsageLedgerTable;
+  workflows: WorkflowsTable;
+  workflow_versions: WorkflowVersionsTable;
+  triggers: TriggersTable;
+  trigger_events: TriggerEventsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

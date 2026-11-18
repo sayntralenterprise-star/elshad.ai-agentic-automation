@@ -261,6 +261,108 @@ export interface UsageLedgerEntryDto {
   ts: string;
 }
 
+export interface WorkflowNodeDto {
+  id: string;
+  type: string;
+  name: string;
+  position: { x: number; y: number };
+  config: Record<string, unknown>;
+  onError?: {
+    mode: 'fail' | 'continue' | 'retry' | 'route';
+    retry?: { max: number; backoff_ms: number };
+  };
+}
+
+export interface WorkflowEdgeDto {
+  id: string;
+  from: { node: string; port: string };
+  to: { node: string; port: string };
+}
+
+export interface WorkflowGraphDto {
+  schema_version: 1;
+  settings: {
+    max_concurrency: number;
+    queue: string;
+    timeout_ms: number;
+    error_workflow?: string;
+    serialize_by?: string;
+  };
+  nodes: WorkflowNodeDto[];
+  edges: WorkflowEdgeDto[];
+  pinned_data: Record<string, unknown[]>;
+  notes: Array<{ id: string; text: string; position?: { x: number; y: number } }>;
+}
+
+export interface WorkflowValidationIssueDto {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+export interface WorkflowValidationDto {
+  valid: boolean;
+  errors: WorkflowValidationIssueDto[];
+  warnings: WorkflowValidationIssueDto[];
+}
+
+export interface WorkflowVersionDto {
+  id: string;
+  workflowId: string;
+  semver: string;
+  state: 'draft' | 'published' | 'retired';
+  schemaVersion: number;
+  graph: WorkflowGraphDto;
+  graphHash: string;
+  yamlSource: string;
+  message: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface WorkflowDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  status: 'draft' | 'active' | 'paused' | 'archived';
+  currentVersionId: string | null;
+  draftVersion: WorkflowVersionDto | null;
+  publishedVersion: WorkflowVersionDto | null;
+  versions: WorkflowVersionDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TriggerDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  environmentId: string;
+  workflowId: string;
+  workflowVersionId: string;
+  nodeId: string;
+  kind: 'webhook' | 'schedule' | 'manual';
+  externalId: string;
+  path: string | null;
+  active: boolean;
+  testMode: boolean;
+  lastFiredAt: string | null;
+  nextFireAt: string | null;
+}
+
+export interface WorkflowNodeDescriptorDto {
+  type: string;
+  category: string;
+  label: string;
+  inputs: string[];
+  outputs: string[];
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -952,6 +1054,159 @@ export class PlatformClient {
       return mapRun(res);
     },
   };
+
+  readonly workflows = {
+    listNodes: async (): Promise<WorkflowNodeDescriptorDto[]> => {
+      const res = await this.request<{ data: WorkflowNodeDescriptorDto[] }>(
+        'GET',
+        '/api/v1/workflows/nodes',
+      );
+      return res.data;
+    },
+    validate: async (
+      input: {
+        workspaceId?: string;
+        environment?: 'dev' | 'staging' | 'prod';
+        graph?: WorkflowGraphDto;
+        yamlSource?: string;
+      },
+      idempotencyKey: string,
+    ): Promise<WorkflowValidationDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/workflows:validate',
+        {
+          body: {
+            workspace_id: input.workspaceId,
+            environment: input.environment,
+            graph: input.graph,
+            yaml_source: input.yamlSource,
+          },
+          idempotencyKey,
+        },
+      );
+      return {
+        valid: Boolean(res.valid),
+        errors: mapValidationIssues(res.errors),
+        warnings: mapValidationIssues(res.warnings),
+      };
+    },
+    list: async (): Promise<WorkflowDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/workflows',
+      );
+      return res.data.map(mapWorkflow);
+    },
+    create: async (
+      input: {
+        workspaceId?: string;
+        projectId?: string;
+        name: string;
+        description?: string;
+        semver?: string;
+        graph?: WorkflowGraphDto;
+        yamlSource?: string;
+      },
+      idempotencyKey: string,
+    ): Promise<WorkflowDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', '/api/v1/workflows', {
+        body: {
+          workspace_id: input.workspaceId,
+          project_id: input.projectId,
+          name: input.name,
+          description: input.description,
+          semver: input.semver ?? '1.0.0',
+          graph: input.graph,
+          yaml_source: input.yamlSource,
+        },
+        idempotencyKey,
+      });
+      return mapWorkflow(res);
+    },
+    get: async (id: string): Promise<WorkflowDto> => {
+      const res = await this.request<Record<string, unknown>>('GET', `/api/v1/workflows/${id}`);
+      return mapWorkflow(res);
+    },
+    updateDraft: async (
+      id: string,
+      input: {
+        semver?: string;
+        description?: string;
+        graph?: WorkflowGraphDto;
+        yamlSource?: string;
+        message?: string;
+      },
+    ): Promise<WorkflowDto> => {
+      const res = await this.request<Record<string, unknown>>('PATCH', `/api/v1/workflows/${id}`, {
+        body: {
+          semver: input.semver ?? '1.0.0',
+          description: input.description,
+          graph: input.graph,
+          yaml_source: input.yamlSource,
+          message: input.message,
+        },
+      });
+      return mapWorkflow(res);
+    },
+    publishVersion: async (
+      id: string,
+      versionId: string,
+      idempotencyKey: string,
+      opts: { environment?: 'dev' | 'staging' | 'prod'; message?: string; activateTriggers?: boolean } = {},
+    ): Promise<WorkflowDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/workflows/${id}/versions/${versionId}/publish`,
+        {
+          body: {
+            environment: opts.environment,
+            message: opts.message,
+            activate_triggers: opts.activateTriggers ?? true,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapWorkflow(res);
+    },
+    run: async (
+      id: string,
+      input: {
+        environment?: 'dev' | 'staging' | 'prod';
+        versionId?: string;
+        triggerPayload?: Record<string, unknown>;
+        pinnedData?: Record<string, unknown[]>;
+        startFromNodeId?: string;
+      },
+      idempotencyKey: string,
+    ): Promise<RunDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/workflows/${id}/runs`,
+        {
+          body: {
+            environment: input.environment,
+            version_id: input.versionId,
+            trigger_payload: input.triggerPayload ?? {},
+            pinned_data: input.pinnedData,
+            start_from_node_id: input.startFromNodeId,
+          },
+          idempotencyKey,
+        },
+      );
+      return mapRun(res);
+    },
+  };
+
+  readonly triggers = {
+    list: async (): Promise<TriggerDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/triggers',
+      );
+      return res.data.map(mapTrigger);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -1058,5 +1313,78 @@ function mapUsageLedgerEntry(u: Record<string, unknown>): UsageLedgerEntryDto {
     unit: String(u.unit ?? 'tokens'),
     costMicroUsd: Number(u.cost_micro_usd ?? 0),
     ts: String(u.ts),
+  };
+}
+
+function mapValidationIssues(raw: unknown): WorkflowValidationIssueDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    const i = item as Record<string, unknown>;
+    return {
+      severity: i.severity as 'error' | 'warning',
+      code: String(i.code),
+      message: String(i.message),
+      nodeId: i.node_id ? String(i.node_id) : undefined,
+      edgeId: i.edge_id ? String(i.edge_id) : undefined,
+    };
+  });
+}
+
+function mapWorkflowVersion(v: Record<string, unknown>): WorkflowVersionDto {
+  return {
+    id: String(v.id),
+    workflowId: String(v.workflow_id),
+    semver: String(v.semver),
+    state: v.state as WorkflowVersionDto['state'],
+    schemaVersion: Number(v.schema_version ?? 1),
+    graph: v.graph as WorkflowGraphDto,
+    graphHash: String(v.graph_hash),
+    yamlSource: String(v.yaml_source ?? ''),
+    message: v.message ? String(v.message) : null,
+    createdBy: String(v.created_by),
+    createdAt: String(v.created_at),
+  };
+}
+
+function mapWorkflow(w: Record<string, unknown>): WorkflowDto {
+  return {
+    id: String(w.id),
+    orgId: String(w.org_id),
+    workspaceId: String(w.workspace_id),
+    projectId: String(w.project_id),
+    name: String(w.name),
+    description: w.description ? String(w.description) : null,
+    status: w.status as WorkflowDto['status'],
+    currentVersionId: w.current_version_id ? String(w.current_version_id) : null,
+    draftVersion: w.draft_version
+      ? mapWorkflowVersion(w.draft_version as Record<string, unknown>)
+      : null,
+    publishedVersion: w.published_version
+      ? mapWorkflowVersion(w.published_version as Record<string, unknown>)
+      : null,
+    versions: Array.isArray(w.versions)
+      ? w.versions.map((v) => mapWorkflowVersion(v as Record<string, unknown>))
+      : [],
+    createdAt: String(w.created_at),
+    updatedAt: String(w.updated_at),
+  };
+}
+
+function mapTrigger(t: Record<string, unknown>): TriggerDto {
+  return {
+    id: String(t.id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    environmentId: String(t.environment_id),
+    workflowId: String(t.workflow_id),
+    workflowVersionId: String(t.workflow_version_id),
+    nodeId: String(t.node_id),
+    kind: t.kind as TriggerDto['kind'],
+    externalId: String(t.external_id),
+    path: t.path ? String(t.path) : null,
+    active: Boolean(t.active),
+    testMode: Boolean(t.test_mode),
+    lastFiredAt: t.last_fired_at ? String(t.last_fired_at) : null,
+    nextFireAt: t.next_fire_at ? String(t.next_fire_at) : null,
   };
 }

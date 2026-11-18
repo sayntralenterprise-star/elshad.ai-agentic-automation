@@ -87,6 +87,15 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
     expect(sql04).toContain('usage_ledger_2026_11');
     expect(sql04).toContain('usage_ledger_2027_02');
     expect(sql04).toContain('TO platform_app');
+
+    const sql05 = readFileSync(join(migrationsDir, '0005_s04_workflows.sql'), 'utf8');
+    const s04Tables = ['workflows', 'workflow_versions', 'triggers', 'trigger_events'];
+    for (const tbl of s04Tables) {
+      expect(sql05).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql05).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql05).toContain('triggers_env_path_uidx');
+    expect(sql05).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {

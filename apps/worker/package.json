@@ -13,7 +13,8 @@
     "@elshad/policy-kit": "workspace:*",
     "@elshad/runtime-core": "workspace:*",
     "@elshad/telemetry": "workspace:*",
-    "@elshad/tool-kit": "workspace:*"
+    "@elshad/tool-kit": "workspace:*",
+    "@elshad/workflow-core": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -14,6 +14,10 @@ import {
   type RunDto,
   type RunStepDto,
   type ToolContractDto,
+  type TriggerDto,
+  type WorkflowDto,
+  type WorkflowGraphDto,
+  type WorkflowNodeDescriptorDto,
 } from '@elshad/sdk-ts';
 import { ConsoleApp } from './App.js';
 
@@ -457,6 +461,162 @@ function createMockClient(
     totalCostMicroUsd: 275,
   });
 
+  // S0.4 Mocks
+  const workflows: WorkflowDto[] = [];
+  const triggers: TriggerDto[] = [];
+  const nodeCatalog: WorkflowNodeDescriptorDto[] = [
+    { type: 'trigger.webhook', category: 'trigger', label: 'Webhook Trigger', inputs: [], outputs: ['main'] },
+    { type: 'trigger.schedule', category: 'trigger', label: 'Schedule Trigger', inputs: [], outputs: ['main'] },
+    { type: 'trigger.manual', category: 'trigger', label: 'Manual Trigger', inputs: [], outputs: ['main'] },
+    { type: 'ai.agent', category: 'ai', label: 'Agent Step', inputs: ['main'], outputs: ['main'] },
+    { type: 'ai.llm', category: 'ai', label: 'LLM Prompt', inputs: ['main'], outputs: ['main'] },
+    { type: 'logic.if', category: 'logic', label: 'IF Branch', inputs: ['main'], outputs: ['true', 'false'] },
+    { type: 'logic.switch', category: 'logic', label: 'Switch Branch', inputs: ['main'], outputs: ['case_0', 'default'] },
+    { type: 'logic.loop', category: 'logic', label: 'Loop Items', inputs: ['main'], outputs: ['item', 'done'] },
+    { type: 'logic.parallel', category: 'logic', label: 'Parallel Fan-out', inputs: ['main'], outputs: ['branch_a', 'branch_b'] },
+    { type: 'logic.join', category: 'logic', label: 'Join Branches', inputs: ['a', 'b'], outputs: ['main'] },
+    { type: 'logic.wait', category: 'logic', label: 'Wait / Delay', inputs: ['main'], outputs: ['main'] },
+    { type: 'data.set', category: 'data', label: 'Set Fields', inputs: ['main'], outputs: ['main'] },
+    { type: 'data.code', category: 'data', label: 'JSONata Transform', inputs: ['main'], outputs: ['main'] },
+    { type: 'integration.http', category: 'integration', label: 'HTTP Request', inputs: ['main'], outputs: ['main'] },
+    { type: 'human.notify', category: 'human', label: 'Slack / Notify', inputs: ['main'], outputs: ['main'] },
+    { type: 'control.subworkflow', category: 'control', label: 'Sub-workflow', inputs: ['main'], outputs: ['main'] },
+    { type: 'control.stop', category: 'control', label: 'Stop Workflow', inputs: ['main'], outputs: [] },
+  ];
+
+  const makeYaml = (name: string, semver: string, graph: WorkflowGraphDto): string =>
+    [
+      'schema_version: 1',
+      `name: ${name}`,
+      `semver: ${semver}`,
+      'nodes:',
+      ...graph.nodes.map((n) => `  - id: ${n.id}\n    type: ${n.type}\n    name: ${n.name}`),
+    ].join('\n');
+
+  client.workflows.listNodes = async () => structuredClone(nodeCatalog);
+  client.workflows.list = async () => structuredClone(workflows);
+  client.workflows.validate = async (input) => ({
+    valid: (input.graph?.nodes.length ?? 0) > 0,
+    errors: [],
+    warnings: [],
+  });
+  client.workflows.create = async (input) => {
+    const id = `wf_${workflows.length + 1}`;
+    const verId = `wfv_${workflows.length + 1}_1`;
+    const graph: WorkflowGraphDto = input.graph ?? {
+      schema_version: 1,
+      settings: { max_concurrency: 5, queue: 'default', timeout_ms: 120_000 },
+      nodes: [{ id: 'n_1', type: 'trigger.manual', name: 'Start', position: { x: 40, y: 40 }, config: {} }],
+      edges: [],
+      pinned_data: {},
+      notes: [],
+    };
+    const ver = {
+      id: verId,
+      workflowId: id,
+      semver: input.semver ?? '1.0.0',
+      state: 'draft' as const,
+      schemaVersion: 1,
+      graph: structuredClone(graph),
+      graphHash: 'sha256-mock-s04',
+      yamlSource: input.yamlSource ?? makeYaml(input.name, input.semver ?? '1.0.0', graph),
+      message: null,
+      createdBy: 'prn_1',
+      createdAt: '2026-11-18T12:00:00Z',
+    };
+    const wf: WorkflowDto = {
+      id,
+      orgId: 'org_1',
+      workspaceId: input.workspaceId ?? 'ws_1',
+      projectId: input.projectId ?? 'prj_1',
+      name: input.name,
+      description: input.description ?? null,
+      status: 'draft',
+      currentVersionId: verId,
+      draftVersion: ver,
+      publishedVersion: null,
+      versions: [ver],
+      createdAt: '2026-11-18T12:00:00Z',
+      updatedAt: '2026-11-18T12:00:00Z',
+    };
+    workflows.push(wf);
+    return structuredClone(wf);
+  };
+  client.workflows.get = async (id) => {
+    const wf = workflows.find((w) => w.id === id);
+    if (!wf) throw new Error('not found');
+    return structuredClone(wf);
+  };
+  client.workflows.updateDraft = async (id, input) => {
+    const wf = workflows.find((w) => w.id === id);
+    if (!wf) throw new Error('not found');
+    const base = wf.draftVersion ?? wf.publishedVersion!;
+    const nextGraph = input.graph ? structuredClone(input.graph) : structuredClone(base.graph);
+    const nextVer = {
+      ...base,
+      id: `${base.id}_d`,
+      semver: input.semver ?? base.semver,
+      graph: nextGraph,
+      yamlSource: input.yamlSource ?? makeYaml(wf.name, input.semver ?? base.semver, nextGraph),
+      message: input.message ?? null,
+    };
+    wf.draftVersion = nextVer;
+    wf.versions = [nextVer];
+    wf.updatedAt = '2026-11-18T12:01:00Z';
+    return structuredClone(wf);
+  };
+  client.workflows.publishVersion = async (id, versionId) => {
+    const wf = workflows.find((w) => w.id === id);
+    if (!wf) throw new Error('not found');
+    const target = wf.versions.find((v) => v.id === versionId) ?? wf.draftVersion!;
+    const pub = { ...target, state: 'published' as const };
+    wf.status = 'active';
+    wf.publishedVersion = pub;
+    wf.draftVersion = null;
+    wf.versions = [pub];
+    const hasWebhook = pub.graph.nodes.find((n) => n.type === 'trigger.webhook');
+    if (hasWebhook) {
+      triggers.push({
+        id: `trg_${triggers.length + 1}`,
+        orgId: wf.orgId,
+        workspaceId: wf.workspaceId,
+        environmentId: 'env_1',
+        workflowId: wf.id,
+        workflowVersionId: pub.id,
+        nodeId: hasWebhook.id,
+        kind: 'webhook',
+        externalId: 'hook-s04-triage',
+        path: 'inbox-triage',
+        active: true,
+        testMode: false,
+        lastFiredAt: null,
+        nextFireAt: null,
+      });
+    }
+    return structuredClone(wf);
+  };
+  client.workflows.run = async (id, input) => {
+    const run: RunDto = {
+      id: input.startFromNodeId ? 'run_wf_from_node' : 'run_wf_full',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      projectId: 'prj_1',
+      environmentId: 'env_1',
+      subjectType: 'workflow_version',
+      subjectId: id,
+      status: 'succeeded',
+      triggerType: 'manual',
+      costMicroUsd: 25,
+      tokensIn: 10,
+      tokensOut: 10,
+      startedAt: '2026-11-18T12:02:00Z',
+      endedAt: '2026-11-18T12:02:01Z',
+      createdAt: '2026-11-18T12:02:00Z',
+    };
+    return structuredClone(run);
+  };
+  client.triggers.list = async () => structuredClone(triggers);
+
   return client;
 }
 
@@ -675,4 +835,62 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     });
     expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 15_000);
+
+  it('builds workflow in Canvas, inspects lossless YAML, pins output for Test-from-Here, loads 300-node benchmark < 1s & passes axe [E0.4-6, E0.4-7]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/workflows" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Canvas' })).toBeTruthy();
+
+    // Create starter workflow
+    const newWorkflowButtons = screen.getAllByRole('button', { name: /\+ New Workflow/i });
+    await user.click(newWorkflowButtons[0]!);
+    await user.click(await screen.findByRole('button', { name: 'Create Workflow' }));
+    expect(await screen.findByText(/Created starter workflow "inbound-triage-workflow"/)).toBeTruthy();
+
+    // Starter nodes rendered on canvas
+    const initialNodes = screen.getAllByTestId('canvas-node');
+    expect(initialNodes.length).toBe(4);
+
+    // Open View as YAML modal and verify lossless yaml_source
+    await user.click(screen.getByRole('button', { name: 'View as YAML' }));
+    const yamlArea = (await screen.findByLabelText('yaml_source')) as HTMLTextAreaElement;
+    expect(yamlArea.value).toContain('schema_version: 1');
+    expect(yamlArea.value).toContain('Inbound Webhook');
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Select Agent Triage node, pin output, and Test from Selected Node
+    await user.click(screen.getByRole('button', { name: /Agent Triage/i }));
+    const pinCheckbox = screen.getByLabelText(/Pin Output Data/i) as HTMLInputElement;
+    await user.click(pinCheckbox);
+    expect(pinCheckbox.checked).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Test from Selected Node' }));
+    expect(
+      await screen.findByText(/Triggered test run run_wf_from_node from node "Agent Triage"/),
+    ).toBeTruthy();
+
+    // Publish & activate webhook trigger
+    await user.click(screen.getByRole('button', { name: /Publish & Activate/i }));
+    expect(await screen.findByText(/\/api\/v1\/hooks\/hook-s04-triage/)).toBeTruthy();
+
+    // Load 300-node benchmark and assert < 1000ms render + viewport culling (< 60 nodes in DOM)
+    const t0 = performance.now();
+    await user.click(screen.getByRole('button', { name: 'Load 300-Node Benchmark' }));
+    expect(await screen.findByText(/Loaded 300-node benchmark graph/)).toBeTruthy();
+    const benchElapsed = performance.now() - t0;
+    expect(benchElapsed).toBeLessThan(1000);
+
+    const culledNodes = screen.getAllByTestId('canvas-node');
+    expect(culledNodes.length).toBeGreaterThan(0);
+    expect(culledNodes.length).toBeLessThan(60);
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
 });

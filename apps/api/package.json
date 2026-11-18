@@ -16,6 +16,7 @@
     "@elshad/runtime-core": "workspace:*",
     "@elshad/telemetry": "workspace:*",
     "@elshad/tool-kit": "workspace:*",
+    "@elshad/workflow-core": "workspace:*",
     "@fastify/cookie": "^11.1.5",
     "@fastify/cors": "^11.4.3",
     "@noble/hashes": "^2.4.0",

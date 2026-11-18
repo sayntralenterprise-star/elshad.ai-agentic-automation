@@ -603,3 +603,200 @@ export const UsageLedgerEntryWireSchema = z
     ts: z.string(),
   })
   .openapi('UsageLedgerEntry');
+
+// ---------- Slice S0.4 Workflow Schemas ----------
+
+export const WorkflowNodeWireSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    type: z.string().min(3).max(64),
+    name: z.string().min(1).max(128),
+    position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
+    config: z.record(z.string(), z.unknown()).default({}),
+    on_error: z
+      .object({
+        mode: z.enum(['fail', 'continue', 'retry', 'route']).default('fail'),
+        retry: z
+          .object({
+            max: z.number().int().min(1).max(10).default(2),
+            backoff_ms: z.number().int().min(0).max(60_000).default(250),
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .openapi('WorkflowNode');
+
+export const WorkflowEdgeWireSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    from: z.object({ node: z.string().min(1), port: z.string().min(1).default('main') }),
+    to: z.object({ node: z.string().min(1), port: z.string().min(1).default('in') }),
+  })
+  .openapi('WorkflowEdge');
+
+export const WorkflowSettingsWireSchema = z
+  .object({
+    max_concurrency: z.number().int().min(1).max(100).default(10),
+    queue: z.string().default('default'),
+    timeout_ms: z.number().int().min(1000).max(86_400_000).default(900_000),
+    error_workflow: z.string().optional(),
+    serialize_by: z.string().optional(),
+  })
+  .default({ max_concurrency: 10, queue: 'default', timeout_ms: 900_000 });
+
+export const WorkflowGraphWireSchema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    settings: WorkflowSettingsWireSchema,
+    nodes: z.array(WorkflowNodeWireSchema).min(1),
+    edges: z.array(WorkflowEdgeWireSchema).default([]),
+    pinned_data: z.record(z.string(), z.array(z.unknown())).default({}),
+    notes: z
+      .array(
+        z.object({
+          id: z.string(),
+          text: z.string(),
+          position: z.object({ x: z.number(), y: z.number() }).optional(),
+        }),
+      )
+      .default([]),
+  })
+  .openapi('WorkflowGraph');
+
+export const WorkflowValidationIssueSchema = z.object({
+  severity: z.enum(['error', 'warning']),
+  code: z.string(),
+  message: z.string(),
+  node_id: z.string().optional(),
+  edge_id: z.string().optional(),
+});
+
+export const WorkflowValidationResponseSchema = z
+  .object({
+    valid: z.boolean(),
+    errors: z.array(WorkflowValidationIssueSchema),
+    warnings: z.array(WorkflowValidationIssueSchema),
+  })
+  .openapi('WorkflowValidationResponse');
+
+export const ValidateWorkflowRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    graph: WorkflowGraphWireSchema.optional(),
+    yaml_source: z.string().optional(),
+  })
+  .openapi('ValidateWorkflowRequest');
+
+export const CreateWorkflowRequestSchema = z
+  .object({
+    workspace_id: z.string().optional(),
+    project_id: z.string().optional(),
+    name: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/),
+    description: z.string().max(2000).optional(),
+    semver: z.string().regex(/^\d+\.\d+\.\d+$/).default('1.0.0'),
+    graph: WorkflowGraphWireSchema.optional(),
+    yaml_source: z.string().optional(),
+  })
+  .openapi('CreateWorkflowRequest');
+
+export const UpdateWorkflowDraftRequestSchema = z
+  .object({
+    semver: z.string().regex(/^\d+\.\d+\.\d+$/).default('1.0.0'),
+    description: z.string().max(2000).optional(),
+    graph: WorkflowGraphWireSchema.optional(),
+    yaml_source: z.string().optional(),
+    message: z.string().max(500).optional(),
+  })
+  .openapi('UpdateWorkflowDraftRequest');
+
+export const WorkflowVersionWireSchema = z
+  .object({
+    id: z.string(),
+    workflow_id: z.string(),
+    semver: z.string(),
+    state: z.enum(['draft', 'published', 'retired']),
+    schema_version: z.number().int(),
+    graph: WorkflowGraphWireSchema,
+    graph_hash: z.string(),
+    yaml_source: z.string(),
+    message: z.string().nullable(),
+    created_by: z.string(),
+    created_at: z.string(),
+  })
+  .openapi('WorkflowVersion');
+
+export const WorkflowWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    project_id: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    status: z.enum(['draft', 'active', 'paused', 'archived']),
+    current_version_id: z.string().nullable(),
+    draft_version: WorkflowVersionWireSchema.nullable(),
+    published_version: WorkflowVersionWireSchema.nullable(),
+    versions: z.array(WorkflowVersionWireSchema),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Workflow');
+
+export const PublishWorkflowVersionRequestSchema = z
+  .object({
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    message: z.string().max(500).optional(),
+    activate_triggers: z.boolean().default(true),
+  })
+  .openapi('PublishWorkflowVersionRequest');
+
+export const RunWorkflowRequestSchema = z
+  .object({
+    environment: z.enum(['dev', 'staging', 'prod']).optional(),
+    version_id: z.string().optional(),
+    trigger_payload: z.record(z.string(), z.unknown()).default({}),
+    pinned_data: z.record(z.string(), z.array(z.unknown())).optional(),
+    start_from_node_id: z.string().optional(),
+  })
+  .openapi('RunWorkflowRequest');
+
+export const TriggerWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    environment_id: z.string(),
+    workflow_id: z.string(),
+    workflow_version_id: z.string(),
+    node_id: z.string(),
+    kind: z.enum(['webhook', 'schedule', 'manual']),
+    external_id: z.string(),
+    path: z.string().nullable(),
+    active: z.boolean(),
+    test_mode: z.boolean(),
+    last_fired_at: z.string().nullable(),
+    next_fire_at: z.string().nullable(),
+  })
+  .openapi('Trigger');
+
+export const WebhookAckResponseSchema = z
+  .object({
+    status: z.enum(['accepted', 'captured_test']),
+    trigger_id: z.string(),
+    event_id: z.string(),
+    run_id: z.string().nullable(),
+  })
+  .openapi('WebhookAckResponse');
+
+export const NodeDescriptorWireSchema = z
+  .object({
+    type: z.string(),
+    category: z.string(),
+    label: z.string(),
+    inputs: z.array(z.string()),
+    outputs: z.array(z.string()),
+  })
+  .openapi('WorkflowNodeDescriptor');

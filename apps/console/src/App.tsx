@@ -36,6 +36,7 @@ import {
 import { EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import { AgentStudioView } from './AgentStudioView.js';
 import { RunsView } from './RunsView.js';
+import { WorkflowCanvasView } from './WorkflowCanvasView.js';
 import { t } from './i18n.js';
 
 export type NavSection =
@@ -818,7 +819,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <div style={{ display: 'grid', gap: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h1 style={{ margin: 0, fontSize: '22px' }}>{t('home.title')}</h1>
-                  <StatusChip label="Slice S0.3 Active" tone="success" />
+                  <StatusChip label="Slice S0.4 Active" tone="success" />
                 </div>
 
                 <div
@@ -879,6 +880,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     <li>Inspect hash-chained audit events — available under Governance</li>
                     <li>Durable run engine &amp; trace viewer — available under Runs</li>
                     <li>First ReAct agent &amp; Model Gateway — available under Agents</li>
+                    <li>Workflow Canvas, YAML round-trip &amp; triggers — available under Workflows</li>
                   </ul>
                 </section>
               </div>
@@ -1133,6 +1135,15 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               </div>
             )}
 
+            {section === 'workflows' && (
+              <WorkflowCanvasView
+                client={client}
+                workspaceId={activeWorkspace?.id}
+                projectId={projects[0]?.id}
+                environment={env}
+              />
+            )}
+
             {section === 'agents' && (
               <AgentStudioView
                 client={client}
@@ -1200,7 +1211,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'settings' &&
               section !== 'governance' &&
               section !== 'runs' &&
-              section !== 'agents' && (
+              section !== 'agents' &&
+              section !== 'workflows' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>
                   {NAV_ITEMS.find((n) => n.id === section)?.label}
