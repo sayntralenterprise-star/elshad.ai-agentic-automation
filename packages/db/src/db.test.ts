@@ -151,6 +151,14 @@ describe('@elshad/db migrations, RLS, and audit hash chain [E0.1-3, M.6]', () =>
       expect(sql10).toContain(`enable_tenant_rls('${tbl}')`);
     }
     expect(sql10).toContain('TO platform_app');
+
+    const sql11 = readFileSync(join(migrationsDir, '0011_s14_multi_agent.sql'), 'utf8');
+    const s14Tables = ['teams', 'team_members', 'team_handoffs', 'blackboards', 'agent_messages'];
+    for (const tbl of s14Tables) {
+      expect(sql11).toContain(`CREATE TABLE ${tbl}`);
+      expect(sql11).toContain(`enable_tenant_rls('${tbl}')`);
+    }
+    expect(sql11).toContain('TO platform_app');
   });
 
   it('plans monthly partitions for current + 3 months ahead [E0.2-1]', () => {

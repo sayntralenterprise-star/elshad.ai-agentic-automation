@@ -11,8 +11,9 @@ import {
   type UsageLedgerEntryDto,
 } from '@elshad/sdk-ts';
 import { StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { TeamCanvasView } from './TeamCanvasView.js';
 
-type StudioTab = 'configure' | 'tools' | 'test';
+type StudioTab = 'configure' | 'tools' | 'test' | 'teams';
 
 interface ToolBindingDraft {
   tool: string;
@@ -688,7 +689,7 @@ export function AgentStudioView({
 
               {/* Studio Tabs */}
               <div role="tablist" aria-label="Agent Studio Sections" style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
-                {(['configure', 'tools', 'test'] as const).map((tabKey) => (
+                {(['configure', 'tools', 'test', 'teams'] as const).map((tabKey) => (
                   <button
                     key={tabKey}
                     type="button"
@@ -706,7 +707,13 @@ export function AgentStudioView({
                       cursor: 'pointer',
                     }}
                   >
-                    {tabKey === 'configure' ? 'Configure' : tabKey === 'tools' ? 'Tools' : 'Test Playground'}
+                    {tabKey === 'configure'
+                      ? 'Configure'
+                      : tabKey === 'tools'
+                        ? 'Tools'
+                        : tabKey === 'test'
+                          ? 'Test Playground'
+                          : 'Team Canvas'}
                   </button>
                 ))}
               </div>
@@ -1052,6 +1059,17 @@ export function AgentStudioView({
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {studioTab === 'teams' && (
+                <div role="tabpanel" aria-label="Team Canvas" style={{ display: 'grid', gap: '14px' }}>
+                  <TeamCanvasView
+                    client={client}
+                    workspaceId={workspaceId}
+                    projectId={projectId}
+                    environment={environment}
+                  />
                 </div>
               )}
             </div>

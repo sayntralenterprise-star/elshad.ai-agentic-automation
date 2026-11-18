@@ -2322,4 +2322,205 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.4 Multi-agent v1: Supervisor + 3 specialists, typed handoffs, blackboard isolation, and cost roll-up [E1.4, FR-RT-20..24]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 'engineer@s14.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    const { app } = buildApiServer({ config, store });
+    const orgId = [...store.orgs.keys()][0]!;
+    const ws = [...store.workspaces.values()].find((w) => w.org_id === orgId)!;
+    const prj = [...store.projects.values()].find((p) => p.org_id === orgId)!;
+
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'engineer@s14.local', password: 'Password123!' },
+    });
+    expect(loginRes.statusCode).toBe(200);
+    const cookie = parseCookie(loginRes.headers['set-cookie']);
+    const csrf = loginRes.json().csrf_token as string;
+    const authHeaders = { cookie, 'x-csrf-token': csrf, 'x-workspace-id': ws.id };
+
+    // 1. Create 4 agents: Supervisor and 3 Specialists
+    const createAgentHelper = async (name: string, roleDesc: string) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/agents',
+        headers: { ...authHeaders, 'Idempotency-Key': `s14-create-${name}` },
+        payload: {
+          project_id: prj.id,
+          definition: {
+            name,
+            version: '1.0.0',
+            autonomy_level: 2,
+            model: { tier: 'standard' as const, provider: 'mock', model: 'mock/react-default' },
+            prompt: { system: `You are ${name}: ${roleDesc}` },
+            tools: [],
+          },
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json();
+    };
+
+    const supervisorAgent = await createAgentHelper('incident-triage-supervisor', 'Triage and delegate to specialists');
+    const authSpecialist = await createAgentHelper('auth-specialist', 'Investigate user credentials and MFA');
+    const billingSpecialist = await createAgentHelper('billing-specialist', 'Process invoices and refund eligibility');
+    const networkSpecialist = await createAgentHelper('network-specialist', 'Analyze network endpoints and latency');
+
+    // 2. Create Multi-Agent Team (FR-RT-20..24, §7.3.3)
+    const teamCreateRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/teams',
+      headers: { ...authHeaders, 'Idempotency-Key': 's14-team-create-1' },
+      payload: {
+        name: 'Incident Remediation Strike Team',
+        description: 'Collaborative supervisor-specialist multi-agent system for urgent triage',
+        pattern: 'supervisor_specialists',
+        supervisor_agent_id: supervisorAgent.id,
+        members: [
+          {
+            agent_id: supervisorAgent.id,
+            role: 'supervisor',
+            read_keys: ['*'],
+            write_keys: ['*'],
+            max_steps: 15,
+            timeout_seconds: 120,
+            max_spend_micro_usd: 10000000,
+          },
+          {
+            agent_id: authSpecialist.id,
+            role: 'specialist',
+            read_keys: ['user_id', 'session_id'],
+            write_keys: ['auth_status'],
+            max_steps: 5,
+            timeout_seconds: 30,
+            max_spend_micro_usd: 3000000,
+          },
+          {
+            agent_id: billingSpecialist.id,
+            role: 'specialist',
+            read_keys: ['user_id', 'order_id', 'auth_status'],
+            write_keys: ['refund_status'],
+            max_steps: 5,
+            timeout_seconds: 30,
+            max_spend_micro_usd: 3000000,
+          },
+          {
+            agent_id: networkSpecialist.id,
+            role: 'specialist',
+            read_keys: ['endpoint', 'error_code'],
+            write_keys: ['network_status'],
+            max_steps: 5,
+            timeout_seconds: 30,
+            max_spend_micro_usd: 3000000,
+          },
+        ],
+        handoffs: [
+          {
+            from_agent_id: supervisorAgent.id,
+            to_agent_id: authSpecialist.id,
+            name: 'Auth Verification Handoff',
+            handoff_schema: { type: 'object' },
+            return_schema: { type: 'object' },
+          },
+          {
+            from_agent_id: supervisorAgent.id,
+            to_agent_id: billingSpecialist.id,
+            name: 'Billing Assessment Handoff',
+            handoff_schema: { type: 'object' },
+            return_schema: { type: 'object' },
+          },
+          {
+            from_agent_id: supervisorAgent.id,
+            to_agent_id: networkSpecialist.id,
+            name: 'Network Diagnostics Handoff',
+            handoff_schema: { type: 'object' },
+            return_schema: { type: 'object' },
+          },
+        ],
+      },
+    });
+    expect(teamCreateRes.statusCode).toBe(201);
+    const team = teamCreateRes.json();
+    expect(team.id).toMatch(/^team_/);
+    expect(team.members).toHaveLength(4);
+    expect(team.handoffs).toHaveLength(3);
+
+    // 3. Simulate Multi-Agent Workflow Execution (FR-RT-20..24)
+    const simRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/teams/${team.id}/simulate`,
+      headers: { ...authHeaders, 'Idempotency-Key': 's14-team-sim-1' },
+      payload: {
+        input: {
+          user_id: 'usr_premium_77',
+          session_id: 'ses_active_991',
+          order_id: 'ord_invoice_882',
+          endpoint: 'api.elshad.local/v1/pay',
+          error_code: 'CONN_RESET_502',
+        },
+        initial_blackboard: {
+          incident_severity: 'SEV-2',
+        },
+      },
+    });
+    expect(simRes.statusCode).toBe(200);
+    const simulation = simRes.json();
+    expect(simulation.root_run_id).toMatch(/^run_sim_/);
+    expect(simulation.final_output.status).toBe('success');
+    expect(simulation.child_runs).toHaveLength(3);
+
+    // Verify cost & token roll-up (FR-RT-20)
+    expect(simulation.total_tokens_in).toBeGreaterThan(500);
+    expect(simulation.total_cost_micro_usd).toBeGreaterThan(5000);
+
+    // Verify inter-agent message tracking (FR-RT-24)
+    expect(simulation.messages.length).toBeGreaterThanOrEqual(6);
+
+    // 4. Query Blackboard Endpoint (FR-RT-22)
+    const bbRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${simulation.root_run_id}/blackboard`,
+      headers: authHeaders,
+    });
+    expect(bbRes.statusCode).toBe(200);
+    const blackboard = bbRes.json();
+    expect(blackboard.run_id).toBe(simulation.root_run_id);
+    expect(blackboard.state['incident_severity']).toBe('SEV-2');
+    expect(blackboard.state['auth_status']).toBeDefined();
+    expect(blackboard.state['refund_status']).toBeDefined();
+    expect(blackboard.state['network_status']).toBeDefined();
+    expect(blackboard.version).toBeGreaterThan(1);
+
+    // 5. Query Inter-Agent Messages in Trace (FR-RT-24)
+    const msgsRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${simulation.root_run_id}/agent-messages`,
+      headers: authHeaders,
+    });
+    expect(msgsRes.statusCode).toBe(200);
+    const msgs = msgsRes.json().items;
+    expect(msgs.length).toBeGreaterThanOrEqual(6);
+    const purposes = msgs.map((m: { purpose: string }) => m.purpose);
+    expect(purposes).toContain('delegation_request');
+    expect(purposes).toContain('delegation_response');
+
+    // 6. Verify Audit Trail (FR-GOV-17)
+    const auditRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/audit-events',
+      headers: authHeaders,
+    });
+    expect(auditRes.statusCode).toBe(200);
+    const actions = auditRes.json().data.map((e: { action: string }) => e.action);
+    expect(actions).toContain('team.create');
+    expect(actions).toContain('team.simulate');
+
+    await app.close();
+  });
 });

@@ -840,6 +840,70 @@ export interface ExperimentResultsTable {
   created_at: Date;
 }
 
+export interface TeamsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  pattern: 'supervisor_specialists' | 'sequential_pipeline' | 'parallel_fanout_aggregate' | 'critic_pair' | 'router';
+  supervisor_agent_id: string | null;
+  config: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface TeamMembersTable {
+  id: string;
+  org_id: string;
+  team_id: string;
+  agent_id: string;
+  role: 'supervisor' | 'specialist' | 'critic' | 'worker' | 'router';
+  read_keys: string[];
+  write_keys: string[];
+  max_steps: number;
+  timeout_seconds: number;
+  max_spend_micro_usd: number | string;
+  created_at: Date;
+}
+
+export interface TeamHandoffsTable {
+  id: string;
+  org_id: string;
+  team_id: string;
+  from_agent_id: string;
+  to_agent_id: string;
+  name: string;
+  description: string | null;
+  handoff_schema: Record<string, unknown>;
+  return_schema: Record<string, unknown>;
+  created_at: Date;
+}
+
+export interface BlackboardsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  run_id: string;
+  version: number;
+  state: Record<string, unknown>;
+  history: Record<string, unknown>[];
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface AgentMessagesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  run_id: string;
+  sender_agent_id: string;
+  receiver_agent_id: string;
+  purpose: 'delegation_request' | 'delegation_response' | 'blackboard_update' | 'critic_feedback' | 'error_rejection';
+  payload: Record<string, unknown>;
+  created_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -894,6 +958,11 @@ export interface Database {
   graders: GradersTable;
   experiments: ExperimentsTable;
   experiment_results: ExperimentResultsTable;
+  teams: TeamsTable;
+  team_members: TeamMembersTable;
+  team_handoffs: TeamHandoffsTable;
+  blackboards: BlackboardsTable;
+  agent_messages: AgentMessagesTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

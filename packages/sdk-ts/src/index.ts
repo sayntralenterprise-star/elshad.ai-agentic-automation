@@ -880,6 +880,101 @@ export interface ExperimentResultDto {
   createdAt: string;
 }
 
+export type TeamPatternDto =
+  | 'supervisor_specialists'
+  | 'sequential_pipeline'
+  | 'parallel_fanout_aggregate'
+  | 'critic_pair'
+  | 'router';
+
+export type TeamMemberRoleDto = 'supervisor' | 'specialist' | 'critic' | 'worker' | 'router';
+
+export interface TeamMemberDto {
+  id: string;
+  teamId: string;
+  agentId: string;
+  role: TeamMemberRoleDto;
+  readKeys: string[];
+  writeKeys: string[];
+  maxSteps: number;
+  timeoutSeconds: number;
+  maxSpendMicroUsd: number;
+  createdAt: string;
+}
+
+export interface TeamHandoffDto {
+  id: string;
+  teamId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  name: string;
+  description: string | null;
+  handoffSchema: Record<string, unknown>;
+  returnSchema: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface TeamDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  pattern: TeamPatternDto;
+  supervisorAgentId: string | null;
+  members: TeamMemberDto[];
+  handoffs: TeamHandoffDto[];
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BlackboardDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  runId: string;
+  version: number;
+  state: Record<string, unknown>;
+  history: Record<string, unknown>[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentMessageDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  runId: string;
+  senderAgentId: string;
+  receiverAgentId: string;
+  purpose: 'delegation_request' | 'delegation_response' | 'blackboard_update' | 'critic_feedback' | 'error_rejection';
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface TeamSimulationDto {
+  rootRunId: string;
+  finalOutput: Record<string, unknown>;
+  blackboard: BlackboardDto;
+  messages: AgentMessageDto[];
+  childRuns: Array<{
+    childRunId: string;
+    parentRunId: string;
+    agentId: string;
+    role: string;
+    status: string;
+    tokensIn: number;
+    tokensOut: number;
+    costMicroUsd: number;
+    durationMs: number;
+  }>;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalCostMicroUsd: number;
+  durationMs: number;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -1561,6 +1656,20 @@ export class PlatformClient {
         data: res.data.map(mapUsageLedgerEntry),
         totalCostMicroUsd: Number(res.total_cost_micro_usd ?? 0),
       };
+    },
+    getBlackboard: async (id: string): Promise<BlackboardDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/runs/${id}/blackboard`,
+      );
+      return mapBlackboard(res);
+    },
+    getAgentMessages: async (id: string): Promise<AgentMessageDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        `/api/v1/runs/${id}/agent-messages`,
+      );
+      return res.items.map(mapAgentMessage);
     },
   };
 
@@ -2851,6 +2960,157 @@ export class PlatformClient {
       return mapTestCase(res);
     },
   };
+
+  readonly teams = {
+    list: async (): Promise<TeamDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/teams',
+      );
+      return res.items.map(mapTeam);
+    },
+    create: async (input: {
+      name: string;
+      description?: string;
+      pattern?: TeamPatternDto;
+      supervisorAgentId?: string;
+      members?: Array<{
+        agentId: string;
+        role: TeamMemberRoleDto;
+        readKeys?: string[];
+        writeKeys?: string[];
+        maxSteps?: number;
+        timeoutSeconds?: number;
+        maxSpendMicroUsd?: number;
+      }>;
+      handoffs?: Array<{
+        fromAgentId: string;
+        toAgentId: string;
+        name: string;
+        description?: string;
+        handoffSchema?: Record<string, unknown>;
+        returnSchema?: Record<string, unknown>;
+      }>;
+      config?: Record<string, unknown>;
+    }): Promise<TeamDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/teams',
+        {
+          body: {
+            name: input.name,
+            description: input.description,
+            pattern: input.pattern,
+            supervisor_agent_id: input.supervisorAgentId,
+            members: input.members?.map((m) => ({
+              agent_id: m.agentId,
+              role: m.role,
+              read_keys: m.readKeys,
+              write_keys: m.writeKeys,
+              max_steps: m.maxSteps,
+              timeout_seconds: m.timeoutSeconds,
+              max_spend_micro_usd: m.maxSpendMicroUsd,
+            })),
+            handoffs: input.handoffs?.map((h) => ({
+              from_agent_id: h.fromAgentId,
+              to_agent_id: h.toAgentId,
+              name: h.name,
+              description: h.description,
+              handoff_schema: h.handoffSchema,
+              return_schema: h.returnSchema,
+            })),
+            config: input.config,
+          },
+        },
+      );
+      return mapTeam(res);
+    },
+    get: async (id: string): Promise<TeamDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/teams/${id}`,
+      );
+      return mapTeam(res);
+    },
+    update: async (
+      id: string,
+      input: {
+        name?: string;
+        description?: string;
+        pattern?: TeamPatternDto;
+        supervisorAgentId?: string | null;
+        members?: Array<{
+          agentId: string;
+          role: TeamMemberRoleDto;
+          readKeys?: string[];
+          writeKeys?: string[];
+          maxSteps?: number;
+          timeoutSeconds?: number;
+          maxSpendMicroUsd?: number;
+        }>;
+        handoffs?: Array<{
+          fromAgentId: string;
+          toAgentId: string;
+          name: string;
+          description?: string;
+          handoffSchema?: Record<string, unknown>;
+          returnSchema?: Record<string, unknown>;
+        }>;
+        config?: Record<string, unknown>;
+      },
+    ): Promise<TeamDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'PATCH',
+        `/api/v1/teams/${id}`,
+        {
+          body: {
+            name: input.name,
+            description: input.description,
+            pattern: input.pattern,
+            supervisor_agent_id: input.supervisorAgentId,
+            members: input.members?.map((m) => ({
+              agent_id: m.agentId,
+              role: m.role,
+              read_keys: m.readKeys,
+              write_keys: m.writeKeys,
+              max_steps: m.maxSteps,
+              timeout_seconds: m.timeoutSeconds,
+              max_spend_micro_usd: m.maxSpendMicroUsd,
+            })),
+            handoffs: input.handoffs?.map((h) => ({
+              from_agent_id: h.fromAgentId,
+              to_agent_id: h.toAgentId,
+              name: h.name,
+              description: h.description,
+              handoff_schema: h.handoffSchema,
+              return_schema: h.returnSchema,
+            })),
+            config: input.config,
+          },
+        },
+      );
+      return mapTeam(res);
+    },
+    simulate: async (
+      id: string,
+      input: {
+        input: Record<string, unknown>;
+        initialBlackboard?: Record<string, unknown>;
+      },
+    ): Promise<TeamSimulationDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/teams/${id}/simulate`,
+        {
+          body: {
+            input: input.input,
+            initial_blackboard: input.initialBlackboard ?? {},
+          },
+        },
+      );
+      return mapTeamSimulation(res);
+    },
+  };
 }
 
 function mapModelCapability(m: Record<string, unknown>): ModelCapabilityDto {
@@ -3635,5 +3895,113 @@ function mapExperimentResult(r: Record<string, unknown>): ExperimentResultDto {
     isRegression: Boolean(r.is_regression),
     diff: (r.diff as Record<string, unknown> | null) ?? null,
     createdAt: String(r.created_at),
+  };
+}
+
+function mapTeamMember(m: Record<string, unknown>): TeamMemberDto {
+  return {
+    id: String(m.id),
+    teamId: String(m.team_id),
+    agentId: String(m.agent_id),
+    role: m.role as TeamMemberRoleDto,
+    readKeys: Array.isArray(m.read_keys) ? (m.read_keys as string[]) : [],
+    writeKeys: Array.isArray(m.write_keys) ? (m.write_keys as string[]) : [],
+    maxSteps: Number(m.max_steps ?? 10),
+    timeoutSeconds: Number(m.timeout_seconds ?? 60),
+    maxSpendMicroUsd: Number(m.max_spend_micro_usd ?? 5000000),
+    createdAt: String(m.created_at),
+  };
+}
+
+function mapTeamHandoff(h: Record<string, unknown>): TeamHandoffDto {
+  return {
+    id: String(h.id),
+    teamId: String(h.team_id),
+    fromAgentId: String(h.from_agent_id),
+    toAgentId: String(h.to_agent_id),
+    name: String(h.name),
+    description: h.description ? String(h.description) : null,
+    handoffSchema: (h.handoff_schema ?? {}) as Record<string, unknown>,
+    returnSchema: (h.return_schema ?? {}) as Record<string, unknown>,
+    createdAt: String(h.created_at),
+  };
+}
+
+function mapTeam(t: Record<string, unknown>): TeamDto {
+  const members = Array.isArray(t.members) ? t.members.map((m) => mapTeamMember(m as Record<string, unknown>)) : [];
+  const handoffs = Array.isArray(t.handoffs) ? t.handoffs.map((h) => mapTeamHandoff(h as Record<string, unknown>)) : [];
+  return {
+    id: String(t.id),
+    orgId: String(t.org_id),
+    workspaceId: String(t.workspace_id),
+    name: String(t.name),
+    description: t.description ? String(t.description) : null,
+    pattern: (t.pattern as TeamPatternDto) ?? 'supervisor_specialists',
+    supervisorAgentId: t.supervisor_agent_id ? String(t.supervisor_agent_id) : null,
+    members,
+    handoffs,
+    config: (t.config ?? {}) as Record<string, unknown>,
+    createdAt: String(t.created_at),
+    updatedAt: String(t.updated_at),
+  };
+}
+
+function mapBlackboard(b: Record<string, unknown>): BlackboardDto {
+  return {
+    id: String(b.id),
+    orgId: String(b.org_id),
+    workspaceId: String(b.workspace_id),
+    runId: String(b.run_id),
+    version: Number(b.version ?? 1),
+    state: (b.state ?? {}) as Record<string, unknown>,
+    history: Array.isArray(b.history) ? (b.history as Record<string, unknown>[]) : [],
+    createdAt: String(b.created_at),
+    updatedAt: String(b.updated_at),
+  };
+}
+
+function mapAgentMessage(m: Record<string, unknown>): AgentMessageDto {
+  return {
+    id: String(m.id),
+    orgId: String(m.org_id),
+    workspaceId: String(m.workspace_id),
+    runId: String(m.run_id),
+    senderAgentId: String(m.sender_agent_id),
+    receiverAgentId: String(m.receiver_agent_id),
+    purpose: m.purpose as AgentMessageDto['purpose'],
+    payload: (m.payload ?? {}) as Record<string, unknown>,
+    createdAt: String(m.created_at),
+  };
+}
+
+function mapTeamSimulation(s: Record<string, unknown>): TeamSimulationDto {
+  const childRuns = Array.isArray(s.child_runs)
+    ? (s.child_runs as Record<string, unknown>[]).map((cr) => ({
+        childRunId: String(cr.child_run_id),
+        parentRunId: String(cr.parent_run_id),
+        agentId: String(cr.agent_id),
+        role: String(cr.role),
+        status: String(cr.status),
+        tokensIn: Number(cr.tokens_in ?? 0),
+        tokensOut: Number(cr.tokens_out ?? 0),
+        costMicroUsd: Number(cr.cost_micro_usd ?? 0),
+        durationMs: Number(cr.duration_ms ?? 0),
+      }))
+    : [];
+
+  const messages = Array.isArray(s.messages)
+    ? (s.messages as Record<string, unknown>[]).map(mapAgentMessage)
+    : [];
+
+  return {
+    rootRunId: String(s.root_run_id),
+    finalOutput: (s.final_output ?? {}) as Record<string, unknown>,
+    blackboard: mapBlackboard(s.blackboard as Record<string, unknown>),
+    messages,
+    childRuns,
+    totalTokensIn: Number(s.total_tokens_in ?? 0),
+    totalTokensOut: Number(s.total_tokens_out ?? 0),
+    totalCostMicroUsd: Number(s.total_cost_micro_usd ?? 0),
+    durationMs: Number(s.duration_ms ?? 0),
   };
 }

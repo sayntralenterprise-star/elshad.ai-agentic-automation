@@ -19,6 +19,7 @@ import {
   Sun,
   Wrench,
   Bell,
+  Network,
 } from 'lucide-react';
 import { PlatformError, type EnvironmentKind } from '@elshad/domain';
 import {
@@ -40,12 +41,14 @@ import { EvaluationsView } from './EvaluationsView.js';
 import { GovernanceHardeningView } from './GovernanceHardeningView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
+import { TeamCanvasView } from './TeamCanvasView.js';
 import { WorkflowCanvasView } from './WorkflowCanvasView.js';
 import { t } from './i18n.js';
 
 export type NavSection =
   | 'home'
   | 'agents'
+  | 'teams'
   | 'workflows'
   | 'tools'
   | 'knowledge'
@@ -68,6 +71,7 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'agents', label: 'Agents', icon: Bot, sliceHint: 'S0.3' },
+  { id: 'teams', label: 'Team Canvas', icon: Network, sliceHint: 'S1.4' },
   { id: 'workflows', label: 'Workflows', icon: GitBranch, sliceHint: 'S0.4' },
   { id: 'tools', label: 'Tools & Connections', icon: Wrench, sliceHint: 'S0.3 / S1.5' },
   { id: 'knowledge', label: 'Knowledge & Memory', icon: Database, sliceHint: 'S0.5' },
@@ -890,6 +894,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     <li>Governance v1: O.1 RBAC, agent identities, scoped tool grants, declarative policies &amp; evidence packs — available under Governance</li>
                     <li>Human-in-the-loop Approvals Inbox, Slack/email notifications &amp; edit-and-approve — available under Approvals</li>
                     <li>Evaluation v1: Golden datasets, test cases, automated graders, experiments matrix &amp; release gates — available under Evaluations</li>
+                    <li>Multi-agent v1: Supervisor + specialists, typed handoffs, blackboard &amp; Team canvas — available under Team Canvas</li>
                   </ul>
                 </section>
               </div>
@@ -1176,6 +1181,15 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               />
             )}
 
+            {section === 'teams' && (
+              <TeamCanvasView
+                client={client}
+                workspaceId={activeWorkspace?.id}
+                projectId={projects[0]?.id}
+                environment={env}
+              />
+            )}
+
             {section === 'runs' && (
               <RunsView
                 runs={runs}
@@ -1246,6 +1260,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'governance' &&
               section !== 'runs' &&
               section !== 'agents' &&
+              section !== 'teams' &&
               section !== 'workflows' &&
               section !== 'knowledge' &&
               section !== 'approvals' &&

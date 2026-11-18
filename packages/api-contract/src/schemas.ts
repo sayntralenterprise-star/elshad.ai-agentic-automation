@@ -1874,3 +1874,179 @@ export const ExperimentResultWireSchema = z
     created_at: z.string(),
   })
   .openapi('ExperimentResult');
+
+// ============================================================================
+// --- S1.4 Multi-agent v1 (Supervisor + Specialists, Handoffs, Blackboard) ---
+// ============================================================================
+
+export const TeamPatternSchema = z.enum([
+  'supervisor_specialists',
+  'sequential_pipeline',
+  'parallel_fanout_aggregate',
+  'critic_pair',
+  'router',
+]);
+
+export const TeamMemberRoleSchema = z.enum([
+  'supervisor',
+  'specialist',
+  'critic',
+  'worker',
+  'router',
+]);
+
+export const TeamMemberWireSchema = z
+  .object({
+    id: z.string(),
+    team_id: z.string(),
+    agent_id: z.string(),
+    role: TeamMemberRoleSchema,
+    read_keys: z.array(z.string()).default([]),
+    write_keys: z.array(z.string()).default([]),
+    max_steps: z.number().int().default(10),
+    timeout_seconds: z.number().int().default(60),
+    max_spend_micro_usd: z.number().int().default(5000000),
+    created_at: z.string(),
+  })
+  .openapi('TeamMember');
+
+export const TeamHandoffWireSchema = z
+  .object({
+    id: z.string(),
+    team_id: z.string(),
+    from_agent_id: z.string(),
+    to_agent_id: z.string(),
+    name: z.string(),
+    description: z.string().nullable().optional(),
+    handoff_schema: z.record(z.string(), z.unknown()).default({}),
+    return_schema: z.record(z.string(), z.unknown()).default({}),
+    created_at: z.string(),
+  })
+  .openapi('TeamHandoff');
+
+export const TeamWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string().min(1).max(255),
+    description: z.string().nullable().optional(),
+    pattern: TeamPatternSchema,
+    supervisor_agent_id: z.string().nullable().optional(),
+    members: z.array(TeamMemberWireSchema).default([]),
+    handoffs: z.array(TeamHandoffWireSchema).default([]),
+    config: z.record(z.string(), z.unknown()).default({}),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Team');
+
+export const CreateTeamMemberInputSchema = z.object({
+  agent_id: z.string(),
+  role: TeamMemberRoleSchema,
+  read_keys: z.array(z.string()).default([]),
+  write_keys: z.array(z.string()).default([]),
+  max_steps: z.number().int().min(1).default(10),
+  timeout_seconds: z.number().int().min(1).default(60),
+  max_spend_micro_usd: z.number().int().min(0).default(5000000),
+});
+
+export const CreateTeamHandoffInputSchema = z.object({
+  from_agent_id: z.string(),
+  to_agent_id: z.string(),
+  name: z.string().min(1).max(255),
+  description: z.string().optional(),
+  handoff_schema: z.record(z.string(), z.unknown()).default({}),
+  return_schema: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const CreateTeamRequestSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    pattern: TeamPatternSchema.default('supervisor_specialists'),
+    supervisor_agent_id: z.string().optional(),
+    members: z.array(CreateTeamMemberInputSchema).default([]),
+    handoffs: z.array(CreateTeamHandoffInputSchema).default([]),
+    config: z.record(z.string(), z.unknown()).default({}),
+  })
+  .openapi('CreateTeamRequest');
+
+export const UpdateTeamRequestSchema = z
+  .object({
+    name: z.string().min(1).max(255).optional(),
+    description: z.string().max(2000).optional(),
+    pattern: TeamPatternSchema.optional(),
+    supervisor_agent_id: z.string().nullable().optional(),
+    members: z.array(CreateTeamMemberInputSchema).optional(),
+    handoffs: z.array(CreateTeamHandoffInputSchema).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('UpdateTeamRequest');
+
+export const BlackboardWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    run_id: z.string(),
+    version: z.number(),
+    state: z.record(z.string(), z.unknown()),
+    history: z.array(z.record(z.string(), z.unknown())).default([]),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Blackboard');
+
+export const AgentMessageWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    run_id: z.string(),
+    sender_agent_id: z.string(),
+    receiver_agent_id: z.string(),
+    purpose: z.enum([
+      'delegation_request',
+      'delegation_response',
+      'blackboard_update',
+      'critic_feedback',
+      'error_rejection',
+    ]),
+    payload: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })
+  .openapi('AgentMessage');
+
+export const SimulateTeamRequestSchema = z
+  .object({
+    input: z.record(z.string(), z.unknown()),
+    initial_blackboard: z.record(z.string(), z.unknown()).default({}),
+  })
+  .openapi('SimulateTeamRequest');
+
+export const TeamSimulationResponseSchema = z
+  .object({
+    root_run_id: z.string(),
+    final_output: z.record(z.string(), z.unknown()),
+    blackboard: BlackboardWireSchema,
+    messages: z.array(AgentMessageWireSchema),
+    child_runs: z.array(
+      z.object({
+        child_run_id: z.string(),
+        parent_run_id: z.string(),
+        agent_id: z.string(),
+        role: z.string(),
+        status: z.string(),
+        tokens_in: z.number(),
+        tokens_out: z.number(),
+        cost_micro_usd: z.number(),
+        duration_ms: z.number(),
+      }),
+    ),
+    total_tokens_in: z.number(),
+    total_tokens_out: z.number(),
+    total_cost_micro_usd: z.number(),
+    duration_ms: z.number(),
+  })
+  .openapi('TeamSimulationResponse');

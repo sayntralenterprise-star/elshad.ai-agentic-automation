@@ -107,16 +107,25 @@ import {
   type ApprovalStatus,
   type ApprovalTimeoutAction,
   type ApprovalType,
+  MultiAgentCoordinator,
+  BlackboardManager,
+  type AgentMessage,
+  type BlackboardUpdate,
   type BudgetActionOnBreach,
   type BudgetPeriod,
   type BudgetRecord,
   type BudgetScopeType,
+  type ChildRunAttribution,
   type GraderRecord,
   type KillSwitchRecord,
   type KillSwitchScopeType,
   type NotificationRecord,
   type ReleaseGateConfig,
+  type SpecialistRunner,
+  type TeamDefinition,
+  type TeamMemberConfig,
   type TestCaseRecord,
+  type TypedHandoffPayload,
   type UsageLedger,
   type UsageLedgerEntry,
 } from '@elshad/runtime-core';
@@ -477,6 +486,75 @@ export function buildApiServer(opts: ApiServerOptions): {
   const gradersById = new Map<string, StoredGrader>();
   const experimentsById = new Map<string, StoredExperiment>();
   const experimentResultsByExperimentId = new Map<string, StoredExperimentResult[]>();
+
+  // --- S1.4 Multi-agent v1 State (Teams, Members, Handoffs, Blackboards, Agent Messages) ---
+  interface StoredTeamMember {
+    id: string;
+    team_id: string;
+    agent_id: string;
+    role: 'supervisor' | 'specialist' | 'critic' | 'worker' | 'router';
+    read_keys: string[];
+    write_keys: string[];
+    max_steps: number;
+    timeout_seconds: number;
+    max_spend_micro_usd: number;
+    created_at: string;
+  }
+
+  interface StoredTeamHandoff {
+    id: string;
+    team_id: string;
+    from_agent_id: string;
+    to_agent_id: string;
+    name: string;
+    description?: string | null;
+    handoff_schema: Record<string, unknown>;
+    return_schema: Record<string, unknown>;
+    created_at: string;
+  }
+
+  interface StoredTeam {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    name: string;
+    description: string | null;
+    pattern: 'supervisor_specialists' | 'sequential_pipeline' | 'parallel_fanout_aggregate' | 'critic_pair' | 'router';
+    supervisor_agent_id: string | null;
+    members: StoredTeamMember[];
+    handoffs: StoredTeamHandoff[];
+    config: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredBlackboard {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    run_id: string;
+    version: number;
+    state: Record<string, unknown>;
+    history: Record<string, unknown>[];
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface StoredAgentMessage {
+    id: string;
+    org_id: string;
+    workspace_id: string;
+    run_id: string;
+    sender_agent_id: string;
+    receiver_agent_id: string;
+    purpose: 'delegation_request' | 'delegation_response' | 'blackboard_update' | 'critic_feedback' | 'error_rejection';
+    payload: Record<string, unknown>;
+    created_at: string;
+  }
+
+  const teamsById = new Map<string, StoredTeam>();
+  const blackboardsByRunId = new Map<string, StoredBlackboard>();
+  const agentMessagesByRunId = new Map<string, StoredAgentMessage[]>();
 
   // Default seeded graders
   const defaultExactGrader: StoredGrader = {
@@ -5474,6 +5552,402 @@ export function buildApiServer(opts: ApiServerOptions): {
     reply.status(201);
     await persistIdempotencyIfNeeded(req, routePath, 201, stored);
     return stored;
+  });
+
+  // ---------- S1.4 Multi-agent v1 (Teams, Members, Handoffs, Blackboards, Messages) ----------
+
+  app.get('/api/v1/teams', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+
+    const items = Array.from(teamsById.values()).filter(
+      (t) => t.org_id === orgId && (!workspaceId || t.workspace_id === workspaceId),
+    );
+    return { items };
+  });
+
+  app.post('/api/v1/teams', async (req, reply) => {
+    const routePath = '/api/v1/teams';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      name: string;
+      description?: string;
+      pattern?: 'supervisor_specialists' | 'sequential_pipeline' | 'parallel_fanout_aggregate' | 'critic_pair' | 'router';
+      supervisor_agent_id?: string;
+      members?: Array<{
+        agent_id: string;
+        role: 'supervisor' | 'specialist' | 'critic' | 'worker' | 'router';
+        read_keys?: string[];
+        write_keys?: string[];
+        max_steps?: number;
+        timeout_seconds?: number;
+        max_spend_micro_usd?: number;
+      }>;
+      handoffs?: Array<{
+        from_agent_id: string;
+        to_agent_id: string;
+        name: string;
+        description?: string;
+        handoff_schema?: Record<string, unknown>;
+        return_schema?: Record<string, unknown>;
+      }>;
+      config?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId =
+      (req.headers['x-workspace-id'] as string) ||
+      'ws_default';
+
+    const teamId = `team_${createHash('sha256').update(`${orgId}:${workspaceId}:${body.name}:${Date.now()}`).digest('hex').slice(0, 16)}`;
+    const now = clock.now().toISOString();
+
+    const members: StoredTeamMember[] = (body.members ?? []).map((m, idx) => ({
+      id: `tm_${createHash('sha256').update(`${teamId}:${m.agent_id}:${idx}`).digest('hex').slice(0, 16)}`,
+      team_id: teamId,
+      agent_id: m.agent_id,
+      role: m.role,
+      read_keys: m.read_keys ?? [],
+      write_keys: m.write_keys ?? [],
+      max_steps: m.max_steps ?? 10,
+      timeout_seconds: m.timeout_seconds ?? 60,
+      max_spend_micro_usd: m.max_spend_micro_usd ?? 5000000,
+      created_at: now,
+    }));
+
+    const handoffs: StoredTeamHandoff[] = (body.handoffs ?? []).map((h, idx) => ({
+      id: `hnd_${createHash('sha256').update(`${teamId}:${h.from_agent_id}:${h.to_agent_id}:${idx}`).digest('hex').slice(0, 16)}`,
+      team_id: teamId,
+      from_agent_id: h.from_agent_id,
+      to_agent_id: h.to_agent_id,
+      name: h.name,
+      description: h.description ?? null,
+      handoff_schema: h.handoff_schema ?? {},
+      return_schema: h.return_schema ?? {},
+      created_at: now,
+    }));
+
+    const team: StoredTeam = {
+      id: teamId,
+      org_id: orgId,
+      workspace_id: workspaceId,
+      name: body.name,
+      description: body.description ?? null,
+      pattern: body.pattern ?? 'supervisor_specialists',
+      supervisor_agent_id: body.supervisor_agent_id ?? null,
+      members,
+      handoffs,
+      config: body.config ?? {},
+      created_at: now,
+      updated_at: now,
+    };
+    teamsById.set(teamId, team);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'team.create',
+      resource: { type: 'team', id: teamId, workspace_id: workspaceId },
+      decision: 'allow',
+      context: { name: team.name, pattern: team.pattern },
+    });
+
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, team);
+    return team;
+  });
+
+  app.get('/api/v1/teams/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const team = teamsById.get(id);
+    if (!team || team.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Team ${id} not found.`);
+    }
+    return team;
+  });
+
+  app.patch('/api/v1/teams/:id', async (req) => {
+    const routePath = '/api/v1/teams/{id}';
+    const contract = findContract('PATCH', routePath)!;
+    const body = validateWithSchema<{
+      name?: string;
+      description?: string;
+      pattern?: 'supervisor_specialists' | 'sequential_pipeline' | 'parallel_fanout_aggregate' | 'critic_pair' | 'router';
+      supervisor_agent_id?: string | null;
+      members?: Array<{
+        agent_id: string;
+        role: 'supervisor' | 'specialist' | 'critic' | 'worker' | 'router';
+        read_keys?: string[];
+        write_keys?: string[];
+        max_steps?: number;
+        timeout_seconds?: number;
+        max_spend_micro_usd?: number;
+      }>;
+      handoffs?: Array<{
+        from_agent_id: string;
+        to_agent_id: string;
+        name: string;
+        description?: string;
+        handoff_schema?: Record<string, unknown>;
+        return_schema?: Record<string, unknown>;
+      }>;
+      config?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const team = teamsById.get(id);
+    if (!team || team.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Team ${id} not found.`);
+    }
+
+    const now = clock.now().toISOString();
+    if (body.name !== undefined) team.name = body.name;
+    if (body.description !== undefined) team.description = body.description;
+    if (body.pattern !== undefined) team.pattern = body.pattern;
+    if (body.supervisor_agent_id !== undefined) team.supervisor_agent_id = body.supervisor_agent_id;
+    if (body.config !== undefined) team.config = body.config;
+
+    if (body.members !== undefined) {
+      team.members = body.members.map((m, idx) => ({
+        id: `tm_${createHash('sha256').update(`${id}:${m.agent_id}:${idx}`).digest('hex').slice(0, 16)}`,
+        team_id: id,
+        agent_id: m.agent_id,
+        role: m.role,
+        read_keys: m.read_keys ?? [],
+        write_keys: m.write_keys ?? [],
+        max_steps: m.max_steps ?? 10,
+        timeout_seconds: m.timeout_seconds ?? 60,
+        max_spend_micro_usd: m.max_spend_micro_usd ?? 5000000,
+        created_at: now,
+      }));
+    }
+
+    if (body.handoffs !== undefined) {
+      team.handoffs = body.handoffs.map((h, idx) => ({
+        id: `hnd_${createHash('sha256').update(`${id}:${h.from_agent_id}:${h.to_agent_id}:${idx}`).digest('hex').slice(0, 16)}`,
+        team_id: id,
+        from_agent_id: h.from_agent_id,
+        to_agent_id: h.to_agent_id,
+        name: h.name,
+        description: h.description ?? null,
+        handoff_schema: h.handoff_schema ?? {},
+        return_schema: h.return_schema ?? {},
+        created_at: now,
+      }));
+    }
+
+    team.updated_at = now;
+    teamsById.set(id, team);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'team.update',
+      resource: { type: 'team', id, workspace_id: team.workspace_id },
+      decision: 'allow',
+      context: { name: team.name },
+    });
+
+    return team;
+  });
+
+  app.post('/api/v1/teams/:id/simulate', async (req, reply) => {
+    const routePath = '/api/v1/teams/{id}/simulate';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      input: Record<string, unknown>;
+      initial_blackboard?: Record<string, unknown>;
+    }>(contract.bodySchema, req.body);
+
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const team = teamsById.get(id);
+    if (!team || team.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Team ${id} not found.`);
+    }
+
+    const rootRunId = `run_sim_${createHash('sha256').update(`${id}:${Date.now()}`).digest('hex').slice(0, 16)}`;
+    const teamDef: TeamDefinition = {
+      id: team.id,
+      orgId: team.org_id,
+      workspaceId: team.workspace_id,
+      name: team.name,
+      description: team.description ?? undefined,
+      pattern: team.pattern,
+      supervisorAgentId: team.supervisor_agent_id,
+      members: team.members.map((m) => ({
+        id: m.id,
+        teamId: m.team_id,
+        agentId: m.agent_id,
+        role: m.role,
+        readKeys: m.read_keys,
+        writeKeys: m.write_keys,
+        maxSteps: m.max_steps,
+        timeoutSeconds: m.timeout_seconds,
+        maxSpendMicroUsd: m.max_spend_micro_usd,
+      })),
+      handoffs: team.handoffs.map((h) => ({
+        id: h.id,
+        teamId: h.team_id,
+        fromAgentId: h.from_agent_id,
+        toAgentId: h.to_agent_id,
+        name: h.name,
+        description: h.description ?? undefined,
+        handoffSchema: h.handoff_schema,
+        returnSchema: h.return_schema,
+      })),
+      config: team.config,
+    };
+
+    const coordinator = new MultiAgentCoordinator(teamDef, rootRunId, body.initial_blackboard ?? {});
+
+    const specialistRunner: SpecialistRunner = async (
+      agentId: string,
+      handoff: TypedHandoffPayload,
+      blackboard: BlackboardManager,
+      memberConfig: TeamMemberConfig,
+      _tenantCtx: TenantContext,
+    ) => {
+      // Find actual agent if exists
+      const agent = agentsById.get(agentId);
+      const agentName = agent ? agent.name : agentId;
+
+      // Specialist updates permitted write keys on the blackboard
+      const writeKey = memberConfig.writeKeys[0] || `${agentId}_output`;
+      const outputVal = {
+        handledBy: agentName,
+        goal: handoff.goal,
+        status: 'completed',
+        timestamp: clock.now().toISOString(),
+      };
+
+      blackboard.set(writeKey, outputVal, agentId, memberConfig.writeKeys);
+
+      return {
+        output: outputVal,
+        tokensIn: 240,
+        tokensOut: 75,
+        costMicroUsd: 2800,
+        durationMs: 45,
+      };
+    };
+
+    const simResult = await coordinator.executeSupervisorWorkflow(
+      rootRunId,
+      buildTenantContext(req, team.workspace_id),
+      body.input,
+      specialistRunner,
+    );
+
+    // Persist blackboard
+    const storedBb: StoredBlackboard = {
+      id: `bb_${createHash('sha256').update(rootRunId).digest('hex').slice(0, 16)}`,
+      org_id: orgId,
+      workspace_id: team.workspace_id,
+      run_id: rootRunId,
+      version: simResult.blackboard.version,
+      state: simResult.blackboard.data,
+      history: simResult.blackboard.history.map((h: BlackboardUpdate) => ({ ...h })),
+      created_at: clock.now().toISOString(),
+      updated_at: clock.now().toISOString(),
+    };
+    blackboardsByRunId.set(rootRunId, storedBb);
+
+    // Persist agent messages
+    const storedMessages: StoredAgentMessage[] = simResult.messages.map((m: AgentMessage) => ({
+      id: m.id,
+      org_id: orgId,
+      workspace_id: team.workspace_id,
+      run_id: rootRunId,
+      sender_agent_id: m.senderAgentId,
+      receiver_agent_id: m.receiverAgentId,
+      purpose: m.purpose,
+      payload: m.payload,
+      created_at: m.timestamp,
+    }));
+    agentMessagesByRunId.set(rootRunId, storedMessages);
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'team.simulate',
+      resource: { type: 'team', id, run_id: rootRunId },
+      decision: 'allow',
+      context: { total_child_runs: simResult.childRuns.length, total_cost_micro_usd: simResult.totalCostMicroUsd },
+    });
+
+    const response = {
+      root_run_id: rootRunId,
+      final_output: simResult.finalOutput,
+      blackboard: storedBb,
+      messages: storedMessages,
+      child_runs: simResult.childRuns.map((cr: ChildRunAttribution) => ({
+        child_run_id: cr.childRunId,
+        parent_run_id: cr.parentRunId,
+        agent_id: cr.agentId,
+        role: cr.role,
+        status: cr.status,
+        tokens_in: cr.tokensIn,
+        tokens_out: cr.tokensOut,
+        cost_micro_usd: cr.costMicroUsd,
+        duration_ms: cr.durationMs,
+      })),
+      total_tokens_in: simResult.totalTokensIn,
+      total_tokens_out: simResult.totalTokensOut,
+      total_cost_micro_usd: simResult.totalCostMicroUsd,
+      duration_ms: simResult.durationMs,
+    };
+
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  app.get('/api/v1/runs/:id/blackboard', async (req) => {
+    const { id: runId } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const bb = blackboardsByRunId.get(runId);
+    if (!bb) {
+      // Default empty blackboard if run exists
+      const run = await executionEngine.getRun(orgId, runId);
+      if (!run) {
+        throw new PlatformError('RES_NOT_FOUND', `Run ${runId} not found.`);
+      }
+      return {
+        id: `bb_${runId}`,
+        org_id: orgId,
+        workspace_id: run.workspace_id,
+        run_id: runId,
+        version: 1,
+        state: {},
+        history: [],
+        created_at: clock.now().toISOString(),
+        updated_at: clock.now().toISOString(),
+      };
+    }
+    if (bb.org_id !== orgId) {
+      throw new PlatformError('RES_NOT_FOUND', `Blackboard for run ${runId} not found.`);
+    }
+    return bb;
+  });
+
+  app.get('/api/v1/runs/:id/agent-messages', async (req) => {
+    const { id: runId } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const messages = agentMessagesByRunId.get(runId) ?? [];
+    const filtered = messages.filter((m) => m.org_id === orgId);
+    return { items: filtered };
   });
 
   return {

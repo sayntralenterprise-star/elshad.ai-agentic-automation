@@ -33,6 +33,8 @@ import {
   type RunStepDto,
   type SecretMetadataDto,
   type TestCaseDto,
+  type TeamDto,
+  type TeamSimulationDto,
   type ToolContractDto,
   type ToolGrantDto,
   type TriggerDto,
@@ -1425,6 +1427,7 @@ function createMockClient(
     testCaseList.push(tc);
     return structuredClone(tc);
   };
+
   client.evaluations.graders.list = async () => structuredClone(graderList);
   client.evaluations.graders.create = async (input) => {
     const grd: GraderDto = {
@@ -1512,6 +1515,307 @@ function createMockClient(
     };
     testCaseList.push(tc);
     return structuredClone(tc);
+  };
+
+  const initialTeamsList: TeamDto[] = [
+    {
+      id: 'team_benchmark_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: 'Customer Support Swarm',
+      description: 'Supervisor orchestrating triage, identity verification, and billing specialists.',
+      pattern: 'supervisor_specialists',
+      supervisorAgentId: 'agent_supervisor',
+      members: [
+        {
+          id: 'mem_sup_1',
+          teamId: 'team_benchmark_1',
+          agentId: 'agent_supervisor',
+          role: 'supervisor',
+          readKeys: ['*'],
+          writeKeys: ['*'],
+          maxSteps: 25,
+          timeoutSeconds: 60,
+          maxSpendMicroUsd: 1_000_000,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'mem_spec_1',
+          teamId: 'team_benchmark_1',
+          agentId: 'agent_triage',
+          role: 'specialist',
+          readKeys: ['ticket_id', 'customer_id'],
+          writeKeys: ['triage_assessment', 'priority'],
+          maxSteps: 10,
+          timeoutSeconds: 30,
+          maxSpendMicroUsd: 100_000,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'mem_spec_2',
+          teamId: 'team_benchmark_1',
+          agentId: 'agent_auth',
+          role: 'specialist',
+          readKeys: ['customer_id', 'triage_assessment'],
+          writeKeys: ['auth_verified', 'risk_score'],
+          maxSteps: 10,
+          timeoutSeconds: 30,
+          maxSpendMicroUsd: 100_000,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'mem_spec_3',
+          teamId: 'team_benchmark_1',
+          agentId: 'agent_billing',
+          role: 'specialist',
+          readKeys: ['customer_id', 'auth_verified', 'triage_assessment'],
+          writeKeys: ['refund_issued_micro_usd', 'resolution_summary'],
+          maxSteps: 10,
+          timeoutSeconds: 30,
+          maxSpendMicroUsd: 200_000,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      handoffs: [
+        {
+          id: 'hnd_1',
+          teamId: 'team_benchmark_1',
+          fromAgentId: 'agent_supervisor',
+          toAgentId: 'agent_triage',
+          name: 'Triage Handoff Contract',
+          description: 'Severity analysis and customer categorization',
+          handoffSchema: {
+            goal: 'Analyze support ticket severity, categorize issue, and extract customer identity',
+            context_summary: 'Customer submitted an enterprise billing dispute ticket',
+            artifacts: ['raw_ticket_text'],
+            constraints: ['response_must_be_structured_json', 'p0_triage_under_5_seconds'],
+          },
+          returnSchema: {
+            type: 'object',
+            required: ['triage_assessment', 'priority'],
+            properties: {
+              triage_assessment: { type: 'string' },
+              priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+            },
+          },
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'hnd_2',
+          teamId: 'team_benchmark_1',
+          fromAgentId: 'agent_supervisor',
+          toAgentId: 'agent_auth',
+          name: 'Auth Handoff Contract',
+          description: 'Account ownership and permission validation',
+          handoffSchema: {
+            goal: 'Verify account ownership and validate API key permissions',
+            context_summary: 'Customer claims enterprise plan ownership',
+            artifacts: ['customer_id', 'triage_assessment'],
+            constraints: ['mfa_or_active_session_required'],
+          },
+          returnSchema: {
+            type: 'object',
+            required: ['auth_verified', 'risk_score'],
+            properties: {
+              auth_verified: { type: 'boolean' },
+              risk_score: { type: 'number' },
+            },
+          },
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'hnd_3',
+          teamId: 'team_benchmark_1',
+          fromAgentId: 'agent_supervisor',
+          toAgentId: 'agent_billing',
+          name: 'Billing Handoff Contract',
+          description: 'Ledger inspection and refund adjustments',
+          handoffSchema: {
+            goal: 'Inspect billing ledgers, verify plan pricing, and compute refund adjustments',
+            context_summary: 'Identity verified and issue classified as billing discrepancy',
+            artifacts: ['customer_id', 'auth_verified'],
+            constraints: ['max_instant_refund_usd_500'],
+          },
+          returnSchema: {
+            type: 'object',
+            required: ['refund_issued_micro_usd', 'resolution_summary'],
+            properties: {
+              refund_issued_micro_usd: { type: 'number' },
+              resolution_summary: { type: 'string' },
+            },
+          },
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      config: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+
+  const teamsList: TeamDto[] = [...initialTeamsList];
+
+  client.teams.list = async () => structuredClone(teamsList);
+  client.teams.get = async (id: string) => {
+    const t = teamsList.find((item) => item.id === id);
+    if (!t) throw new PlatformError('RES_NOT_FOUND', `Team not found: ${id}`);
+    return structuredClone(t);
+  };
+  client.teams.create = async (input) => {
+    const newTeam: TeamDto = {
+      id: `team_${Date.now()}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: input.name,
+      description: input.description ?? null,
+      pattern: input.pattern ?? 'supervisor_specialists',
+      supervisorAgentId: input.supervisorAgentId ?? null,
+      members:
+        input.members?.map((m, idx) => ({
+          id: `mem_${idx}`,
+          teamId: `team_${Date.now()}`,
+          agentId: m.agentId,
+          role: m.role,
+          readKeys: m.readKeys ?? [],
+          writeKeys: m.writeKeys ?? [],
+          maxSteps: m.maxSteps ?? 10,
+          timeoutSeconds: m.timeoutSeconds ?? 60,
+          maxSpendMicroUsd: m.maxSpendMicroUsd ?? 5_000_000,
+          createdAt: new Date().toISOString(),
+        })) ?? [],
+      handoffs:
+        input.handoffs?.map((h, idx) => ({
+          id: `hnd_${idx}`,
+          teamId: `team_${Date.now()}`,
+          fromAgentId: h.fromAgentId,
+          toAgentId: h.toAgentId,
+          name: h.name,
+          description: h.description ?? null,
+          handoffSchema: h.handoffSchema ?? {},
+          returnSchema: h.returnSchema ?? {},
+          createdAt: new Date().toISOString(),
+        })) ?? [],
+      config: input.config ?? {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    teamsList.unshift(newTeam);
+    return structuredClone(newTeam);
+  };
+  client.teams.update = async (id, input) => {
+    const idx = teamsList.findIndex((item) => item.id === id);
+    if (idx === -1) throw new PlatformError('RES_NOT_FOUND', `Team not found: ${id}`);
+    const existing = teamsList[idx]!;
+    const updated: TeamDto = {
+      ...existing,
+      name: input.name ?? existing.name,
+      description: input.description ?? existing.description,
+      pattern: input.pattern ?? existing.pattern,
+      updatedAt: new Date().toISOString(),
+    };
+    teamsList[idx] = updated;
+    return structuredClone(updated);
+  };
+  client.teams.simulate = async (_id, _input) => {
+    const sim: TeamSimulationDto = {
+      rootRunId: 'run_sim_team_1',
+      finalOutput: { status: 'refund_approved', amount_usd: 150 },
+      blackboard: {
+        id: 'bb_1',
+        orgId: 'org_1',
+        workspaceId: 'ws_1',
+        runId: 'run_sim_team_1',
+        version: 3,
+        state: {
+          ticket_id: 'tkt_882194',
+          customer_id: 'cust_enterprise_4091',
+          triage_assessment: 'Valid invoice overcharge',
+          priority: 'P1',
+          auth_verified: true,
+          risk_score: 0.12,
+          refund_issued_micro_usd: 150_000_000,
+          resolution_summary: 'Approved and credited $150.00',
+        },
+        history: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      messages: [
+        {
+          id: 'msg_1',
+          orgId: 'org_1',
+          workspaceId: 'ws_1',
+          runId: 'run_sim_team_1',
+          senderAgentId: 'agent_supervisor',
+          receiverAgentId: 'agent_triage',
+          purpose: 'delegation_request',
+          payload: { goal: 'Analyze support ticket severity' },
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'msg_2',
+          orgId: 'org_1',
+          workspaceId: 'ws_1',
+          runId: 'run_sim_team_1',
+          senderAgentId: 'agent_triage',
+          receiverAgentId: 'agent_supervisor',
+          purpose: 'delegation_response',
+          payload: { priority: 'P1' },
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'msg_3',
+          orgId: 'org_1',
+          workspaceId: 'ws_1',
+          runId: 'run_sim_team_1',
+          senderAgentId: 'agent_supervisor',
+          receiverAgentId: 'agent_billing',
+          purpose: 'delegation_request',
+          payload: { goal: 'Process adjustment' },
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      childRuns: [
+        {
+          childRunId: 'crun_triage_1',
+          parentRunId: 'run_sim_team_1',
+          agentId: 'agent_triage',
+          role: 'specialist',
+          status: 'succeeded',
+          tokensIn: 320,
+          tokensOut: 110,
+          costMicroUsd: 430,
+          durationMs: 45,
+        },
+        {
+          childRunId: 'crun_auth_1',
+          parentRunId: 'run_sim_team_1',
+          agentId: 'agent_auth',
+          role: 'specialist',
+          status: 'succeeded',
+          tokensIn: 280,
+          tokensOut: 90,
+          costMicroUsd: 370,
+          durationMs: 38,
+        },
+        {
+          childRunId: 'crun_billing_1',
+          parentRunId: 'run_sim_team_1',
+          agentId: 'agent_billing',
+          role: 'specialist',
+          status: 'succeeded',
+          tokensIn: 410,
+          tokensOut: 180,
+          costMicroUsd: 590,
+          durationMs: 62,
+        },
+      ],
+      totalTokensIn: 1010,
+      totalTokensOut: 380,
+      totalCostMicroUsd: 1390,
+      durationMs: 145,
+    };
+    return structuredClone(sim);
   };
 
   return client;
@@ -2039,6 +2343,57 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     await user.click(screen.getByRole('button', { name: /Diff/i }));
     expect(await screen.findByRole('heading', { name: 'Case Evaluation Inspector' })).toBeTruthy();
     expect(await screen.findByText(/Grader Breakdown:/i)).toBeTruthy();
+
+    // Accessibility validation
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Team Canvas: supervisor + specialists topology, typed handoffs, blackboard, simulation & passes axe [E1.4, FR-RT-20..24, §7.3.3]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/teams" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Team Canvas' })).toBeTruthy();
+    expect(await screen.findByText('Customer Support Swarm')).toBeTruthy();
+    expect(await screen.findByText('FR-RT-23 Max Depth: 3')).toBeTruthy();
+    expect(await screen.findByText('FR-RT-24 Max Fan-out: 8')).toBeTruthy();
+    expect(await screen.findByText('Typed Handoffs: Strict')).toBeTruthy();
+
+    // Supervisor node visible
+    expect(screen.getByLabelText(/Supervisor node: agent_supervisor/i)).toBeTruthy();
+
+    // Specialist nodes visible
+    expect(screen.getByLabelText(/Specialist node: agent_triage/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Specialist node: agent_auth/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Specialist node: agent_billing/i)).toBeTruthy();
+
+    // Inspect typed handoff edge
+    const triageEdge = screen.getByRole('button', { name: /Typed handoff edge to agent_triage/i });
+    await user.click(triageEdge);
+    expect(await screen.findByRole('heading', { name: 'Typed Handoff Contract' })).toBeTruthy();
+    expect(await screen.findByText(/Free text handoffs forbidden/i)).toBeTruthy();
+
+    // Inspect specialist member
+    const billingNode = screen.getByLabelText(/Specialist node: agent_billing/i);
+    await user.click(billingNode);
+    expect(await screen.findByRole('heading', { name: 'Member Inspector' })).toBeTruthy();
+    expect(await screen.findByText(/Blackboard Read Scopes/i)).toBeTruthy();
+
+    // Run simulation
+    const simButton = screen.getByRole('button', { name: /Run Simulation/i });
+    await user.click(simButton);
+    expect(await screen.findByRole('heading', { name: 'Simulation Results' })).toBeTruthy();
+    expect(await screen.findByText(/Child Run Roll-up \(FR-RT-20\)/i)).toBeTruthy();
+    expect(await screen.findByText(/Shared Run Blackboard \(FR-RT-22\)/i)).toBeTruthy();
+
+    // Blackboard contains values and CAS version
+    expect(await screen.findByText('cust_enterprise_4091')).toBeTruthy();
+    expect(await screen.findByText('tkt_882194')).toBeTruthy();
 
     // Accessibility validation
     const axeRes = await axe.run(container, {

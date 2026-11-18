@@ -34,6 +34,9 @@ export type DeploymentId = Brand<string, 'DeploymentId'>;
 export type PromotionId = Brand<string, 'PromotionId'>;
 export type RoleId = Brand<string, 'RoleId'>;
 export type RoleBindingId = Brand<string, 'RoleBindingId'>;
+export type TeamId = Brand<string, 'TeamId'>;
+export type BlackboardId = Brand<string, 'BlackboardId'>;
+export type MessageId = Brand<string, 'MessageId'>;
 
 export const ExternalPrefix = {
   org: 'org_',
@@ -59,6 +62,9 @@ export const ExternalPrefix = {
   testCase: 'tc_',
   grader: 'grd_',
   experiment: 'exp_',
+  team: 'team_',
+  blackboard: 'bb_',
+  message: 'msg_',
   audit: 'aud_',
   webhook: 'whk_',
   apiKey: 'key_',

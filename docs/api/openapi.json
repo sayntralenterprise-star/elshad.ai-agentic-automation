@@ -6609,6 +6609,648 @@
           "dataset_id",
           "name"
         ]
+      },
+      "Team": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pattern": {
+            "type": "string",
+            "enum": [
+              "supervisor_specialists",
+              "sequential_pipeline",
+              "parallel_fanout_aggregate",
+              "critic_pair",
+              "router"
+            ]
+          },
+          "supervisor_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamMember"
+            },
+            "default": []
+          },
+          "handoffs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamHandoff"
+            },
+            "default": []
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "name",
+          "pattern",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "TeamMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "supervisor",
+              "specialist",
+              "critic",
+              "worker",
+              "router"
+            ]
+          },
+          "read_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "write_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "max_steps": {
+            "type": "integer",
+            "default": 10
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "default": 60
+          },
+          "max_spend_micro_usd": {
+            "type": "integer",
+            "default": 5000000
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "team_id",
+          "agent_id",
+          "role",
+          "created_at"
+        ]
+      },
+      "TeamHandoff": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "from_agent_id": {
+            "type": "string"
+          },
+          "to_agent_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handoff_schema": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "return_schema": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "team_id",
+          "from_agent_id",
+          "to_agent_id",
+          "name",
+          "created_at"
+        ]
+      },
+      "CreateTeamRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "pattern": {
+            "type": "string",
+            "enum": [
+              "supervisor_specialists",
+              "sequential_pipeline",
+              "parallel_fanout_aggregate",
+              "critic_pair",
+              "router"
+            ],
+            "default": "supervisor_specialists"
+          },
+          "supervisor_agent_id": {
+            "type": "string"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "supervisor",
+                    "specialist",
+                    "critic",
+                    "worker",
+                    "router"
+                  ]
+                },
+                "read_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "write_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "max_steps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 10
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 60
+                },
+                "max_spend_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 5000000
+                }
+              },
+              "required": [
+                "agent_id",
+                "role"
+              ]
+            },
+            "default": []
+          },
+          "handoffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from_agent_id": {
+                  "type": "string"
+                },
+                "to_agent_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "description": {
+                  "type": "string"
+                },
+                "handoff_schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {}
+                },
+                "return_schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {}
+                }
+              },
+              "required": [
+                "from_agent_id",
+                "to_agent_id",
+                "name"
+              ]
+            },
+            "default": []
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "UpdateTeamRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "pattern": {
+            "type": "string",
+            "enum": [
+              "supervisor_specialists",
+              "sequential_pipeline",
+              "parallel_fanout_aggregate",
+              "critic_pair",
+              "router"
+            ]
+          },
+          "supervisor_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "supervisor",
+                    "specialist",
+                    "critic",
+                    "worker",
+                    "router"
+                  ]
+                },
+                "read_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "write_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "max_steps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 10
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 60
+                },
+                "max_spend_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 5000000
+                }
+              },
+              "required": [
+                "agent_id",
+                "role"
+              ]
+            }
+          },
+          "handoffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from_agent_id": {
+                  "type": "string"
+                },
+                "to_agent_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "description": {
+                  "type": "string"
+                },
+                "handoff_schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {}
+                },
+                "return_schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {}
+                }
+              },
+              "required": [
+                "from_agent_id",
+                "to_agent_id",
+                "name"
+              ]
+            }
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "TeamSimulationResponse": {
+        "type": "object",
+        "properties": {
+          "root_run_id": {
+            "type": "string"
+          },
+          "final_output": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "blackboard": {
+            "$ref": "#/components/schemas/Blackboard"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentMessage"
+            }
+          },
+          "child_runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "child_run_id": {
+                  "type": "string"
+                },
+                "parent_run_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "tokens_in": {
+                  "type": "number"
+                },
+                "tokens_out": {
+                  "type": "number"
+                },
+                "cost_micro_usd": {
+                  "type": "number"
+                },
+                "duration_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "child_run_id",
+                "parent_run_id",
+                "agent_id",
+                "role",
+                "status",
+                "tokens_in",
+                "tokens_out",
+                "cost_micro_usd",
+                "duration_ms"
+              ]
+            }
+          },
+          "total_tokens_in": {
+            "type": "number"
+          },
+          "total_tokens_out": {
+            "type": "number"
+          },
+          "total_cost_micro_usd": {
+            "type": "number"
+          },
+          "duration_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "root_run_id",
+          "final_output",
+          "blackboard",
+          "messages",
+          "child_runs",
+          "total_tokens_in",
+          "total_tokens_out",
+          "total_cost_micro_usd",
+          "duration_ms"
+        ]
+      },
+      "Blackboard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "default": []
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "run_id",
+          "version",
+          "state",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "AgentMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sender_agent_id": {
+            "type": "string"
+          },
+          "receiver_agent_id": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "delegation_request",
+              "delegation_response",
+              "blackboard_update",
+              "critic_feedback",
+              "error_rejection"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "run_id",
+          "sender_agent_id",
+          "receiver_agent_id",
+          "purpose",
+          "payload",
+          "created_at"
+        ]
+      },
+      "SimulateTeamRequest": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "initial_blackboard": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          }
+        },
+        "required": [
+          "input"
+        ]
       }
     },
     "parameters": {}
@@ -12773,6 +13415,379 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestCase"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams": {
+      "get": {
+        "operationId": "teams.list",
+        "summary": "List multi-agent teams (FR-RT-20..24)",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Team"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "teams.create",
+        "summary": "Create a multi-agent team (FR-RT-20..24, §7.3.3)",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeamRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}": {
+      "get": {
+        "operationId": "teams.get",
+        "summary": "Get multi-agent team details",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "teams.update",
+        "summary": "Update multi-agent team topology or handoffs",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTeamRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}/simulate": {
+      "post": {
+        "operationId": "teams.simulate",
+        "summary": "Simulate multi-agent collaboration with typed handoffs & blackboard (FR-RT-20..24)",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulateTeamRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamSimulationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/blackboard": {
+      "get": {
+        "operationId": "runs.blackboard",
+        "summary": "Get run-scoped shared blackboard state and history (FR-RT-22)",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Blackboard"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/agent-messages": {
+      "get": {
+        "operationId": "runs.agent_messages",
+        "summary": "Get inter-agent message logs for a run trace (FR-RT-24)",
+        "tags": [
+          "Teams"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AgentMessage"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
                 }
               }
             }
