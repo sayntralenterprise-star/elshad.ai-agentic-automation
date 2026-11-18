@@ -17,6 +17,7 @@ import {
   type ConversationSessionDto,
   type CustomToolDto,
   type DatasetDto,
+  type DeploymentDto,
   type DlqItemDto,
   type ExperimentDto,
   type ExperimentResultDto,
@@ -34,6 +35,7 @@ import {
   type ModelCapabilityDto,
   type NotificationDto,
   type PolicyDto,
+  type PromotionDto,
   type RunDto,
   type RunStepDto,
   type SecretMetadataDto,
@@ -2064,6 +2066,78 @@ function createMockClient(
     return structuredClone(updated);
   };
 
+  const deploymentsList: DeploymentDto[] = [
+    {
+      id: 'dep_prod_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      environment: 'prod',
+      subjectType: 'agent',
+      subjectId: 'agt_1',
+      versionId: 'agv_1',
+      previousVersionId: 'agv_0',
+      channel: 'stable',
+      trafficPct: 100,
+      status: 'active',
+      deployedBy: 'prn_1',
+      deployedAt: new Date().toISOString(),
+    },
+  ];
+  const promotionsList: PromotionDto[] = [];
+
+  client.deployments.list = async () => structuredClone(deploymentsList);
+  client.deployments.rollback = async (id) => {
+    const idx = deploymentsList.findIndex((d) => d.id === id);
+    const existing = deploymentsList[idx]!;
+    const restored: DeploymentDto = {
+      ...existing,
+      versionId: existing.previousVersionId ?? 'agv_0',
+      previousVersionId: existing.versionId,
+      status: 'rolled_back',
+      trafficPct: 100,
+    };
+    deploymentsList[idx] = restored;
+    return structuredClone(restored);
+  };
+
+  client.promotions.list = async () => structuredClone(promotionsList);
+  client.promotions.create = async (input) => {
+    const missing = (input.requiredCredentials ?? []).filter(
+      (k) => !input.credentialMapping?.[k],
+    );
+    if (missing.length > 0) {
+      throw new PlatformError(
+        'VAL_SCHEMA_MISMATCH',
+        `Unmapped credential(s) in target environment "${input.toEnv}": ${missing.join(', ')}`,
+      );
+    }
+    const promo: PromotionDto = {
+      id: `prm_${promotionsList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+      versionId: input.versionId,
+      fromEnv: input.fromEnv,
+      toEnv: input.toEnv,
+      status: input.toEnv === 'prod' ? 'pending_approval' : 'deployed',
+      evalGatePassed: input.evalGatePassed ?? true,
+      evalScore: input.evalScore ?? 0.95,
+      diffSummary: { previous_version_id: 'agv_1', new_version_id: input.versionId },
+      credentialMapping: input.credentialMapping ?? {},
+      canaryPct: input.canaryPct ?? 100,
+      initiatedBy: 'prn_1',
+      approvedBy: null,
+      deploymentId: null,
+      deployedAt: null,
+      rolledBackAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    promotionsList.unshift(promo);
+    return { promotion: structuredClone(promo), deployment: null };
+  };
+
   return client;
 }
 
@@ -2721,6 +2795,49 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
 
     await user.click(screen.getByRole('button', { name: 'Replace' }));
     expect(await screen.findByText(/Rotated secret for .* to v2/i)).toBeTruthy();
+
+    // Accessibility check
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Agent Studio Deployments tab: blocks unmapped credential promotion, promotes with mapping, rolls back & passes axe [E1.7, N.2.13, §7.3.3]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/agents" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Agents Studio' })).toBeTruthy();
+
+    // First create an agent so Studio tabs appear
+    const createBtns = screen.getAllByRole('button', { name: '+ Create Agent' });
+    await user.click(createBtns[0]!);
+    await user.click(await screen.findByRole('button', { name: 'Create Agent Draft' }));
+
+    // Switch to Deployments tab
+    await user.click(await screen.findByRole('tab', { name: 'Deployments' }));
+    expect(await screen.findByRole('heading', { name: /Environments, Promotions & Rollback/i })).toBeTruthy();
+
+    // Verify live prod deployment & rollback button
+    expect(await screen.findByText('Live: agv_1')).toBeTruthy();
+
+    // 1. Clear credential mapping -> promotion blocked with clear error
+    const mapInput = screen.getByLabelText(/Target Credential Mapping/i);
+    await user.clear(mapInput);
+    await user.click(screen.getByRole('button', { name: 'Promote Version' }));
+    expect(await screen.findByText(/Unmapped credential\(s\) in target environment "prod": slack_bot_token/i)).toBeTruthy();
+
+    // 2. Restore mapping -> creates pending_approval promotion
+    await user.type(mapInput, 'slack_bot_token=conn_prod_slack');
+    await user.click(screen.getByRole('button', { name: 'Promote Version' }));
+    expect(await screen.findByText(/queued for Separation-of-Duties approval/i)).toBeTruthy();
+
+    // 3. Rollback live prod deployment
+    await user.click(screen.getByRole('button', { name: /Rollback to agv_0/i }));
+    expect(await screen.findByText(/Rolled back prod deployment to version agv_0/i)).toBeTruthy();
 
     // Accessibility check
     const axeRes = await axe.run(container, {

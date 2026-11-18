@@ -1113,6 +1113,46 @@ export interface ConnectionTestResponseDto {
   latencyMs: number;
 }
 
+export interface DeploymentDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  environment: 'dev' | 'staging' | 'prod';
+  subjectType: 'agent' | 'workflow';
+  subjectId: string;
+  versionId: string;
+  previousVersionId: string | null;
+  channel: string;
+  trafficPct: number;
+  status: 'active' | 'canary' | 'rolled_back';
+  deployedBy: string;
+  deployedAt: string;
+}
+
+export interface PromotionDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  subjectType: 'agent' | 'workflow';
+  subjectId: string;
+  versionId: string;
+  fromEnv: 'dev' | 'staging' | 'prod';
+  toEnv: 'dev' | 'staging' | 'prod';
+  status: 'pending_approval' | 'approved' | 'rejected' | 'deployed' | 'rolled_back' | 'failed';
+  evalGatePassed: boolean;
+  evalScore: number | null;
+  diffSummary: Record<string, unknown>;
+  credentialMapping: Record<string, string>;
+  canaryPct: number;
+  initiatedBy: string;
+  approvedBy: string | null;
+  deploymentId: string | null;
+  deployedAt: string | null;
+  rolledBackAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -2120,6 +2160,97 @@ export class PlatformClient {
         },
       );
       return mapTestToolResult(res);
+    },
+  };
+
+  readonly deployments = {
+    list: async (): Promise<DeploymentDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/deployments',
+      );
+      return res.items.map(mapDeployment);
+    },
+    rollback: async (id: string): Promise<DeploymentDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/deployments/${id}/rollback`,
+        { idempotencyKey: `dep-rollback-${id}-${Date.now()}`, body: {} },
+      );
+      return mapDeployment(res);
+    },
+  };
+
+  readonly promotions = {
+    list: async (): Promise<PromotionDto[]> => {
+      const res = await this.request<{ items: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/promotions',
+      );
+      return res.items.map(mapPromotion);
+    },
+    create: async (
+      input: {
+        subjectType: 'agent' | 'workflow';
+        subjectId: string;
+        versionId: string;
+        versionPublished?: boolean;
+        fromEnv: 'dev' | 'staging' | 'prod';
+        toEnv: 'dev' | 'staging' | 'prod';
+        requiredCredentials?: string[];
+        credentialMapping?: Record<string, string>;
+        evalGatePassed?: boolean;
+        evalScore?: number | null;
+        canaryPct?: number;
+        diffFields?: string[];
+      },
+      idempotencyKey?: string,
+    ): Promise<{ promotion: PromotionDto; deployment: DeploymentDto | null }> => {
+      const res = await this.request<{
+        promotion: Record<string, unknown>;
+        deployment: Record<string, unknown> | null;
+      }>('POST', '/api/v1/promotions', {
+        idempotencyKey: idempotencyKey ?? `promo-create-${Date.now()}`,
+        body: {
+          subject_type: input.subjectType,
+          subject_id: input.subjectId,
+          version_id: input.versionId,
+          version_published: input.versionPublished ?? true,
+          from_env: input.fromEnv,
+          to_env: input.toEnv,
+          required_credentials: input.requiredCredentials ?? [],
+          credential_mapping: input.credentialMapping ?? {},
+          eval_gate_passed: input.evalGatePassed,
+          eval_score: input.evalScore,
+          canary_pct: input.canaryPct ?? 100,
+          diff_fields: input.diffFields,
+        },
+      });
+      return {
+        promotion: mapPromotion(res.promotion),
+        deployment: res.deployment ? mapDeployment(res.deployment) : null,
+      };
+    },
+    approve: async (id: string): Promise<{ promotion: PromotionDto; deployment: DeploymentDto | null }> => {
+      const res = await this.request<{
+        promotion: Record<string, unknown>;
+        deployment: Record<string, unknown> | null;
+      }>('POST', `/api/v1/promotions/${id}/approve`, {
+        idempotencyKey: `promo-approve-${id}-${Date.now()}`,
+        body: {},
+      });
+      return {
+        promotion: mapPromotion(res.promotion),
+        deployment: res.deployment ? mapDeployment(res.deployment) : null,
+      };
+    },
+    reject: async (id: string): Promise<PromotionDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/promotions/${id}/reject`,
+        { idempotencyKey: `promo-reject-${id}-${Date.now()}`, body: {} },
+      );
+      return mapPromotion(res);
     },
   };
 
@@ -4582,5 +4713,49 @@ function mapConnection(c: Record<string, unknown>): ConnectionDto {
     expiresAt: c.expires_at ? String(c.expires_at) : null,
     createdAt: String(c.created_at),
     updatedAt: String(c.updated_at),
+  };
+}
+
+function mapDeployment(d: Record<string, unknown>): DeploymentDto {
+  return {
+    id: String(d.id),
+    orgId: String(d.org_id),
+    workspaceId: String(d.workspace_id),
+    environment: d.environment as DeploymentDto['environment'],
+    subjectType: d.subject_type as DeploymentDto['subjectType'],
+    subjectId: String(d.subject_id),
+    versionId: String(d.version_id),
+    previousVersionId: d.previous_version_id ? String(d.previous_version_id) : null,
+    channel: String(d.channel ?? 'stable'),
+    trafficPct: Number(d.traffic_pct ?? 100),
+    status: (d.status ?? 'active') as DeploymentDto['status'],
+    deployedBy: String(d.deployed_by),
+    deployedAt: String(d.deployed_at),
+  };
+}
+
+function mapPromotion(p: Record<string, unknown>): PromotionDto {
+  return {
+    id: String(p.id),
+    orgId: String(p.org_id),
+    workspaceId: String(p.workspace_id),
+    subjectType: p.subject_type as PromotionDto['subjectType'],
+    subjectId: String(p.subject_id),
+    versionId: String(p.version_id),
+    fromEnv: p.from_env as PromotionDto['fromEnv'],
+    toEnv: p.to_env as PromotionDto['toEnv'],
+    status: p.status as PromotionDto['status'],
+    evalGatePassed: Boolean(p.eval_gate_passed),
+    evalScore: p.eval_score !== null && p.eval_score !== undefined ? Number(p.eval_score) : null,
+    diffSummary: (p.diff_summary ?? {}) as Record<string, unknown>,
+    credentialMapping: (p.credential_mapping ?? {}) as Record<string, string>,
+    canaryPct: Number(p.canary_pct ?? 100),
+    initiatedBy: String(p.initiated_by),
+    approvedBy: p.approved_by ? String(p.approved_by) : null,
+    deploymentId: p.deployment_id ? String(p.deployment_id) : null,
+    deployedAt: p.deployed_at ? String(p.deployed_at) : null,
+    rolledBackAt: p.rolled_back_at ? String(p.rolled_back_at) : null,
+    createdAt: String(p.created_at),
+    updatedAt: String(p.updated_at),
   };
 }

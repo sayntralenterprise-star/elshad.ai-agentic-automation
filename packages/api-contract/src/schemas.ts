@@ -2313,3 +2313,73 @@ export const ExecuteConnectionActionRequestSchema = z
     target_domain: z.string().optional(),
   })
   .openapi('ExecuteConnectionActionRequest');
+
+// ---------- S1.7 Environments, Promotions, Rollback & CLI ----------
+
+export const DeploymentWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    environment: z.enum(['dev', 'staging', 'prod']),
+    subject_type: z.enum(['agent', 'workflow']),
+    subject_id: z.string(),
+    version_id: z.string(),
+    previous_version_id: z.string().nullable(),
+    channel: z.string(),
+    traffic_pct: z.number(),
+    status: z.enum(['active', 'canary', 'rolled_back']),
+    deployed_by: z.string(),
+    deployed_at: z.string(),
+  })
+  .openapi('Deployment');
+
+export const PromotionWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    subject_type: z.enum(['agent', 'workflow']),
+    subject_id: z.string(),
+    version_id: z.string(),
+    from_env: z.enum(['dev', 'staging', 'prod']),
+    to_env: z.enum(['dev', 'staging', 'prod']),
+    status: z.enum(['pending_approval', 'approved', 'rejected', 'deployed', 'rolled_back', 'failed']),
+    eval_gate_passed: z.boolean(),
+    eval_score: z.number().nullable(),
+    diff_summary: z.record(z.string(), z.unknown()),
+    credential_mapping: z.record(z.string(), z.string()),
+    canary_pct: z.number(),
+    initiated_by: z.string(),
+    approved_by: z.string().nullable(),
+    deployment_id: z.string().nullable(),
+    deployed_at: z.string().nullable(),
+    rolled_back_at: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('Promotion');
+
+export const CreatePromotionRequestSchema = z
+  .object({
+    subject_type: z.enum(['agent', 'workflow']),
+    subject_id: z.string().min(1),
+    version_id: z.string().min(1),
+    version_published: z.boolean().default(true),
+    from_env: z.enum(['dev', 'staging', 'prod']),
+    to_env: z.enum(['dev', 'staging', 'prod']),
+    required_credentials: z.array(z.string()).default([]),
+    credential_mapping: z.record(z.string(), z.string()).default({}),
+    eval_gate_passed: z.boolean().optional(),
+    eval_score: z.number().nullable().optional(),
+    canary_pct: z.number().int().min(1).max(100).default(100),
+    diff_fields: z.array(z.string()).optional(),
+  })
+  .openapi('CreatePromotionRequest');
+
+export const PromotionResultResponseSchema = z
+  .object({
+    promotion: PromotionWireSchema,
+    deployment: DeploymentWireSchema.nullable(),
+  })
+  .openapi('PromotionResultResponse');

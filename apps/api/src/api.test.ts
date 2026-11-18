@@ -2756,4 +2756,146 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.7 Environments & Promotions: blocks unmapped credentials, enforces SoD approval, and rolls back to previous live version [E1.7, N.2.13]', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's17-owner@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+
+    const { app } = buildApiServer({ config, store });
+    const orgId = [...store.orgs.keys()][0]!;
+    const ws = [...store.workspaces.values()].find((w) => w.org_id === orgId)!;
+
+    // Create second admin for SoD approval
+    store.seedUserPrincipal(orgId, {
+      email: 's17-approver@elshad.local',
+      displayName: 'Release Approver',
+      password: 'Password123!',
+      role: 'workspace_admin',
+    });
+
+    const loginOwner = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's17-owner@elshad.local', password: 'Password123!' },
+    });
+    const ownerHeaders = {
+      cookie: parseCookie(loginOwner.headers['set-cookie']),
+      'x-csrf-token': loginOwner.json().csrf_token as string,
+      'x-workspace-id': ws.id,
+    };
+
+    const loginApprover = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's17-approver@elshad.local', password: 'Password123!' },
+    });
+    const approverHeaders = {
+      cookie: parseCookie(loginApprover.headers['set-cookie']),
+      'x-csrf-token': loginApprover.json().csrf_token as string,
+      'x-workspace-id': ws.id,
+    };
+
+    // 1. Unmapped credential blocks promotion with clear error
+    const unmappedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/promotions',
+      headers: { ...ownerHeaders, 'Idempotency-Key': 's17-promo-unmapped' },
+      payload: {
+        subject_type: 'agent',
+        subject_id: 'agt_billing',
+        version_id: 'agv_1',
+        from_env: 'staging',
+        to_env: 'prod',
+        required_credentials: ['slack_token', 'stripe_api_key'],
+        credential_mapping: { slack_token: 'conn_prod_slack' },
+        eval_gate_passed: true,
+      },
+    });
+    expect(unmappedRes.statusCode).toBe(422);
+    expect(unmappedRes.json().error.message).toContain('Unmapped credential(s)');
+    expect(unmappedRes.json().error.message).toContain('stripe_api_key');
+
+    // 2. Mapped credentials create pending_approval promotion in prod
+    const promoV1 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/promotions',
+      headers: { ...ownerHeaders, 'Idempotency-Key': 's17-promo-v1' },
+      payload: {
+        subject_type: 'agent',
+        subject_id: 'agt_billing',
+        version_id: 'agv_1',
+        from_env: 'staging',
+        to_env: 'prod',
+        required_credentials: ['slack_token', 'stripe_api_key'],
+        credential_mapping: { slack_token: 'conn_prod_slack', stripe_api_key: 'conn_prod_stripe' },
+        eval_gate_passed: true,
+        eval_score: 0.95,
+      },
+    });
+    expect(promoV1.statusCode).toBe(201);
+    const promo1Id = promoV1.json().promotion.id as string;
+    expect(promoV1.json().promotion.status).toBe('pending_approval');
+
+    // 3. Self-approval blocked by SoD
+    const selfApprove = await app.inject({
+      method: 'POST',
+      url: `/api/v1/promotions/${promo1Id}/approve`,
+      headers: { ...ownerHeaders, 'Idempotency-Key': 's17-self-approve' },
+      payload: {},
+    });
+    expect(selfApprove.statusCode).toBe(403);
+
+    // 4. Approver deploys v1 to prod
+    const approveV1 = await app.inject({
+      method: 'POST',
+      url: `/api/v1/promotions/${promo1Id}/approve`,
+      headers: { ...approverHeaders, 'Idempotency-Key': 's17-approve-v1' },
+      payload: {},
+    });
+    expect(approveV1.statusCode).toBe(200);
+    expect(approveV1.json().deployment.version_id).toBe('agv_1');
+
+    // 5. Promote v2 (canary 10%) -> approve -> rollback restores v1
+    const promoV2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/promotions',
+      headers: { ...ownerHeaders, 'Idempotency-Key': 's17-promo-v2' },
+      payload: {
+        subject_type: 'agent',
+        subject_id: 'agt_billing',
+        version_id: 'agv_2',
+        from_env: 'staging',
+        to_env: 'prod',
+        eval_gate_passed: true,
+        canary_pct: 10,
+      },
+    });
+    expect(promoV2.statusCode).toBe(201);
+    const approveV2 = await app.inject({
+      method: 'POST',
+      url: `/api/v1/promotions/${promoV2.json().promotion.id}/approve`,
+      headers: { ...approverHeaders, 'Idempotency-Key': 's17-approve-v2' },
+      payload: {},
+    });
+    expect(approveV2.statusCode).toBe(200);
+    expect(approveV2.json().deployment.version_id).toBe('agv_2');
+    expect(approveV2.json().deployment.traffic_pct).toBe(10);
+
+    const rollbackRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/deployments/${approveV2.json().deployment.id}/rollback`,
+      headers: { ...approverHeaders, 'Idempotency-Key': 's17-rollback-1' },
+      payload: {},
+    });
+    expect(rollbackRes.statusCode).toBe(200);
+    expect(rollbackRes.json().version_id).toBe('agv_1');
+    expect(rollbackRes.json().traffic_pct).toBe(100);
+    expect(rollbackRes.json().status).toBe('rolled_back');
+
+    await app.close();
+  });
 });

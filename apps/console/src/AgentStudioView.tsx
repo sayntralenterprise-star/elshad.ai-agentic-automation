@@ -11,9 +11,10 @@ import {
   type UsageLedgerEntryDto,
 } from '@elshad/sdk-ts';
 import { StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { DeploymentsView } from './DeploymentsView.js';
 import { TeamCanvasView } from './TeamCanvasView.js';
 
-type StudioTab = 'configure' | 'tools' | 'test' | 'teams';
+type StudioTab = 'configure' | 'tools' | 'test' | 'teams' | 'deployments';
 
 interface ToolBindingDraft {
   tool: string;
@@ -689,7 +690,7 @@ export function AgentStudioView({
 
               {/* Studio Tabs */}
               <div role="tablist" aria-label="Agent Studio Sections" style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
-                {(['configure', 'tools', 'test', 'teams'] as const).map((tabKey) => (
+                {(['configure', 'tools', 'test', 'teams', 'deployments'] as const).map((tabKey) => (
                   <button
                     key={tabKey}
                     type="button"
@@ -713,7 +714,9 @@ export function AgentStudioView({
                         ? 'Tools'
                         : tabKey === 'test'
                           ? 'Test Playground'
-                          : 'Team Canvas'}
+                          : tabKey === 'teams'
+                            ? 'Team Canvas'
+                            : 'Deployments'}
                   </button>
                 ))}
               </div>
@@ -1069,6 +1072,17 @@ export function AgentStudioView({
                     workspaceId={workspaceId}
                     projectId={projectId}
                     environment={environment}
+                  />
+                </div>
+              )}
+
+              {studioTab === 'deployments' && (
+                <div role="tabpanel" aria-label="Deployments" style={{ display: 'grid', gap: '14px' }}>
+                  <DeploymentsView
+                    client={client}
+                    subjectType="agent"
+                    subjectId={selectedAgent.id}
+                    defaultVersionId={selectedAgent.publishedVersion?.id ?? selectedAgent.draftVersion?.id ?? 'agv_1'}
                   />
                 </div>
               )}

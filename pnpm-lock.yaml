@@ -272,6 +272,15 @@ importers:
         specifier: ^4.3.6
         version: 4.6.7
 
+  apps/cli:
+    dependencies:
+      '@elshad/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@elshad/sdk-ts':
+        specifier: workspace:*
+        version: link:../../packages/sdk-ts
+
   apps/console:
     dependencies:
       '@elshad/domain':

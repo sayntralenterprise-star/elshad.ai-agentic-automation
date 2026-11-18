@@ -991,6 +991,30 @@ export interface ConnectionUsageLogsTable {
   created_at: Date;
 }
 
+export interface PromotionsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  subject_type: 'agent' | 'workflow';
+  subject_id: string;
+  version_id: string;
+  from_env: 'dev' | 'staging' | 'prod';
+  to_env: 'dev' | 'staging' | 'prod';
+  status: 'pending_approval' | 'approved' | 'rejected' | 'deployed' | 'rolled_back' | 'failed';
+  eval_gate_passed: boolean;
+  eval_score: number | null;
+  diff_summary: Record<string, unknown>;
+  credential_mapping: Record<string, unknown>;
+  canary_pct: number;
+  approval_id: string | null;
+  initiated_by: string;
+  approved_by: string | null;
+  deployed_at: Date | null;
+  rolled_back_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -1055,6 +1079,7 @@ export interface Database {
   mcp_server_tools: McpServerToolsTable;
   connections: ConnectionsTable;
   connection_usage_logs: ConnectionUsageLogsTable;
+  promotions: PromotionsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

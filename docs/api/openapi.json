@@ -8228,6 +8228,321 @@
             "type": "string"
           }
         }
+      },
+      "Deployment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "workflow"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "previous_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": "string"
+          },
+          "traffic_pct": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "canary",
+              "rolled_back"
+            ]
+          },
+          "deployed_by": {
+            "type": "string"
+          },
+          "deployed_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "environment",
+          "subject_type",
+          "subject_id",
+          "version_id",
+          "previous_version_id",
+          "channel",
+          "traffic_pct",
+          "status",
+          "deployed_by",
+          "deployed_at"
+        ]
+      },
+      "Promotion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "workflow"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "from_env": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "to_env": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_approval",
+              "approved",
+              "rejected",
+              "deployed",
+              "rolled_back",
+              "failed"
+            ]
+          },
+          "eval_gate_passed": {
+            "type": "boolean"
+          },
+          "eval_score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "diff_summary": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "credential_mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "canary_pct": {
+            "type": "number"
+          },
+          "initiated_by": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rolled_back_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "subject_type",
+          "subject_id",
+          "version_id",
+          "from_env",
+          "to_env",
+          "status",
+          "eval_gate_passed",
+          "eval_score",
+          "diff_summary",
+          "credential_mapping",
+          "canary_pct",
+          "initiated_by",
+          "approved_by",
+          "deployment_id",
+          "deployed_at",
+          "rolled_back_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PromotionResultResponse": {
+        "type": "object",
+        "properties": {
+          "promotion": {
+            "$ref": "#/components/schemas/Promotion"
+          },
+          "deployment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Deployment"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "promotion",
+          "deployment"
+        ]
+      },
+      "CreatePromotionRequest": {
+        "type": "object",
+        "properties": {
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "workflow"
+            ]
+          },
+          "subject_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version_published": {
+            "type": "boolean",
+            "default": true
+          },
+          "from_env": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "to_env": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "required_credentials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "credential_mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {}
+          },
+          "eval_gate_passed": {
+            "type": "boolean"
+          },
+          "eval_score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "canary_pct": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
+          },
+          "diff_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "subject_type",
+          "subject_id",
+          "version_id",
+          "from_env",
+          "to_env"
+        ]
       }
     },
     "parameters": {}
@@ -15685,6 +16000,302 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestToolResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments": {
+      "get": {
+        "operationId": "deployments.list",
+        "summary": "List environment deployments across dev, staging, prod (§7.3.3)",
+        "tags": [
+          "Deployments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Deployment"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/rollback": {
+      "post": {
+        "operationId": "deployments.rollback",
+        "summary": "Roll back a deployment to its previous live version (N.2.13)",
+        "tags": [
+          "Deployments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/promotions": {
+      "get": {
+        "operationId": "promotions.list",
+        "summary": "List environment promotion requests and history (N.2.13)",
+        "tags": [
+          "Promotions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Promotion"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "promotions.create",
+        "summary": "Promote a published version across environments with credential & eval gate checks",
+        "tags": [
+          "Promotions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromotionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionResultResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/promotions/{id}/approve": {
+      "post": {
+        "operationId": "promotions.approve",
+        "summary": "Approve a pending production promotion with Separation of Duties",
+        "tags": [
+          "Promotions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionResultResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/promotions/{id}/reject": {
+      "post": {
+        "operationId": "promotions.reject",
+        "summary": "Reject a pending production promotion",
+        "tags": [
+          "Promotions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Promotion"
                 }
               }
             }

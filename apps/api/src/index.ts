@@ -120,6 +120,9 @@ import {
   type KillSwitchRecord,
   type KillSwitchScopeType,
   type NotificationRecord,
+  PromotionEngine,
+  type DeploymentRecord,
+  type PromotionRecord,
   type ReleaseGateConfig,
   type SpecialistRunner,
   type TeamDefinition,
@@ -6623,6 +6626,231 @@ export function buildApiServer(opts: ApiServerOptions): {
     reply.status(200);
     await persistIdempotencyIfNeeded(req, routePath, 200, response);
     return response;
+  });
+
+  // ---------- S1.7 Environments, Promotions & Rollback ----------
+
+  const promotionEngine = new PromotionEngine();
+
+  const mapDeploymentWire = (d: DeploymentRecord) => ({
+    id: d.id,
+    org_id: d.orgId,
+    workspace_id: d.workspaceId,
+    environment: d.environment,
+    subject_type: d.subjectType,
+    subject_id: d.subjectId,
+    version_id: d.versionId,
+    previous_version_id: d.previousVersionId,
+    channel: d.channel,
+    traffic_pct: d.trafficPct,
+    status: d.status,
+    deployed_by: d.deployedBy,
+    deployed_at: d.deployedAt,
+  });
+
+  const mapPromotionWire = (p: PromotionRecord) => ({
+    id: p.id,
+    org_id: p.orgId,
+    workspace_id: p.workspaceId,
+    subject_type: p.subjectType,
+    subject_id: p.subjectId,
+    version_id: p.versionId,
+    from_env: p.fromEnv,
+    to_env: p.toEnv,
+    status: p.status,
+    eval_gate_passed: p.evalGatePassed,
+    eval_score: p.evalScore,
+    diff_summary: p.diffSummary,
+    credential_mapping: p.credentialMapping,
+    canary_pct: p.canaryPct,
+    initiated_by: p.initiatedBy,
+    approved_by: p.approvedBy,
+    deployment_id: p.deploymentId,
+    deployed_at: p.deployedAt,
+    rolled_back_at: p.rolledBackAt,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+  });
+
+  app.get('/api/v1/deployments', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+    const items = promotionEngine.listDeployments({
+      orgId: orgId as OrgId,
+      workspaceId: workspaceId as WorkspaceId | undefined,
+    });
+    return { items: items.map(mapDeploymentWire) };
+  });
+
+  app.post('/api/v1/deployments/:id/rollback', async (req, reply) => {
+    const routePath = '/api/v1/deployments/{id}/rollback';
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const restored = promotionEngine.rollbackDeployment(
+      {
+        orgId: orgId as OrgId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      id,
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'deployment.rollback',
+      resource: { type: 'deployment', id: restored.id },
+      decision: 'allow',
+      context: { restored_version_id: restored.versionId, environment: restored.environment },
+    });
+
+    const wire = mapDeploymentWire(restored);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.get('/api/v1/promotions', async (req) => {
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.headers['x-workspace-id'] as string | undefined;
+    const items = promotionEngine.listPromotions({
+      orgId: orgId as OrgId,
+      workspaceId: workspaceId as WorkspaceId | undefined,
+    });
+    return { items: items.map(mapPromotionWire) };
+  });
+
+  app.post('/api/v1/promotions', async (req, reply) => {
+    const routePath = '/api/v1/promotions';
+    const contract = findContract('POST', routePath)!;
+    const body = validateWithSchema<{
+      subject_type: 'agent' | 'workflow';
+      subject_id: string;
+      version_id: string;
+      version_published?: boolean;
+      from_env: EnvironmentKind;
+      to_env: EnvironmentKind;
+      required_credentials?: string[];
+      credential_mapping?: Record<string, string>;
+      eval_gate_passed?: boolean;
+      eval_score?: number | null;
+      canary_pct?: number;
+      diff_fields?: string[];
+    }>(contract.bodySchema!, req.body);
+
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = ((req.headers['x-workspace-id'] as string) || 'ws_default') as WorkspaceId;
+
+    const res = promotionEngine.promote(
+      {
+        orgId: orgId as OrgId,
+        workspaceId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      {
+        subjectType: body.subject_type,
+        subjectId: body.subject_id,
+        versionId: body.version_id,
+        versionPublished: body.version_published,
+        fromEnv: body.from_env,
+        toEnv: body.to_env,
+        requiredCredentials: body.required_credentials,
+        credentialMapping: body.credential_mapping,
+        evalGatePassed: body.eval_gate_passed,
+        evalScore: body.eval_score,
+        canaryPct: body.canary_pct,
+        diffFields: body.diff_fields,
+      },
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'promotion.create',
+      resource: { type: 'promotion', id: res.promotion.id, to_env: res.promotion.toEnv },
+      decision: 'allow',
+      context: { status: res.promotion.status, version_id: res.promotion.versionId },
+    });
+
+    const response = {
+      promotion: mapPromotionWire(res.promotion),
+      deployment: res.deployment ? mapDeploymentWire(res.deployment) : null,
+    };
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, response);
+    return response;
+  });
+
+  app.post('/api/v1/promotions/:id/approve', async (req, reply) => {
+    const routePath = '/api/v1/promotions/{id}/approve';
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const res = promotionEngine.approvePromotion(
+      {
+        orgId: orgId as OrgId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      id,
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'promotion.approve',
+      resource: { type: 'promotion', id: res.promotion.id },
+      decision: 'allow',
+      context: { deployment_id: res.deployment.id },
+    });
+
+    const response = {
+      promotion: mapPromotionWire(res.promotion),
+      deployment: mapDeploymentWire(res.deployment),
+    };
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, response);
+    return response;
+  });
+
+  app.post('/api/v1/promotions/:id/reject', async (req, reply) => {
+    const routePath = '/api/v1/promotions/{id}/reject';
+    const { id } = req.params as { id: string };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+
+    const updated = promotionEngine.rejectPromotion(
+      {
+        orgId: orgId as OrgId,
+        principal: {
+          id: auth.context.principal.id as PrincipalId,
+          type: auth.context.principal.type,
+        },
+      },
+      id,
+    );
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'promotion.reject',
+      resource: { type: 'promotion', id: updated.id },
+      decision: 'allow',
+    });
+
+    const wire = mapPromotionWire(updated);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
   });
 
   return {
