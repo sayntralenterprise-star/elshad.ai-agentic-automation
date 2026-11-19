@@ -1235,6 +1235,77 @@ export interface AlertIncidentDto {
   resolvedAt: string | null;
 }
 
+export interface PilotSpecDto {
+  id: 'support_triage_v1' | 'invoice_exception_v1';
+  name: string;
+  autonomyLevel: 'L1' | 'L2';
+  trigger: string;
+  tools: Array<{ name: string; mode: 'read' | 'write' | 'external_comms'; approval: 'auto' | 'required' }>;
+  limits: { maxSteps: number; maxTokens: number; maxDurationSec: number; maxCostUsd: number };
+  targets: Record<string, string>;
+  checklist: Array<{ id: string; label: string; done: boolean }>;
+  signedOffBy: string | null;
+  signedOffAt: string | null;
+  signOffNotes: string | null;
+}
+
+export interface SupportTriageOutputDto {
+  ticketId: string;
+  category: 'billing' | 'technical' | 'account' | 'legal_safety' | 'general';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  sentiment: 'positive' | 'neutral' | 'negative';
+  summary: string;
+  draftReply: string;
+  citations: string[];
+  confidence: number;
+  escalate: boolean;
+  escalationReason: string | null;
+  piiRedacted: boolean;
+  injectionBlocked: boolean;
+  costUsd: number;
+  latencyMs: number;
+}
+
+export interface InvoiceExceptionOutputDto {
+  invoiceId: string;
+  resolution:
+    | 'auto_resolve_tolerance'
+    | 'propose_adjustment_approval'
+    | 'dual_approval_required'
+    | 'reject_duplicate'
+    | 'escalate_sod_violation'
+    | 'vendor_query_approval';
+  varianceUsd: number;
+  variancePct: number;
+  requiresApproval: boolean;
+  dualApproval: boolean;
+  sodBlocked: boolean;
+  confidence: number;
+  rationale: string;
+  costUsd: number;
+  latencyMs: number;
+}
+
+export interface PilotBenchmarkReportDto {
+  supportTriage: {
+    totalCases: number;
+    categoryAccuracy: number;
+    draftAcceptanceRate: number;
+    escalationPrecision: number;
+    avgCostUsd: number;
+    injectionBlockRate: number;
+    passed: boolean;
+  };
+  invoiceException: {
+    totalCases: number;
+    resolutionAccuracy: number;
+    falseAutoResolveRate: number;
+    avgCostUsd: number;
+    passed: boolean;
+  };
+  allPassed: boolean;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -2433,6 +2504,95 @@ export class PlatformClient {
         { idempotencyKey: `resolve-inc-${id}`, body: {} },
       );
       return mapAlertIncident(res);
+    },
+  };
+
+  readonly pilots = {
+    list: async (): Promise<PilotSpecDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>('GET', '/api/v1/pilots');
+      return res.data.map(mapPilotSpec);
+    },
+    runSupportTriage: async (input: {
+      ticketId: string;
+      subject: string;
+      body: string;
+      customerId: string;
+      channel?: string;
+      language?: string;
+    }): Promise<SupportTriageOutputDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/pilots/support-triage/run',
+        {
+          idempotencyKey: `pilot-triage-${input.ticketId}-${Date.now()}`,
+          body: {
+            ticket_id: input.ticketId,
+            subject: input.subject,
+            body: input.body,
+            customer_id: input.customerId,
+            channel: input.channel ?? 'email',
+            language: input.language ?? 'en',
+          },
+        },
+      );
+      return mapSupportTriageOutput(res);
+    },
+    runInvoiceException: async (input: {
+      invoiceId: string;
+      vendorId: string;
+      amount: number;
+      poAmount: number;
+      currency?: string;
+      poId: string;
+      mismatchType:
+        | 'price_variance'
+        | 'quantity_mismatch'
+        | 'duplicate_invoice'
+        | 'tax_error'
+        | 'currency_mismatch';
+      documents?: string[];
+      poCreatorId?: string;
+      actorId?: string;
+      vendorAllowlisted?: boolean;
+      duplicateDetected?: boolean;
+    }): Promise<InvoiceExceptionOutputDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/pilots/invoice-exception/run',
+        {
+          idempotencyKey: `pilot-inv-${input.invoiceId}-${Date.now()}`,
+          body: {
+            invoice_id: input.invoiceId,
+            vendor_id: input.vendorId,
+            amount: input.amount,
+            po_amount: input.poAmount,
+            currency: input.currency ?? 'USD',
+            po_id: input.poId,
+            mismatch_type: input.mismatchType,
+            documents: input.documents ?? [],
+            po_creator_id: input.poCreatorId,
+            actor_id: input.actorId,
+            vendor_allowlisted: input.vendorAllowlisted,
+            duplicate_detected: input.duplicateDetected,
+          },
+        },
+      );
+      return mapInvoiceExceptionOutput(res);
+    },
+    runBenchmarks: async (): Promise<PilotBenchmarkReportDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/pilots/benchmarks/run',
+        { idempotencyKey: `pilot-bench-${Date.now()}`, body: {} },
+      );
+      return mapPilotBenchmarkReport(res);
+    },
+    signOff: async (id: 'support_triage_v1' | 'invoice_exception_v1', notes?: string): Promise<PilotSpecDto> => {
+      const res = await this.request<Record<string, unknown>>('POST', `/api/v1/pilots/${id}/sign-off`, {
+        idempotencyKey: `pilot-signoff-${id}-${Date.now()}`,
+        body: { notes },
+      });
+      return mapPilotSpec(res);
     },
   };
 
@@ -5043,5 +5203,86 @@ function mapAlertIncident(i: Record<string, unknown>): AlertIncidentDto {
     firedAt: String(i.fired_at),
     acknowledgedAt: i.acknowledged_at ? String(i.acknowledged_at) : null,
     resolvedAt: i.resolved_at ? String(i.resolved_at) : null,
+  };
+}
+
+function mapPilotSpec(p: Record<string, unknown>): PilotSpecDto {
+  const limits = (p.limits ?? {}) as Record<string, unknown>;
+  return {
+    id: p.id as PilotSpecDto['id'],
+    name: String(p.name),
+    autonomyLevel: p.autonomy_level as PilotSpecDto['autonomyLevel'],
+    trigger: String(p.trigger),
+    tools: Array.isArray(p.tools) ? (p.tools as PilotSpecDto['tools']) : [],
+    limits: {
+      maxSteps: Number(limits.max_steps ?? 12),
+      maxTokens: Number(limits.max_tokens ?? 60000),
+      maxDurationSec: Number(limits.max_duration_sec ?? 90),
+      maxCostUsd: Number(limits.max_cost_usd ?? 0.15),
+    },
+    targets: (p.targets ?? {}) as Record<string, string>,
+    checklist: Array.isArray(p.checklist) ? (p.checklist as PilotSpecDto['checklist']) : [],
+    signedOffBy: p.signed_off_by ? String(p.signed_off_by) : null,
+    signedOffAt: p.signed_off_at ? String(p.signed_off_at) : null,
+    signOffNotes: p.sign_off_notes ? String(p.sign_off_notes) : null,
+  };
+}
+
+function mapSupportTriageOutput(o: Record<string, unknown>): SupportTriageOutputDto {
+  return {
+    ticketId: String(o.ticket_id),
+    category: o.category as SupportTriageOutputDto['category'],
+    priority: o.priority as SupportTriageOutputDto['priority'],
+    sentiment: o.sentiment as SupportTriageOutputDto['sentiment'],
+    summary: String(o.summary),
+    draftReply: String(o.draft_reply),
+    citations: Array.isArray(o.citations) ? o.citations.map(String) : [],
+    confidence: Number(o.confidence ?? 0),
+    escalate: Boolean(o.escalate),
+    escalationReason: o.escalation_reason ? String(o.escalation_reason) : null,
+    piiRedacted: Boolean(o.pii_redacted),
+    injectionBlocked: Boolean(o.injection_blocked),
+    costUsd: Number(o.cost_usd ?? 0),
+    latencyMs: Number(o.latency_ms ?? 0),
+  };
+}
+
+function mapInvoiceExceptionOutput(o: Record<string, unknown>): InvoiceExceptionOutputDto {
+  return {
+    invoiceId: String(o.invoice_id),
+    resolution: o.resolution as InvoiceExceptionOutputDto['resolution'],
+    varianceUsd: Number(o.variance_usd ?? 0),
+    variancePct: Number(o.variance_pct ?? 0),
+    requiresApproval: Boolean(o.requires_approval),
+    dualApproval: Boolean(o.dual_approval),
+    sodBlocked: Boolean(o.sod_blocked),
+    confidence: Number(o.confidence ?? 0),
+    rationale: String(o.rationale),
+    costUsd: Number(o.cost_usd ?? 0),
+    latencyMs: Number(o.latency_ms ?? 0),
+  };
+}
+
+function mapPilotBenchmarkReport(r: Record<string, unknown>): PilotBenchmarkReportDto {
+  const st = (r.support_triage ?? {}) as Record<string, unknown>;
+  const ie = (r.invoice_exception ?? {}) as Record<string, unknown>;
+  return {
+    supportTriage: {
+      totalCases: Number(st.total_cases ?? 0),
+      categoryAccuracy: Number(st.category_accuracy ?? 0),
+      draftAcceptanceRate: Number(st.draft_acceptance_rate ?? 0),
+      escalationPrecision: Number(st.escalation_precision ?? 0),
+      avgCostUsd: Number(st.avg_cost_usd ?? 0),
+      injectionBlockRate: Number(st.injection_block_rate ?? 0),
+      passed: Boolean(st.passed),
+    },
+    invoiceException: {
+      totalCases: Number(ie.total_cases ?? 0),
+      resolutionAccuracy: Number(ie.resolution_accuracy ?? 0),
+      falseAutoResolveRate: Number(ie.false_auto_resolve_rate ?? 0),
+      avgCostUsd: Number(ie.avg_cost_usd ?? 0),
+      passed: Boolean(ie.passed),
+    },
+    allPassed: Boolean(r.all_passed),
   };
 }

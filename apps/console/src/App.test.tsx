@@ -2264,6 +2264,94 @@ function createMockClient(
     return structuredClone(inc);
   };
 
+  // --- S1.9 Pilot Agents ---
+  const pilotsList = [
+    {
+      id: 'support_triage_v1' as const,
+      name: 'Support Triage & Reply Drafter (L1)',
+      autonomyLevel: 'L1' as const,
+      trigger: 'Webhook from helpdesk',
+      tools: [{ name: 'kb.search', mode: 'read' as const, approval: 'auto' as const }],
+      limits: { maxSteps: 12, maxTokens: 60000, maxDurationSec: 90, maxCostUsd: 0.15 },
+      targets: { category_accuracy: '>= 92%' },
+      checklist: [{ id: 'signoff', label: 'Stakeholder sign-off recorded in audit log', done: false }],
+      signedOffBy: null as string | null,
+      signedOffAt: null as string | null,
+      signOffNotes: null as string | null,
+    },
+    {
+      id: 'invoice_exception_v1' as const,
+      name: 'Invoice Exception Handler (L2)',
+      autonomyLevel: 'L2' as const,
+      trigger: 'Queue message when ERP three-way match fails',
+      tools: [{ name: 'erp.get_invoice', mode: 'read' as const, approval: 'auto' as const }],
+      limits: { maxSteps: 20, maxTokens: 120000, maxDurationSec: 300, maxCostUsd: 0.6 },
+      targets: { resolution_accuracy: '>= 90%' },
+      checklist: [{ id: 'signoff', label: 'Stakeholder sign-off recorded in audit log', done: false }],
+      signedOffBy: null as string | null,
+      signedOffAt: null as string | null,
+      signOffNotes: null as string | null,
+    },
+  ];
+
+  client.pilots.list = async () => structuredClone(pilotsList);
+  client.pilots.runBenchmarks = async () => ({
+    supportTriage: {
+      totalCases: 5,
+      categoryAccuracy: 1,
+      draftAcceptanceRate: 0.85,
+      escalationPrecision: 1,
+      avgCostUsd: 0.018,
+      injectionBlockRate: 1,
+      passed: true,
+    },
+    invoiceException: {
+      totalCases: 5,
+      resolutionAccuracy: 1,
+      falseAutoResolveRate: 0,
+      avgCostUsd: 0.07,
+      passed: true,
+    },
+    allPassed: true,
+  });
+  client.pilots.runSupportTriage = async (input) => ({
+    ticketId: input.ticketId,
+    category: 'billing',
+    priority: 'medium',
+    sentiment: 'neutral',
+    summary: 'Classified ticket as billing.',
+    draftReply: 'Reviewing your billing inquiry.',
+    citations: ['kb://billing/invoice-and-refund-policy#sec-2'],
+    confidence: 0.94,
+    escalate: false,
+    escalationReason: null,
+    piiRedacted: true,
+    injectionBlocked: false,
+    costUsd: 0.018,
+    latencyMs: 420,
+  });
+  client.pilots.runInvoiceException = async (input) => ({
+    invoiceId: input.invoiceId,
+    resolution: 'auto_resolve_tolerance',
+    varianceUsd: 7,
+    variancePct: 0.7,
+    requiresApproval: false,
+    dualApproval: false,
+    sodBlocked: false,
+    confidence: 0.96,
+    rationale: 'Within L2 tolerance (<1% and <$50 USD).',
+    costUsd: 0.04,
+    latencyMs: 490,
+  });
+  client.pilots.signOff = async (id, notes) => {
+    const p = pilotsList.find((x) => x.id === id)!;
+    p.signedOffBy = 'prn_1';
+    p.signedOffAt = new Date().toISOString();
+    p.signOffNotes = notes ?? 'Approved';
+    p.checklist[0]!.done = true;
+    return structuredClone(p);
+  };
+
   return client;
 }
 
@@ -2998,6 +3086,33 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(await screen.findByText('acknowledged')).toBeTruthy();
 
     // Accessibility check
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Pilot Agents & Go-Live Readiness: runs golden benchmarks, tests L1/L2 pilots, and records sign-off [E1.9]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/pilots" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /Pilot Agents & Go-Live Readiness/i })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Run Golden Benchmarks' }));
+    expect(await screen.findByText('ALL KPI TARGETS MET')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Test Support Triage (L1)' }));
+    expect(await screen.findByText(/Reviewing your billing inquiry/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Test Invoice Exception (L2)' }));
+    expect(await screen.findByText(/auto_resolve_tolerance/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Sign Off L1 Pilot' }));
+    expect(await screen.findByText('Signed off by prn_1')).toBeTruthy();
+
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },
     });

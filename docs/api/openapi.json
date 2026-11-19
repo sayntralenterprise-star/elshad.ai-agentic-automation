@@ -8993,6 +8993,475 @@
           "acknowledged_at",
           "resolved_at"
         ]
+      },
+      "PilotSpec": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "support_triage_v1",
+              "invoice_exception_v1"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "autonomy_level": {
+            "type": "string",
+            "enum": [
+              "L1",
+              "L2"
+            ]
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "external_comms"
+                  ]
+                },
+                "approval": {
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "required"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "mode",
+                "approval"
+              ]
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_steps": {
+                "type": "integer"
+              },
+              "max_tokens": {
+                "type": "integer"
+              },
+              "max_duration_sec": {
+                "type": "integer"
+              },
+              "max_cost_usd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "max_steps",
+              "max_tokens",
+              "max_duration_sec",
+              "max_cost_usd"
+            ]
+          },
+          "targets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "checklist": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "done": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "done"
+              ]
+            }
+          },
+          "signed_off_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signed_off_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sign_off_notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "autonomy_level",
+          "trigger",
+          "tools",
+          "limits",
+          "targets",
+          "checklist",
+          "signed_off_by",
+          "signed_off_at",
+          "sign_off_notes"
+        ]
+      },
+      "SupportTriageOutput": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "billing",
+              "technical",
+              "account",
+              "legal_safety",
+              "general"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "sentiment": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "neutral",
+              "negative"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "draft_reply": {
+            "type": "string"
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "escalate": {
+            "type": "boolean"
+          },
+          "escalation_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pii_redacted": {
+            "type": "boolean"
+          },
+          "injection_blocked": {
+            "type": "boolean"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "category",
+          "priority",
+          "sentiment",
+          "summary",
+          "draft_reply",
+          "citations",
+          "confidence",
+          "escalate",
+          "escalation_reason",
+          "pii_redacted",
+          "injection_blocked",
+          "cost_usd",
+          "latency_ms"
+        ]
+      },
+      "RunSupportTriageRequest": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "customer_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "channel": {
+            "type": "string",
+            "default": "email"
+          },
+          "language": {
+            "type": "string",
+            "default": "en"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "subject",
+          "body",
+          "customer_id"
+        ]
+      },
+      "InvoiceExceptionOutput": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "auto_resolve_tolerance",
+              "propose_adjustment_approval",
+              "dual_approval_required",
+              "reject_duplicate",
+              "escalate_sod_violation",
+              "vendor_query_approval"
+            ]
+          },
+          "variance_usd": {
+            "type": "number"
+          },
+          "variance_pct": {
+            "type": "number"
+          },
+          "requires_approval": {
+            "type": "boolean"
+          },
+          "dual_approval": {
+            "type": "boolean"
+          },
+          "sod_blocked": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "invoice_id",
+          "resolution",
+          "variance_usd",
+          "variance_pct",
+          "requires_approval",
+          "dual_approval",
+          "sod_blocked",
+          "confidence",
+          "rationale",
+          "cost_usd",
+          "latency_ms"
+        ]
+      },
+      "RunInvoiceExceptionRequest": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vendor_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "po_amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "default": "USD"
+          },
+          "po_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mismatch_type": {
+            "type": "string",
+            "enum": [
+              "price_variance",
+              "quantity_mismatch",
+              "duplicate_invoice",
+              "tax_error",
+              "currency_mismatch"
+            ]
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "po_creator_id": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "string"
+          },
+          "vendor_allowlisted": {
+            "type": "boolean"
+          },
+          "duplicate_detected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "invoice_id",
+          "vendor_id",
+          "amount",
+          "po_amount",
+          "po_id",
+          "mismatch_type"
+        ]
+      },
+      "PilotBenchmarkReport": {
+        "type": "object",
+        "properties": {
+          "support_triage": {
+            "type": "object",
+            "properties": {
+              "total_cases": {
+                "type": "integer"
+              },
+              "category_accuracy": {
+                "type": "number"
+              },
+              "draft_acceptance_rate": {
+                "type": "number"
+              },
+              "escalation_precision": {
+                "type": "number"
+              },
+              "avg_cost_usd": {
+                "type": "number"
+              },
+              "injection_block_rate": {
+                "type": "number"
+              },
+              "passed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "total_cases",
+              "category_accuracy",
+              "draft_acceptance_rate",
+              "escalation_precision",
+              "avg_cost_usd",
+              "injection_block_rate",
+              "passed"
+            ]
+          },
+          "invoice_exception": {
+            "type": "object",
+            "properties": {
+              "total_cases": {
+                "type": "integer"
+              },
+              "resolution_accuracy": {
+                "type": "number"
+              },
+              "false_auto_resolve_rate": {
+                "type": "number"
+              },
+              "avg_cost_usd": {
+                "type": "number"
+              },
+              "passed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "total_cases",
+              "resolution_accuracy",
+              "false_auto_resolve_rate",
+              "avg_cost_usd",
+              "passed"
+            ]
+          },
+          "all_passed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "support_triage",
+          "invoice_exception",
+          "all_passed"
+        ]
+      },
+      "SignOffPilotRequest": {
+        "type": "object",
+        "properties": {
+          "notes": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
       }
     },
     "parameters": {}
@@ -17233,6 +17702,250 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AlertIncident"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pilots": {
+      "get": {
+        "operationId": "pilots.list",
+        "summary": "List S1.9 pilot agent specifications and S.4 go-live checklists",
+        "tags": [
+          "Pilots"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PilotSpec"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pilots/support-triage/run": {
+      "post": {
+        "operationId": "pilots.run_support_triage",
+        "summary": "Execute Support Triage & Reply Drafter (L1) pilot agent",
+        "tags": [
+          "Pilots"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSupportTriageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTriageOutput"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pilots/invoice-exception/run": {
+      "post": {
+        "operationId": "pilots.run_invoice_exception",
+        "summary": "Execute Invoice Exception Handler (L2) pilot agent",
+        "tags": [
+          "Pilots"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunInvoiceExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceExceptionOutput"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pilots/benchmarks/run": {
+      "post": {
+        "operationId": "pilots.run_benchmarks",
+        "summary": "Run golden-set KPI benchmarks for both pilot agents",
+        "tags": [
+          "Pilots"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotBenchmarkReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pilots/{id}/sign-off": {
+      "post": {
+        "operationId": "pilots.sign_off",
+        "summary": "Record stakeholder go-live sign-off for a pilot agent in the audit log",
+        "tags": [
+          "Pilots"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignOffPilotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotSpec"
                 }
               }
             }

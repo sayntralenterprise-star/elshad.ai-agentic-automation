@@ -3064,4 +3064,82 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.9 Pilot Agents: executes Support Triage (L1) & Invoice Exception (L2), passes KPI benchmarks, and audits sign-off', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's19-admin@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    const { app } = buildApiServer({ config, store });
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's19-admin@elshad.local', password: 'Password123!' },
+    });
+    expect(login.statusCode).toBe(200);
+    const orgId = [...store.orgs.keys()][0]!;
+    const wsId = [...store.workspaces.values()].find((w) => w.org_id === orgId)!.id;
+    const headers = {
+      cookie: login.headers['set-cookie'] as string,
+      'x-csrf-token': login.json().csrf_token as string,
+      'x-workspace-id': wsId,
+    };
+
+    const listRes = await app.inject({ method: 'GET', url: '/api/v1/pilots', headers });
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().data).toHaveLength(2);
+
+    const benchRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pilots/benchmarks/run',
+      headers: { ...headers, 'Idempotency-Key': 's19-bench-1' },
+      payload: {},
+    });
+    expect(benchRes.statusCode).toBe(200);
+    expect(benchRes.json().all_passed).toBe(true);
+
+    const triageRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pilots/support-triage/run',
+      headers: { ...headers, 'Idempotency-Key': 's19-triage-1' },
+      payload: {
+        ticket_id: 't-500',
+        subject: 'Invoice charge',
+        body: 'Check alice@example.com for duplicate charge',
+        customer_id: 'cust-1',
+      },
+    });
+    expect(triageRes.statusCode).toBe(200);
+    expect(triageRes.json().pii_redacted).toBe(true);
+    expect(triageRes.json().category).toBe('billing');
+
+    const invRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pilots/invoice-exception/run',
+      headers: { ...headers, 'Idempotency-Key': 's19-inv-1' },
+      payload: {
+        invoice_id: 'inv-500',
+        vendor_id: 'v-1',
+        amount: 1012,
+        po_amount: 1005,
+        po_id: 'po-500',
+        mismatch_type: 'price_variance',
+      },
+    });
+    expect(invRes.statusCode).toBe(200);
+    expect(invRes.json().resolution).toBe('auto_resolve_tolerance');
+
+    const signOffRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pilots/support_triage_v1/sign-off',
+      headers: { ...headers, 'Idempotency-Key': 's19-signoff-1' },
+      payload: { notes: 'Staging KPIs verified by process owner' },
+    });
+    expect(signOffRes.statusCode).toBe(200);
+    expect(signOffRes.json().signed_off_by).toBeTruthy();
+
+    await app.close();
+  });
 });

@@ -2512,3 +2512,142 @@ export const EvaluateAlertsResponseSchema = z
     fired_incidents: z.array(AlertIncidentWireSchema),
   })
   .openapi('EvaluateAlertsResponse');
+
+// --- S1.9 Pilot Agents ---
+
+export const PilotSpecWireSchema = z
+  .object({
+    id: z.enum(['support_triage_v1', 'invoice_exception_v1']),
+    name: z.string(),
+    autonomy_level: z.enum(['L1', 'L2']),
+    trigger: z.string(),
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        mode: z.enum(['read', 'write', 'external_comms']),
+        approval: z.enum(['auto', 'required']),
+      }),
+    ),
+    limits: z.object({
+      max_steps: z.number().int(),
+      max_tokens: z.number().int(),
+      max_duration_sec: z.number().int(),
+      max_cost_usd: z.number(),
+    }),
+    targets: z.record(z.string(), z.string()),
+    checklist: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        done: z.boolean(),
+      }),
+    ),
+    signed_off_by: z.string().nullable(),
+    signed_off_at: z.string().nullable(),
+    sign_off_notes: z.string().nullable(),
+  })
+  .openapi('PilotSpec');
+
+export const RunSupportTriageRequestSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    subject: z.string().min(1),
+    body: z.string().min(1),
+    customer_id: z.string().min(1),
+    channel: z.string().default('email'),
+    language: z.string().default('en'),
+  })
+  .openapi('RunSupportTriageRequest');
+
+export const SupportTriageOutputWireSchema = z
+  .object({
+    ticket_id: z.string(),
+    category: z.enum(['billing', 'technical', 'account', 'legal_safety', 'general']),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']),
+    sentiment: z.enum(['positive', 'neutral', 'negative']),
+    summary: z.string(),
+    draft_reply: z.string(),
+    citations: z.array(z.string()),
+    confidence: z.number(),
+    escalate: z.boolean(),
+    escalation_reason: z.string().nullable(),
+    pii_redacted: z.boolean(),
+    injection_blocked: z.boolean(),
+    cost_usd: z.number(),
+    latency_ms: z.number(),
+  })
+  .openapi('SupportTriageOutput');
+
+export const RunInvoiceExceptionRequestSchema = z
+  .object({
+    invoice_id: z.string().min(1),
+    vendor_id: z.string().min(1),
+    amount: z.number().positive(),
+    po_amount: z.number().positive(),
+    currency: z.string().default('USD'),
+    po_id: z.string().min(1),
+    mismatch_type: z.enum([
+      'price_variance',
+      'quantity_mismatch',
+      'duplicate_invoice',
+      'tax_error',
+      'currency_mismatch',
+    ]),
+    documents: z.array(z.string()).default([]),
+    po_creator_id: z.string().optional(),
+    actor_id: z.string().optional(),
+    vendor_allowlisted: z.boolean().optional(),
+    duplicate_detected: z.boolean().optional(),
+  })
+  .openapi('RunInvoiceExceptionRequest');
+
+export const InvoiceExceptionOutputWireSchema = z
+  .object({
+    invoice_id: z.string(),
+    resolution: z.enum([
+      'auto_resolve_tolerance',
+      'propose_adjustment_approval',
+      'dual_approval_required',
+      'reject_duplicate',
+      'escalate_sod_violation',
+      'vendor_query_approval',
+    ]),
+    variance_usd: z.number(),
+    variance_pct: z.number(),
+    requires_approval: z.boolean(),
+    dual_approval: z.boolean(),
+    sod_blocked: z.boolean(),
+    confidence: z.number(),
+    rationale: z.string(),
+    cost_usd: z.number(),
+    latency_ms: z.number(),
+  })
+  .openapi('InvoiceExceptionOutput');
+
+export const PilotBenchmarkReportWireSchema = z
+  .object({
+    support_triage: z.object({
+      total_cases: z.number().int(),
+      category_accuracy: z.number(),
+      draft_acceptance_rate: z.number(),
+      escalation_precision: z.number(),
+      avg_cost_usd: z.number(),
+      injection_block_rate: z.number(),
+      passed: z.boolean(),
+    }),
+    invoice_exception: z.object({
+      total_cases: z.number().int(),
+      resolution_accuracy: z.number(),
+      false_auto_resolve_rate: z.number(),
+      avg_cost_usd: z.number(),
+      passed: z.boolean(),
+    }),
+    all_passed: z.boolean(),
+  })
+  .openapi('PilotBenchmarkReport');
+
+export const SignOffPilotRequestSchema = z
+  .object({
+    notes: z.string().max(1000).optional(),
+  })
+  .openapi('SignOffPilotRequest');

@@ -40,6 +40,7 @@ import { ApprovalsView } from './ApprovalsView.js';
 import { EvaluationsView } from './EvaluationsView.js';
 import { GovernanceHardeningView } from './GovernanceHardeningView.js';
 import { ObservabilityView } from './ObservabilityView.js';
+import { PilotsView } from './PilotsView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
 import { TeamCanvasView } from './TeamCanvasView.js';
@@ -58,6 +59,7 @@ export type NavSection =
   | 'approvals'
   | 'evaluations'
   | 'monitoring'
+  | 'pilots'
   | 'governance'
   | 'settings';
 
@@ -81,6 +83,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   { id: 'approvals', label: 'Approvals', icon: CheckSquare, sliceHint: 'S1.1' },
   { id: 'evaluations', label: 'Evaluations', icon: FileCheck2, sliceHint: 'S1.3' },
   { id: 'monitoring', label: 'Monitoring', icon: Activity, sliceHint: 'S1.8' },
+  { id: 'pilots', label: 'Pilot Agents', icon: Bot, sliceHint: 'S1.9' },
   { id: 'governance', label: 'Governance', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -1261,6 +1264,10 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <ObservabilityView client={client} workspaceId={activeWorkspace?.id} />
             )}
 
+            {section === 'pilots' && (
+              <PilotsView client={client} workspaceId={activeWorkspace?.id} />
+            )}
+
             {section === 'tools' && (
               <ToolsView
                 client={client}
@@ -1280,6 +1287,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'approvals' &&
               section !== 'evaluations' &&
               section !== 'monitoring' &&
+              section !== 'pilots' &&
               section !== 'tools' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>

@@ -123,8 +123,11 @@ import {
   PromotionEngine,
   ObservabilityEngine,
   ExecutionObservabilityStore,
+  PilotService,
   type AlertIncidentRecord,
   type AlertRuleRecord,
+  type PilotId,
+  type PilotSpec,
   type DeploymentRecord,
   type PromotionRecord,
   type ReleaseGateConfig,
@@ -7083,6 +7086,147 @@ export function buildApiServer(opts: ApiServerOptions): {
     const { id } = req.params as { id: string };
     const updated = await observabilityEngine.resolveAlertIncident(obsCtx(req), id);
     const wire = mapAlertIncidentWire(updated);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  // --- S1.9 Pilot Agents ---
+  const pilotService = new PilotService();
+
+  function mapPilotSpecWire(p: PilotSpec) {
+    return {
+      id: p.id,
+      name: p.name,
+      autonomy_level: p.autonomyLevel,
+      trigger: p.trigger,
+      tools: p.tools,
+      limits: {
+        max_steps: p.limits.maxSteps,
+        max_tokens: p.limits.maxTokens,
+        max_duration_sec: p.limits.maxDurationSec,
+        max_cost_usd: p.limits.maxCostUsd,
+      },
+      targets: p.targets,
+      checklist: p.checklist,
+      signed_off_by: p.signedOffBy,
+      signed_off_at: p.signedOffAt,
+      sign_off_notes: p.signOffNotes,
+    };
+  }
+
+  app.get('/api/v1/pilots', async (_req, reply) => {
+    reply.status(200);
+    return { data: pilotService.listPilots().map(mapPilotSpecWire) };
+  });
+
+  app.post('/api/v1/pilots/support-triage/run', async (req, reply) => {
+    const routePath = '/api/v1/pilots/support-triage/run';
+    const body = req.body as {
+      ticket_id: string;
+      subject: string;
+      body: string;
+      customer_id: string;
+      channel?: string;
+      language?: string;
+    };
+    const out = pilotService.runSupportTriage({
+      ticket_id: body.ticket_id,
+      subject: body.subject,
+      body: body.body,
+      customer_id: body.customer_id,
+      channel: body.channel ?? 'email',
+      language: body.language ?? 'en',
+    });
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, out);
+    return out;
+  });
+
+  app.post('/api/v1/pilots/invoice-exception/run', async (req, reply) => {
+    const routePath = '/api/v1/pilots/invoice-exception/run';
+    const body = req.body as {
+      invoice_id: string;
+      vendor_id: string;
+      amount: number;
+      po_amount: number;
+      currency?: string;
+      po_id: string;
+      mismatch_type:
+        | 'price_variance'
+        | 'quantity_mismatch'
+        | 'duplicate_invoice'
+        | 'tax_error'
+        | 'currency_mismatch';
+      documents?: string[];
+      po_creator_id?: string;
+      actor_id?: string;
+      vendor_allowlisted?: boolean;
+      duplicate_detected?: boolean;
+    };
+    const out = pilotService.runInvoiceException({
+      invoice_id: body.invoice_id,
+      vendor_id: body.vendor_id,
+      amount: body.amount,
+      po_amount: body.po_amount,
+      currency: body.currency ?? 'USD',
+      po_id: body.po_id,
+      mismatch_type: body.mismatch_type,
+      documents: body.documents ?? [],
+      po_creator_id: body.po_creator_id,
+      actor_id: body.actor_id,
+      vendor_allowlisted: body.vendor_allowlisted,
+      duplicate_detected: body.duplicate_detected,
+    });
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, out);
+    return out;
+  });
+
+  app.post('/api/v1/pilots/benchmarks/run', async (req, reply) => {
+    const routePath = '/api/v1/pilots/benchmarks/run';
+    const report = pilotService.runGoldenBenchmarks();
+    const wire = {
+      support_triage: {
+        total_cases: report.supportTriage.totalCases,
+        category_accuracy: report.supportTriage.categoryAccuracy,
+        draft_acceptance_rate: report.supportTriage.draftAcceptanceRate,
+        escalation_precision: report.supportTriage.escalationPrecision,
+        avg_cost_usd: report.supportTriage.avgCostUsd,
+        injection_block_rate: report.supportTriage.injectionBlockRate,
+        passed: report.supportTriage.passed,
+      },
+      invoice_exception: {
+        total_cases: report.invoiceException.totalCases,
+        resolution_accuracy: report.invoiceException.resolutionAccuracy,
+        false_auto_resolve_rate: report.invoiceException.falseAutoResolveRate,
+        avg_cost_usd: report.invoiceException.avgCostUsd,
+        passed: report.invoiceException.passed,
+      },
+      all_passed: report.allPassed,
+    };
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.post('/api/v1/pilots/:id/sign-off', async (req, reply) => {
+    const routePath = '/api/v1/pilots/{id}/sign-off';
+    const { id } = req.params as { id: PilotId };
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const body = (req.body ?? {}) as { notes?: string };
+
+    const signed = pilotService.signOffPilot(obsCtx(req), id, body.notes);
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'pilot.sign_off',
+      resource: { type: 'pilot', id: signed.id },
+      decision: 'allow',
+      context: { notes: signed.signOffNotes },
+    });
+
+    const wire = mapPilotSpecWire(signed);
     reply.status(200);
     await persistIdempotencyIfNeeded(req, routePath, 200, wire);
     return wire;

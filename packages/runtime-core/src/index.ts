@@ -1653,3 +1653,4 @@ export * from './eval.js';
 export * from './multi-agent.js';
 export * from './promotions.js';
 export * from './observability.js';
+export * from './pilots.js';
