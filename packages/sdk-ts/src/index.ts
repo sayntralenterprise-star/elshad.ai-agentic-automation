@@ -1460,7 +1460,7 @@ export class PlatformClient {
 
   constructor(opts: PlatformClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
     this.token = opts.token;
     this.workspaceId = opts.workspaceId;
     this.environment = opts.environment;
