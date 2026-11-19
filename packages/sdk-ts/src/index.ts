@@ -1153,6 +1153,88 @@ export interface PromotionDto {
   updatedAt: string;
 }
 
+export interface ObservabilityOverviewDto {
+  windowHours: number;
+  totalRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  successRate: number;
+  failureRate: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  p99DurationMs: number;
+  totalCostUsd: number;
+  costPerRunUsd: number;
+  costPerSuccessfulOutcomeUsd: number;
+  tokensIn: number;
+  tokensOut: number;
+  queueDepth: number;
+  approvalPendingCount: number;
+  failureByClass: Array<{ failureClass: string; count: number }>;
+  costByAgent: Array<{
+    agentId: string;
+    runs: number;
+    costUsd: number;
+    tokensIn: number;
+    tokensOut: number;
+  }>;
+  costByModel: Array<{
+    model: string;
+    calls: number;
+    costUsd: number;
+    tokensIn: number;
+    tokensOut: number;
+  }>;
+  dailySeries: Array<{
+    bucket: string;
+    runs: number;
+    failed: number;
+    costUsd: number;
+  }>;
+}
+
+export interface FailureExplanationDto {
+  runId: string;
+  status: string;
+  failureClass: string;
+  rootCause: string;
+  failingStepSeq: number | null;
+  failingStepType: string | null;
+  remediation: string[];
+}
+
+export interface AlertRuleDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  name: string;
+  metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+  operator: 'gt' | 'gte';
+  threshold: number;
+  windowMinutes: number;
+  channels: string[];
+  enabled: boolean;
+  lastFiredAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlertIncidentDto {
+  id: string;
+  orgId: string;
+  workspaceId: string;
+  ruleId: string;
+  metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+  observedValue: number;
+  threshold: number;
+  status: 'firing' | 'acknowledged' | 'resolved';
+  summary: string;
+  firedAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+}
+
 export interface PlatformClientOptions {
   baseUrl: string;
   token?: string;
@@ -2251,6 +2333,106 @@ export class PlatformClient {
         { idempotencyKey: `promo-reject-${id}-${Date.now()}`, body: {} },
       );
       return mapPromotion(res);
+    },
+  };
+
+  readonly observability = {
+    overview: async (windowHours = 24): Promise<ObservabilityOverviewDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'GET',
+        `/api/v1/observability/overview?window_hours=${windowHours}`,
+      );
+      return mapObservabilityOverview(res);
+    },
+    explainFailure: async (runId: string): Promise<FailureExplanationDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/runs/${runId}/explain-failure`,
+        { idempotencyKey: `explain-${runId}`, body: {} },
+      );
+      return mapFailureExplanation(res);
+    },
+    exportOtel: async (runId: string): Promise<Record<string, unknown>> => {
+      return this.request<Record<string, unknown>>('GET', `/api/v1/runs/${runId}/otel`);
+    },
+  };
+
+  readonly alerts = {
+    listRules: async (): Promise<AlertRuleDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/observability/alerts/rules',
+      );
+      return res.data.map(mapAlertRule);
+    },
+    createRule: async (
+      input: {
+        name: string;
+        metric: AlertRuleDto['metric'];
+        operator?: 'gt' | 'gte';
+        threshold: number;
+        windowMinutes?: number;
+        channels?: string[];
+        enabled?: boolean;
+      },
+      idempotencyKey?: string,
+    ): Promise<AlertRuleDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        '/api/v1/observability/alerts/rules',
+        {
+          idempotencyKey: idempotencyKey ?? `alert-rule-${Date.now()}`,
+          body: {
+            name: input.name,
+            metric: input.metric,
+            operator: input.operator ?? 'gt',
+            threshold: input.threshold,
+            window_minutes: input.windowMinutes ?? 5,
+            channels: input.channels ?? ['in_app'],
+            enabled: input.enabled ?? true,
+          },
+        },
+      );
+      return mapAlertRule(res);
+    },
+    deleteRule: async (id: string): Promise<void> => {
+      await this.request('DELETE', `/api/v1/observability/alerts/rules/${id}`);
+    },
+    evaluate: async (): Promise<{ evaluatedCount: number; firedIncidents: AlertIncidentDto[] }> => {
+      const res = await this.request<{
+        evaluated_count: number;
+        fired_incidents: Record<string, unknown>[];
+      }>('POST', '/api/v1/observability/alerts/evaluate', {
+        idempotencyKey: `alert-eval-${Date.now()}`,
+        body: {},
+      });
+      return {
+        evaluatedCount: Number(res.evaluated_count ?? 0),
+        firedIncidents: (res.fired_incidents ?? []).map(mapAlertIncident),
+      };
+    },
+    listIncidents: async (): Promise<AlertIncidentDto[]> => {
+      const res = await this.request<{ data: Record<string, unknown>[] }>(
+        'GET',
+        '/api/v1/observability/alerts/incidents',
+      );
+      return res.data.map(mapAlertIncident);
+    },
+    acknowledgeIncident: async (id: string): Promise<AlertIncidentDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/observability/alerts/incidents/${id}/acknowledge`,
+        { idempotencyKey: `ack-inc-${id}`, body: {} },
+      );
+      return mapAlertIncident(res);
+    },
+    resolveIncident: async (id: string): Promise<AlertIncidentDto> => {
+      const res = await this.request<Record<string, unknown>>(
+        'POST',
+        `/api/v1/observability/alerts/incidents/${id}/resolve`,
+        { idempotencyKey: `resolve-inc-${id}`, body: {} },
+      );
+      return mapAlertIncident(res);
     },
   };
 
@@ -4757,5 +4939,109 @@ function mapPromotion(p: Record<string, unknown>): PromotionDto {
     rolledBackAt: p.rolled_back_at ? String(p.rolled_back_at) : null,
     createdAt: String(p.created_at),
     updatedAt: String(p.updated_at),
+  };
+}
+
+function mapObservabilityOverview(o: Record<string, unknown>): ObservabilityOverviewDto {
+  return {
+    windowHours: Number(o.window_hours ?? 24),
+    totalRuns: Number(o.total_runs ?? 0),
+    succeededRuns: Number(o.succeeded_runs ?? 0),
+    failedRuns: Number(o.failed_runs ?? 0),
+    successRate: Number(o.success_rate ?? 1),
+    failureRate: Number(o.failure_rate ?? 0),
+    p50DurationMs: Number(o.p50_duration_ms ?? 0),
+    p95DurationMs: Number(o.p95_duration_ms ?? 0),
+    p99DurationMs: Number(o.p99_duration_ms ?? 0),
+    totalCostUsd: Number(o.total_cost_usd ?? 0),
+    costPerRunUsd: Number(o.cost_per_run_usd ?? 0),
+    costPerSuccessfulOutcomeUsd: Number(o.cost_per_successful_outcome_usd ?? 0),
+    tokensIn: Number(o.tokens_in ?? 0),
+    tokensOut: Number(o.tokens_out ?? 0),
+    queueDepth: Number(o.queue_depth ?? 0),
+    approvalPendingCount: Number(o.approval_pending_count ?? 0),
+    failureByClass: Array.isArray(o.failure_by_class)
+      ? o.failure_by_class.map((x: Record<string, unknown>) => ({
+          failureClass: String(x.failure_class ?? 'unknown'),
+          count: Number(x.count ?? 0),
+        }))
+      : [],
+    costByAgent: Array.isArray(o.cost_by_agent)
+      ? o.cost_by_agent.map((x: Record<string, unknown>) => ({
+          agentId: String(x.agent_id ?? ''),
+          runs: Number(x.runs ?? 0),
+          costUsd: Number(x.cost_usd ?? 0),
+          tokensIn: Number(x.tokens_in ?? 0),
+          tokensOut: Number(x.tokens_out ?? 0),
+        }))
+      : [],
+    costByModel: Array.isArray(o.cost_by_model)
+      ? o.cost_by_model.map((x: Record<string, unknown>) => ({
+          model: String(x.model ?? ''),
+          calls: Number(x.calls ?? 0),
+          costUsd: Number(x.cost_usd ?? 0),
+          tokensIn: Number(x.tokens_in ?? 0),
+          tokensOut: Number(x.tokens_out ?? 0),
+        }))
+      : [],
+    dailySeries: Array.isArray(o.daily_series)
+      ? o.daily_series.map((x: Record<string, unknown>) => ({
+          bucket: String(x.bucket ?? ''),
+          runs: Number(x.runs ?? 0),
+          failed: Number(x.failed ?? 0),
+          costUsd: Number(x.cost_usd ?? 0),
+        }))
+      : [],
+  };
+}
+
+function mapFailureExplanation(f: Record<string, unknown>): FailureExplanationDto {
+  return {
+    runId: String(f.run_id),
+    status: String(f.status),
+    failureClass: String(f.failure_class ?? 'unknown'),
+    rootCause: String(f.root_cause ?? ''),
+    failingStepSeq:
+      f.failing_step_seq !== null && f.failing_step_seq !== undefined
+        ? Number(f.failing_step_seq)
+        : null,
+    failingStepType: f.failing_step_type ? String(f.failing_step_type) : null,
+    remediation: Array.isArray(f.remediation) ? f.remediation.map(String) : [],
+  };
+}
+
+function mapAlertRule(r: Record<string, unknown>): AlertRuleDto {
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    workspaceId: String(r.workspace_id),
+    name: String(r.name),
+    metric: r.metric as AlertRuleDto['metric'],
+    operator: (r.operator ?? 'gt') as AlertRuleDto['operator'],
+    threshold: Number(r.threshold ?? 0),
+    windowMinutes: Number(r.window_minutes ?? 5),
+    channels: Array.isArray(r.channels) ? r.channels.map(String) : ['in_app'],
+    enabled: Boolean(r.enabled ?? true),
+    lastFiredAt: r.last_fired_at ? String(r.last_fired_at) : null,
+    createdBy: r.created_by ? String(r.created_by) : null,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+function mapAlertIncident(i: Record<string, unknown>): AlertIncidentDto {
+  return {
+    id: String(i.id),
+    orgId: String(i.org_id),
+    workspaceId: String(i.workspace_id),
+    ruleId: String(i.rule_id),
+    metric: i.metric as AlertIncidentDto['metric'],
+    observedValue: Number(i.observed_value ?? 0),
+    threshold: Number(i.threshold ?? 0),
+    status: i.status as AlertIncidentDto['status'],
+    summary: String(i.summary),
+    firedAt: String(i.fired_at),
+    acknowledgedAt: i.acknowledged_at ? String(i.acknowledged_at) : null,
+    resolvedAt: i.resolved_at ? String(i.resolved_at) : null,
   };
 }

@@ -121,6 +121,10 @@ import {
   type KillSwitchScopeType,
   type NotificationRecord,
   PromotionEngine,
+  ObservabilityEngine,
+  ExecutionObservabilityStore,
+  type AlertIncidentRecord,
+  type AlertRuleRecord,
   type DeploymentRecord,
   type PromotionRecord,
   type ReleaseGateConfig,
@@ -6848,6 +6852,237 @@ export function buildApiServer(opts: ApiServerOptions): {
     });
 
     const wire = mapPromotionWire(updated);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  // --- S1.8 Observability v1 ---
+  const observabilityEngine = new ObservabilityEngine(
+    new ExecutionObservabilityStore(executionEngine),
+  );
+
+  function obsCtx(req: FastifyRequest): TenantContext {
+    const auth = req.platformState!.auth!;
+    const workspaceId = req.platformState!.workspaceId;
+    return {
+      orgId: auth.context.org.id as OrgId,
+      workspaceId: workspaceId as WorkspaceId,
+      principal: {
+        id: auth.context.principal.id as PrincipalId,
+        type: auth.context.principal.type,
+      },
+      requestId: req.id,
+      traceId: getActiveTraceContext()?.traceId ?? req.id,
+    };
+  }
+
+  function mapAlertRuleWire(r: AlertRuleRecord) {
+    return {
+      id: r.id,
+      org_id: r.orgId,
+      workspace_id: r.workspaceId,
+      name: r.name,
+      metric: r.metric,
+      operator: r.operator,
+      threshold: r.threshold,
+      window_minutes: r.windowMinutes,
+      channels: r.channels,
+      enabled: r.enabled,
+      last_fired_at: r.lastFiredAt,
+      created_by: r.createdBy,
+      created_at: r.createdAt,
+      updated_at: r.updatedAt,
+    };
+  }
+
+  function mapAlertIncidentWire(i: AlertIncidentRecord) {
+    return {
+      id: i.id,
+      org_id: i.orgId,
+      workspace_id: i.workspaceId,
+      rule_id: i.ruleId,
+      metric: i.metric,
+      observed_value: i.observedValue,
+      threshold: i.threshold,
+      status: i.status,
+      summary: i.summary,
+      fired_at: i.firedAt,
+      acknowledged_at: i.acknowledgedAt,
+      resolved_at: i.resolvedAt,
+    };
+  }
+
+  app.get('/api/v1/observability/overview', async (req, reply) => {
+    const workspaceId = req.platformState!.workspaceId;
+    const query = req.query as { window_hours?: string | number };
+    const windowHours = query.window_hours ? Number(query.window_hours) : 24;
+
+    const overview = await observabilityEngine.getOverview(obsCtx(req), {
+      workspaceId,
+      windowHours,
+    });
+
+    reply.status(200);
+    return {
+      window_hours: overview.windowHours,
+      total_runs: overview.totalRuns,
+      succeeded_runs: overview.succeededRuns,
+      failed_runs: overview.failedRuns,
+      success_rate: overview.successRate,
+      failure_rate: overview.failureRate,
+      p50_duration_ms: overview.p50DurationMs,
+      p95_duration_ms: overview.p95DurationMs,
+      p99_duration_ms: overview.p99DurationMs,
+      total_cost_usd: overview.totalCostUsd,
+      cost_per_run_usd: overview.costPerRunUsd,
+      cost_per_successful_outcome_usd: overview.costPerSuccessfulOutcomeUsd,
+      tokens_in: overview.tokensIn,
+      tokens_out: overview.tokensOut,
+      queue_depth: overview.queueDepth,
+      approval_pending_count: overview.approvalPendingCount,
+      failure_by_class: overview.failureByClass.map((f) => ({
+        failure_class: f.failureClass,
+        count: f.count,
+      })),
+      cost_by_agent: overview.costByAgent.map((a) => ({
+        agent_id: a.agentId,
+        runs: a.runs,
+        cost_usd: a.costUsd,
+        tokens_in: a.tokensIn,
+        tokens_out: a.tokensOut,
+      })),
+      cost_by_model: overview.costByModel.map((m) => ({
+        model: m.model,
+        calls: m.calls,
+        cost_usd: m.costUsd,
+        tokens_in: m.tokensIn,
+        tokens_out: m.tokensOut,
+      })),
+      daily_series: overview.dailySeries.map((d) => ({
+        bucket: d.bucket,
+        runs: d.runs,
+        failed: d.failed,
+        cost_usd: d.costUsd,
+      })),
+    };
+  });
+
+  app.post('/api/v1/runs/:id/explain-failure', async (req, reply) => {
+    const routePath = '/api/v1/runs/{id}/explain-failure';
+    const { id } = req.params as { id: string };
+
+    const explanation = await observabilityEngine.explainFailure(obsCtx(req), id);
+
+    const wire = {
+      run_id: explanation.runId,
+      status: explanation.status,
+      failure_class: explanation.failureClass,
+      root_cause: explanation.rootCause,
+      failing_step_seq: explanation.failingStepSeq,
+      failing_step_type: explanation.failingStepType,
+      remediation: explanation.remediation,
+    };
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.get('/api/v1/runs/:id/otel', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const otel = await observabilityEngine.exportRunOtel(obsCtx(req), id);
+    reply.status(200);
+    return otel;
+  });
+
+  app.get('/api/v1/observability/alerts/rules', async (req, reply) => {
+    const workspaceId = req.platformState!.workspaceId;
+    const rules = await observabilityEngine.listAlertRules(obsCtx(req), workspaceId);
+    reply.status(200);
+    return { data: rules.map(mapAlertRuleWire) };
+  });
+
+  app.post('/api/v1/observability/alerts/rules', async (req, reply) => {
+    const routePath = '/api/v1/observability/alerts/rules';
+    const auth = req.platformState!.auth!;
+    const orgId = auth.context.org.id;
+    const workspaceId = req.platformState!.workspaceId!;
+    const body = req.body as {
+      name: string;
+      metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+      operator?: 'gt' | 'gte';
+      threshold: number;
+      window_minutes?: number;
+      channels?: string[];
+      enabled?: boolean;
+    };
+
+    const rule = await observabilityEngine.createAlertRule(obsCtx(req), {
+      workspaceId,
+      name: body.name,
+      metric: body.metric,
+      operator: body.operator,
+      threshold: body.threshold,
+      windowMinutes: body.window_minutes,
+      channels: body.channels,
+      enabled: body.enabled,
+    });
+
+    await store.appendAudit(orgId, {
+      actor: { id: auth.subject.principalId, type: auth.context.principal.type },
+      action: 'alert_rule.create',
+      resource: { type: 'alert_rule', id: rule.id, metric: rule.metric },
+      decision: 'allow',
+    });
+
+    const wire = mapAlertRuleWire(rule);
+    reply.status(201);
+    await persistIdempotencyIfNeeded(req, routePath, 201, wire);
+    return wire;
+  });
+
+  app.delete('/api/v1/observability/alerts/rules/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await observabilityEngine.deleteAlertRule(obsCtx(req), id);
+    reply.status(200);
+    return { ok: true };
+  });
+
+  app.post('/api/v1/observability/alerts/evaluate', async (req, reply) => {
+    const routePath = '/api/v1/observability/alerts/evaluate';
+    const workspaceId = req.platformState!.workspaceId;
+    const res = await observabilityEngine.evaluateAlertRules(obsCtx(req), workspaceId);
+    const wire = {
+      evaluated_count: res.evaluatedCount,
+      fired_incidents: res.firedIncidents.map(mapAlertIncidentWire),
+    };
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.get('/api/v1/observability/alerts/incidents', async (req, reply) => {
+    const workspaceId = req.platformState!.workspaceId;
+    const incidents = await observabilityEngine.listAlertIncidents(obsCtx(req), workspaceId);
+    reply.status(200);
+    return { data: incidents.map(mapAlertIncidentWire) };
+  });
+
+  app.post('/api/v1/observability/alerts/incidents/:id/acknowledge', async (req, reply) => {
+    const routePath = '/api/v1/observability/alerts/incidents/{id}/acknowledge';
+    const { id } = req.params as { id: string };
+    const updated = await observabilityEngine.acknowledgeAlertIncident(obsCtx(req), id);
+    const wire = mapAlertIncidentWire(updated);
+    reply.status(200);
+    await persistIdempotencyIfNeeded(req, routePath, 200, wire);
+    return wire;
+  });
+
+  app.post('/api/v1/observability/alerts/incidents/:id/resolve', async (req, reply) => {
+    const routePath = '/api/v1/observability/alerts/incidents/{id}/resolve';
+    const { id } = req.params as { id: string };
+    const updated = await observabilityEngine.resolveAlertIncident(obsCtx(req), id);
+    const wire = mapAlertIncidentWire(updated);
     reply.status(200);
     await persistIdempotencyIfNeeded(req, routePath, 200, wire);
     return wire;

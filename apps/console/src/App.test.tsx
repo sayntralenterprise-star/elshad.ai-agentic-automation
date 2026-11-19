@@ -2138,6 +2138,132 @@ function createMockClient(
     return { promotion: structuredClone(promo), deployment: null };
   };
 
+  // --- S1.8 Observability v1 ---
+  const alertRulesList: Array<{
+    id: string;
+    orgId: string;
+    workspaceId: string;
+    name: string;
+    metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+    operator: 'gt' | 'gte';
+    threshold: number;
+    windowMinutes: number;
+    channels: string[];
+    enabled: boolean;
+    lastFiredAt: string | null;
+    createdBy: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }> = [];
+  const alertIncidentsList: Array<{
+    id: string;
+    orgId: string;
+    workspaceId: string;
+    ruleId: string;
+    metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+    observedValue: number;
+    threshold: number;
+    status: 'firing' | 'acknowledged' | 'resolved';
+    summary: string;
+    firedAt: string;
+    acknowledgedAt: string | null;
+    resolvedAt: string | null;
+  }> = [];
+
+  client.observability.overview = async (windowHours = 24) => ({
+    windowHours,
+    totalRuns: 10,
+    succeededRuns: 8,
+    failedRuns: 2,
+    successRate: 0.8,
+    failureRate: 0.2,
+    p50DurationMs: 420,
+    p95DurationMs: 1100,
+    p99DurationMs: 1500,
+    totalCostUsd: 0.042,
+    costPerRunUsd: 0.0042,
+    costPerSuccessfulOutcomeUsd: 0.00525,
+    tokensIn: 4500,
+    tokensOut: 1200,
+    queueDepth: 1,
+    approvalPendingCount: 0,
+    failureByClass: [{ failureClass: 'tool_error', count: 2 }],
+    costByAgent: [{ agentId: 'agent:agv_1', runs: 10, costUsd: 0.042, tokensIn: 4500, tokensOut: 1200 }],
+    costByModel: [{ model: 'openai:gpt-4o-mini', calls: 10, costUsd: 0.042, tokensIn: 4500, tokensOut: 1200 }],
+    dailySeries: [{ bucket: '2026-11-19', runs: 10, failed: 2, costUsd: 0.042 }],
+  });
+  client.observability.explainFailure = async (runId) => ({
+    runId,
+    status: 'failed',
+    failureClass: 'tool_error',
+    rootCause: 'Step #1 (tool_call) failed: upstream HTTP 502',
+    failingStepSeq: 1,
+    failingStepType: 'tool_call',
+    remediation: ['Inspect step inputs/outputs in the run trace and verify downstream connector credentials.'],
+  });
+  client.observability.exportOtel = async () => ({
+    resourceSpans: [{ resource: { attributes: [] }, scopeSpans: [] }],
+  });
+  client.alerts.listRules = async () => structuredClone(alertRulesList);
+  client.alerts.createRule = async (input) => {
+    const r = {
+      id: `ar_${alertRulesList.length + 1}`,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: input.name,
+      metric: input.metric,
+      operator: input.operator ?? ('gt' as const),
+      threshold: input.threshold,
+      windowMinutes: input.windowMinutes ?? 60,
+      channels: input.channels ?? ['in_app'],
+      enabled: input.enabled ?? true,
+      lastFiredAt: null,
+      createdBy: 'prn_1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    alertRulesList.unshift(r);
+    return structuredClone(r);
+  };
+  client.alerts.deleteRule = async (id) => {
+    const idx = alertRulesList.findIndex((r) => r.id === id);
+    if (idx >= 0) alertRulesList.splice(idx, 1);
+  };
+  client.alerts.evaluate = async () => {
+    const fired = alertRulesList.map((r) => {
+      const inc = {
+        id: `inc_${alertIncidentsList.length + 1}`,
+        orgId: 'org_1',
+        workspaceId: 'ws_1',
+        ruleId: r.id,
+        metric: r.metric,
+        observedValue: 0.2,
+        threshold: r.threshold,
+        status: 'firing' as const,
+        summary: `Alert "${r.name}" fired: ${r.metric}=0.200 ${r.operator} ${r.threshold}`,
+        firedAt: new Date().toISOString(),
+        acknowledgedAt: null,
+        resolvedAt: null,
+      };
+      alertIncidentsList.unshift(inc);
+      return inc;
+    });
+    return { evaluatedCount: alertRulesList.length, firedIncidents: structuredClone(fired) };
+  };
+  client.alerts.listIncidents = async () => structuredClone(alertIncidentsList);
+  client.alerts.acknowledgeIncident = async (id) => {
+    const inc = alertIncidentsList.find((i) => i.id === id)!;
+    inc.status = 'acknowledged';
+    inc.acknowledgedAt = new Date().toISOString();
+    return structuredClone(inc);
+  };
+  client.alerts.resolveIncident = async (id) => {
+    const inc = alertIncidentsList.find((i) => i.id === id)!;
+    inc.status = 'resolved';
+    inc.resolvedAt = new Date().toISOString();
+    return structuredClone(inc);
+  };
+
   return client;
 }
 
@@ -2838,6 +2964,38 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     // 3. Rollback live prod deployment
     await user.click(screen.getByRole('button', { name: /Rollback to agv_0/i }));
     expect(await screen.findByText(/Rolled back prod deployment to version agv_0/i)).toBeTruthy();
+
+    // Accessibility check
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Observability & Monitoring dashboards, cost breakdown, alerts lifecycle, and failure explainer [E1.8]', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/monitoring" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /Observability & Monitoring/i })).toBeTruthy();
+    expect(await screen.findByText('80.0%')).toBeTruthy();
+
+    // Cost & Usage tab
+    await user.click(screen.getByRole('button', { name: 'Cost & Usage' }));
+    expect(await screen.findByText('openai:gpt-4o-mini')).toBeTruthy();
+
+    // Alerts & Incidents tab -> create rule -> evaluate -> acknowledge
+    await user.click(screen.getByRole('button', { name: /Alerts & Incidents/i }));
+    await user.type(screen.getByLabelText('Rule Name'), 'Failure spike');
+    await user.click(screen.getByRole('button', { name: 'Create Rule' }));
+    expect(await screen.findByText('Failure spike')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Evaluate Rules' }));
+    expect(await screen.findByText(/Alert "Failure spike" fired/i)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Acknowledge' }));
+    expect(await screen.findByText('acknowledged')).toBeTruthy();
 
     // Accessibility check
     const axeRes = await axe.run(container, {

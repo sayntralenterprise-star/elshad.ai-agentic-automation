@@ -8543,6 +8543,456 @@
           "from_env",
           "to_env"
         ]
+      },
+      "ObservabilityOverview": {
+        "type": "object",
+        "properties": {
+          "window_hours": {
+            "type": "number"
+          },
+          "total_runs": {
+            "type": "integer"
+          },
+          "succeeded_runs": {
+            "type": "integer"
+          },
+          "failed_runs": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "failure_rate": {
+            "type": "number"
+          },
+          "p50_duration_ms": {
+            "type": "number"
+          },
+          "p95_duration_ms": {
+            "type": "number"
+          },
+          "p99_duration_ms": {
+            "type": "number"
+          },
+          "total_cost_usd": {
+            "type": "number"
+          },
+          "cost_per_run_usd": {
+            "type": "number"
+          },
+          "cost_per_successful_outcome_usd": {
+            "type": "number"
+          },
+          "tokens_in": {
+            "type": "integer"
+          },
+          "tokens_out": {
+            "type": "integer"
+          },
+          "queue_depth": {
+            "type": "integer"
+          },
+          "approval_pending_count": {
+            "type": "integer"
+          },
+          "failure_by_class": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "failure_class": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "failure_class",
+                "count"
+              ]
+            }
+          },
+          "cost_by_agent": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "runs": {
+                  "type": "integer"
+                },
+                "cost_usd": {
+                  "type": "number"
+                },
+                "tokens_in": {
+                  "type": "integer"
+                },
+                "tokens_out": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "agent_id",
+                "runs",
+                "cost_usd",
+                "tokens_in",
+                "tokens_out"
+              ]
+            }
+          },
+          "cost_by_model": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "cost_usd": {
+                  "type": "number"
+                },
+                "tokens_in": {
+                  "type": "integer"
+                },
+                "tokens_out": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "model",
+                "calls",
+                "cost_usd",
+                "tokens_in",
+                "tokens_out"
+              ]
+            }
+          },
+          "daily_series": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bucket": {
+                  "type": "string"
+                },
+                "runs": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "cost_usd": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "bucket",
+                "runs",
+                "failed",
+                "cost_usd"
+              ]
+            }
+          }
+        },
+        "required": [
+          "window_hours",
+          "total_runs",
+          "succeeded_runs",
+          "failed_runs",
+          "success_rate",
+          "failure_rate",
+          "p50_duration_ms",
+          "p95_duration_ms",
+          "p99_duration_ms",
+          "total_cost_usd",
+          "cost_per_run_usd",
+          "cost_per_successful_outcome_usd",
+          "tokens_in",
+          "tokens_out",
+          "queue_depth",
+          "approval_pending_count",
+          "failure_by_class",
+          "cost_by_agent",
+          "cost_by_model",
+          "daily_series"
+        ]
+      },
+      "FailureExplanation": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "failure_class": {
+            "type": "string"
+          },
+          "root_cause": {
+            "type": "string"
+          },
+          "failing_step_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failing_step_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remediation": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "failure_class",
+          "root_cause",
+          "failing_step_seq",
+          "failing_step_type",
+          "remediation"
+        ]
+      },
+      "AlertRule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "failure_rate",
+              "cost_spike",
+              "latency_p95",
+              "queue_depth"
+            ]
+          },
+          "operator": {
+            "type": "string",
+            "enum": [
+              "gt",
+              "gte"
+            ]
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "window_minutes": {
+            "type": "integer"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "last_fired_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "name",
+          "metric",
+          "operator",
+          "threshold",
+          "window_minutes",
+          "channels",
+          "enabled",
+          "last_fired_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateAlertRuleRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "failure_rate",
+              "cost_spike",
+              "latency_p95",
+              "queue_depth"
+            ]
+          },
+          "operator": {
+            "type": "string",
+            "enum": [
+              "gt",
+              "gte"
+            ],
+            "default": "gt"
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0
+          },
+          "window_minutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440,
+            "default": 5
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "in_app"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "name",
+          "metric",
+          "threshold"
+        ]
+      },
+      "EvaluateAlertsResponse": {
+        "type": "object",
+        "properties": {
+          "evaluated_count": {
+            "type": "integer"
+          },
+          "fired_incidents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertIncident"
+            }
+          }
+        },
+        "required": [
+          "evaluated_count",
+          "fired_incidents"
+        ]
+      },
+      "AlertIncident": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "failure_rate",
+              "cost_spike",
+              "latency_p95",
+              "queue_depth"
+            ]
+          },
+          "observed_value": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "firing",
+              "acknowledged",
+              "resolved"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "fired_at": {
+            "type": "string"
+          },
+          "acknowledged_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "workspace_id",
+          "rule_id",
+          "metric",
+          "observed_value",
+          "threshold",
+          "status",
+          "summary",
+          "fired_at",
+          "acknowledged_at",
+          "resolved_at"
+        ]
       }
     },
     "parameters": {}
@@ -16296,6 +16746,493 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Promotion"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/overview": {
+      "get": {
+        "operationId": "observability.overview",
+        "summary": "Get golden observability metrics, latency percentiles, and cost breakdown",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 720
+            },
+            "required": false,
+            "name": "window_hours",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservabilityOverview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/explain-failure": {
+      "post": {
+        "operationId": "observability.explain_failure",
+        "summary": "Analyze a failed run and return classified root cause and remediation steps",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureExplanation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/otel": {
+      "get": {
+        "operationId": "observability.export_otel",
+        "summary": "Export a run trace as OpenTelemetry OTLP GenAI JSON",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/rules": {
+      "get": {
+        "operationId": "alerts.list_rules",
+        "summary": "List alert rules in the active workspace",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AlertRule"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "alerts.create_rule",
+        "summary": "Create an observability alert rule",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAlertRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/rules/{id}": {
+      "delete": {
+        "operationId": "alerts.delete_rule",
+        "summary": "Delete an observability alert rule",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyOk"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/evaluate": {
+      "post": {
+        "operationId": "alerts.evaluate",
+        "summary": "Evaluate enabled alert rules against live metrics",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluateAlertsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/incidents": {
+      "get": {
+        "operationId": "alerts.list_incidents",
+        "summary": "List alert incidents in the active workspace",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AlertIncident"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/incidents/{id}/acknowledge": {
+      "post": {
+        "operationId": "alerts.acknowledge_incident",
+        "summary": "Acknowledge a firing alert incident",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertIncident"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard platform error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/alerts/incidents/{id}/resolve": {
+      "post": {
+        "operationId": "alerts.resolve_incident",
+        "summary": "Resolve an alert incident",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertIncident"
                 }
               }
             }

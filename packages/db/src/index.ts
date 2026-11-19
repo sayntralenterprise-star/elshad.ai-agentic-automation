@@ -1015,6 +1015,38 @@ export interface PromotionsTable {
   updated_at: Date;
 }
 
+export interface AlertRulesTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  name: string;
+  metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+  operator: 'gt' | 'gte';
+  threshold: number;
+  window_minutes: number;
+  channels_json: string[];
+  enabled: boolean;
+  last_fired_at: Date | null;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface AlertIncidentsTable {
+  id: string;
+  org_id: string;
+  workspace_id: string;
+  rule_id: string;
+  metric: 'failure_rate' | 'cost_spike' | 'latency_p95' | 'queue_depth';
+  observed_value: number;
+  threshold: number;
+  status: 'firing' | 'acknowledged' | 'resolved';
+  summary: string;
+  fired_at: Date;
+  acknowledged_at: Date | null;
+  resolved_at: Date | null;
+}
+
 export interface Database {
   organizations: OrganizationsTable;
   workspaces: WorkspacesTable;
@@ -1080,6 +1112,8 @@ export interface Database {
   connections: ConnectionsTable;
   connection_usage_logs: ConnectionUsageLogsTable;
   promotions: PromotionsTable;
+  alert_rules: AlertRulesTable;
+  alert_incidents: AlertIncidentsTable;
 }
 
 export function createPgPool(connectionString: string, max = 40): Pool {

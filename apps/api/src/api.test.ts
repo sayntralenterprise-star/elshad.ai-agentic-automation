@@ -2898,4 +2898,170 @@ describe('@elshad/api gateway, authN/authZ, tenancy, idempotency, and audit [E0.
 
     await app.close();
   });
+
+  it('S1.8 Observability v1: computes overview, exports OTel GenAI, explains failure, and fires alert on spike', async () => {
+    const config = createTestConfig();
+    const store = new InMemoryIamAuditStore({
+      adminEmail: 's18-admin@elshad.local',
+      adminPassword: 'Password123!',
+      apiKeyPepper: config.PLATFORM_API_KEY_PEPPER,
+    });
+    const { app, executionEngine } = buildApiServer({ config, store });
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 's18-admin@elshad.local', password: 'Password123!' },
+    });
+    expect(login.statusCode).toBe(200);
+    const orgId = [...store.orgs.keys()][0]!;
+    const wsId = [...store.workspaces.values()].find((w) => w.org_id === orgId)!.id;
+    const cookie = login.headers['set-cookie'] as string;
+    const csrf = login.json().csrf_token as string;
+    const headers = { cookie, 'x-csrf-token': csrf, 'x-workspace-id': wsId };
+
+    // 1. Create an alert rule for failure_rate > 0.1
+    const createRule = await app.inject({
+      method: 'POST',
+      url: '/api/v1/observability/alerts/rules',
+      headers: { ...headers, 'Idempotency-Key': 's18-rule-1' },
+      payload: {
+        name: 'Failure rate spike',
+        metric: 'failure_rate',
+        operator: 'gt',
+        threshold: 0.1,
+        window_minutes: 60,
+      },
+    });
+    expect(createRule.statusCode).toBe(201);
+    const ruleId = createRule.json().id as string;
+
+    // 2. Seed a synthetic failed run in executionEngine
+    const ctx = {
+      orgId: orgId as OrgId,
+      workspaceId: wsId as WorkspaceId,
+      environmentId: 'env_dev' as EnvironmentId,
+      principal: { id: login.json().me.principal.id as PrincipalId, type: 'user' as const },
+    };
+    const createdRun = await executionEngine.createRun(ctx, {
+      workspaceId: wsId,
+      environmentId: 'env_dev',
+      subjectType: 'agent',
+      subjectVersionId: 'agv_obs_1',
+      trigger: { type: 'api' },
+    });
+    const leases = await executionEngine.claim('worker-s18', ['default'], 1);
+    const lease = leases[0]!;
+    await executionEngine.commitTurn(lease, {
+      steps: [
+        {
+          seq: 1,
+          type: 'tool_call',
+          status: 'failed',
+          idempotencyKey: 's18-step-fail',
+          summary: {},
+          input: {},
+          output: null,
+          model: 'openai:gpt-4o-mini',
+          tokensIn: 50,
+          tokensOut: 10,
+          costMicroUsd: 2500,
+          latencyMs: 320,
+          error: { message: 'upstream HTTP 502' },
+        },
+      ],
+      checkpoint: {
+        seq: 1,
+        cursor: 1,
+        scratchpad: {},
+        messages: [],
+        blackboard: {},
+        engine_version: '1.0',
+      },
+    });
+    await executionEngine.complete(lease, {
+      status: 'failed',
+      failureClass: 'tool_error',
+      terminationReason: 'tool_error',
+    });
+
+    // 3. Verify overview metrics
+    const overviewRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/observability/overview?window_hours=24',
+      headers,
+    });
+    expect(overviewRes.statusCode).toBe(200);
+    expect(overviewRes.json().total_runs).toBeGreaterThanOrEqual(1);
+    expect(overviewRes.json().failed_runs).toBeGreaterThanOrEqual(1);
+    expect(overviewRes.json().failure_rate).toBeGreaterThan(0.1);
+
+    // 4. Verify Failure Explainer
+    const explainRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${createdRun.id}/explain-failure`,
+      headers: { ...headers, 'Idempotency-Key': 's18-explain-1' },
+      payload: {},
+    });
+    expect(explainRes.statusCode).toBe(200);
+    expect(explainRes.json().failure_class).toBe('tool_error');
+    expect(explainRes.json().failing_step_seq).toBe(1);
+    expect(explainRes.json().remediation.length).toBeGreaterThan(0);
+
+    // 5. Verify OTel GenAI export
+    const otelRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/runs/${createdRun.id}/otel`,
+      headers,
+    });
+    expect(otelRes.statusCode).toBe(200);
+    expect(otelRes.json().resourceSpans).toHaveLength(1);
+
+    // 6. Evaluate alert rules -> fires incident; second evaluate deduplicates
+    const eval1 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/observability/alerts/evaluate',
+      headers: { ...headers, 'Idempotency-Key': 's18-eval-1' },
+      payload: {},
+    });
+    expect(eval1.statusCode).toBe(200);
+    expect(eval1.json().fired_incidents).toHaveLength(1);
+    const incidentId = eval1.json().fired_incidents[0].id as string;
+
+    const eval2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/observability/alerts/evaluate',
+      headers: { ...headers, 'Idempotency-Key': 's18-eval-2' },
+      payload: {},
+    });
+    expect(eval2.statusCode).toBe(200);
+    expect(eval2.json().fired_incidents).toHaveLength(0);
+
+    // 7. Acknowledge & resolve incident + delete rule
+    const ackRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/observability/alerts/incidents/${incidentId}/acknowledge`,
+      headers: { ...headers, 'Idempotency-Key': 's18-ack-1' },
+      payload: {},
+    });
+    expect(ackRes.statusCode).toBe(200);
+    expect(ackRes.json().status).toBe('acknowledged');
+
+    const resolveRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/observability/alerts/incidents/${incidentId}/resolve`,
+      headers: { ...headers, 'Idempotency-Key': 's18-resolve-1' },
+      payload: {},
+    });
+    expect(resolveRes.statusCode).toBe(200);
+    expect(resolveRes.json().status).toBe('resolved');
+
+    const delRule = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/observability/alerts/rules/${ruleId}`,
+      headers,
+    });
+    expect(delRule.statusCode).toBe(200);
+
+    await app.close();
+  });
 });

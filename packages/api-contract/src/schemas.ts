@@ -2383,3 +2383,132 @@ export const PromotionResultResponseSchema = z
     deployment: DeploymentWireSchema.nullable(),
   })
   .openapi('PromotionResultResponse');
+
+// --- S1.8 Observability v1 ---
+
+export const AlertMetricSchema = z.enum([
+  'failure_rate',
+  'cost_spike',
+  'latency_p95',
+  'queue_depth',
+]);
+
+export const ObservabilityOverviewWireSchema = z
+  .object({
+    window_hours: z.number(),
+    total_runs: z.number().int(),
+    succeeded_runs: z.number().int(),
+    failed_runs: z.number().int(),
+    success_rate: z.number(),
+    failure_rate: z.number(),
+    p50_duration_ms: z.number(),
+    p95_duration_ms: z.number(),
+    p99_duration_ms: z.number(),
+    total_cost_usd: z.number(),
+    cost_per_run_usd: z.number(),
+    cost_per_successful_outcome_usd: z.number(),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    queue_depth: z.number().int(),
+    approval_pending_count: z.number().int(),
+    failure_by_class: z.array(
+      z.object({
+        failure_class: z.string(),
+        count: z.number().int(),
+      }),
+    ),
+    cost_by_agent: z.array(
+      z.object({
+        agent_id: z.string(),
+        runs: z.number().int(),
+        cost_usd: z.number(),
+        tokens_in: z.number().int(),
+        tokens_out: z.number().int(),
+      }),
+    ),
+    cost_by_model: z.array(
+      z.object({
+        model: z.string(),
+        calls: z.number().int(),
+        cost_usd: z.number(),
+        tokens_in: z.number().int(),
+        tokens_out: z.number().int(),
+      }),
+    ),
+    daily_series: z.array(
+      z.object({
+        bucket: z.string(),
+        runs: z.number().int(),
+        failed: z.number().int(),
+        cost_usd: z.number(),
+      }),
+    ),
+  })
+  .openapi('ObservabilityOverview');
+
+export const FailureExplanationWireSchema = z
+  .object({
+    run_id: z.string(),
+    status: z.string(),
+    failure_class: z.string(),
+    root_cause: z.string(),
+    failing_step_seq: z.number().int().nullable(),
+    failing_step_type: z.string().nullable(),
+    remediation: z.array(z.string()),
+  })
+  .openapi('FailureExplanation');
+
+export const AlertRuleWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    name: z.string(),
+    metric: AlertMetricSchema,
+    operator: z.enum(['gt', 'gte']),
+    threshold: z.number(),
+    window_minutes: z.number().int(),
+    channels: z.array(z.string()),
+    enabled: z.boolean(),
+    last_fired_at: z.string().nullable(),
+    created_by: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .openapi('AlertRule');
+
+export const CreateAlertRuleRequestSchema = z
+  .object({
+    name: z.string().min(1).max(160),
+    metric: AlertMetricSchema,
+    operator: z.enum(['gt', 'gte']).default('gt'),
+    threshold: z.number().min(0),
+    window_minutes: z.number().int().min(1).max(1440).default(5),
+    channels: z.array(z.string()).default(['in_app']),
+    enabled: z.boolean().default(true),
+  })
+  .openapi('CreateAlertRuleRequest');
+
+export const AlertIncidentWireSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    workspace_id: z.string(),
+    rule_id: z.string(),
+    metric: AlertMetricSchema,
+    observed_value: z.number(),
+    threshold: z.number(),
+    status: z.enum(['firing', 'acknowledged', 'resolved']),
+    summary: z.string(),
+    fired_at: z.string(),
+    acknowledged_at: z.string().nullable(),
+    resolved_at: z.string().nullable(),
+  })
+  .openapi('AlertIncident');
+
+export const EvaluateAlertsResponseSchema = z
+  .object({
+    evaluated_count: z.number().int(),
+    fired_incidents: z.array(AlertIncidentWireSchema),
+  })
+  .openapi('EvaluateAlertsResponse');

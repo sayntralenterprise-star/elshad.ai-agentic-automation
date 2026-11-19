@@ -39,6 +39,7 @@ import { AgentStudioView } from './AgentStudioView.js';
 import { ApprovalsView } from './ApprovalsView.js';
 import { EvaluationsView } from './EvaluationsView.js';
 import { GovernanceHardeningView } from './GovernanceHardeningView.js';
+import { ObservabilityView } from './ObservabilityView.js';
 import { KnowledgeMemoryView } from './KnowledgeMemoryView.js';
 import { RunsView } from './RunsView.js';
 import { TeamCanvasView } from './TeamCanvasView.js';
@@ -1256,6 +1257,10 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <EvaluationsView client={client} workspaceId={activeWorkspace?.id} />
             )}
 
+            {section === 'monitoring' && (
+              <ObservabilityView client={client} workspaceId={activeWorkspace?.id} />
+            )}
+
             {section === 'tools' && (
               <ToolsView
                 client={client}
@@ -1274,6 +1279,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               section !== 'knowledge' &&
               section !== 'approvals' &&
               section !== 'evaluations' &&
+              section !== 'monitoring' &&
               section !== 'tools' && (
               <div>
                 <h1 style={{ margin: '0 0 16px 0', fontSize: '22px' }}>

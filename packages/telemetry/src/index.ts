@@ -360,3 +360,5 @@ export const authEventsTotal = defaultMetrics.counter(
   'platform_auth_events_total',
   'Authentication and authorization outcomes',
 );
+
+export * from './otel-export.js';
