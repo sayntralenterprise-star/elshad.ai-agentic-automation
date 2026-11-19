@@ -48,7 +48,7 @@ COPY --from=build --chown=node:node /app/apps/api ./apps/api
 USER node
 
 FROM runtime-base AS migrate
-CMD ["pnpm", "--filter", "@elshad/db", "migrate:up"]
+CMD ["./packages/db/node_modules/.bin/node-pg-migrate", "up", "-m", "packages/db/migrations"]
 
 FROM runtime-base AS runner
 EXPOSE 8080
