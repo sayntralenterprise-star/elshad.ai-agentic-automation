@@ -1231,12 +1231,12 @@ function createMockClient(
       payload:
         input.decision === 'approve_with_edit' && input.editedPayload
           ? {
-              ...rec.payload,
-              proposedAction: {
-                ...rec.payload.proposedAction,
-                args: { ...rec.payload.proposedAction.args, ...input.editedPayload },
-              },
-            }
+            ...rec.payload,
+            proposedAction: {
+              ...rec.payload.proposedAction,
+              args: { ...rec.payload.proposedAction.args, ...input.editedPayload },
+            },
+          }
           : rec.payload,
       decisions: [
         ...rec.decisions,
@@ -3133,6 +3133,61 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
 
     await user.click(screen.getByRole('button', { name: 'Sign Off L1 Pilot' }));
     expect(await screen.findByText('Signed off by prn_1')).toBeTruthy();
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Agent Studio Screens 04-11: Tools 3-col, Memory Matrix, Guardrail Simulator, Evals, Versions Diff & Activity Timeline', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/agents" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Agents' })).toBeTruthy();
+    const createBtns = screen.getAllByRole('button', { name: '+ Create agent' });
+    await user.click(createBtns[0]!);
+    await user.click(await screen.findByRole('button', { name: 'Create Agent Draft' }));
+
+    // Screen 04: Tools 3-col + dry-run test
+    await user.click(screen.getByRole('tab', { name: 'Tools' }));
+    expect(await screen.findByRole('region', { name: 'Tool catalogue' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Granted agent tools' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Tool permissions and testing' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Test Tool Execution' }));
+    expect(await screen.findByText(/"status": "dry_run_ok"/)).toBeTruthy();
+
+    // Screen 05: Memory & Knowledge
+    await user.click(screen.getByRole('tab', { name: 'Memory' }));
+    expect(await screen.findByRole('table', { name: 'Memory scope matrix' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Test Retrieval' }));
+    expect(await screen.findByText(/Support SLA Handbook/i)).toBeTruthy();
+
+    // Screen 06: Guardrails
+    await user.click(screen.getByRole('tab', { name: 'Guardrails' }));
+    expect(await screen.findByRole('heading', { name: 'Input Guards' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Test Guardrails' }));
+    expect(await screen.findByText('BLOCKED')).toBeTruthy();
+
+    // Screen 08: Evals
+    await user.click(screen.getByRole('tab', { name: 'Evals' }));
+    expect(await screen.findByText('GATE PASSED')).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Evaluation case results' })).toBeTruthy();
+
+    // Screen 09: Versions
+    await user.click(screen.getByRole('tab', { name: 'Versions' }));
+    expect(await screen.findByRole('region', { name: 'Version timeline' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Version inspector and comparison' })).toBeTruthy();
+
+    // Screen 11: Activity + Comment
+    await user.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(await screen.findByRole('complementary', { name: 'Activity Detail Drawer' })).toBeTruthy();
+    await user.type(screen.getByLabelText('Activity comment'), 'Ready for staging rollout');
+    await user.click(screen.getByRole('button', { name: 'Add Comment' }));
+    expect((await screen.findAllByText('Ready for staging rollout')).length).toBeGreaterThanOrEqual(1);
 
     const axeRes = await axe.run(container, {
       rules: { 'color-contrast': { enabled: false } },

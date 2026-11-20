@@ -38,6 +38,13 @@ import {
 import { AgentsRegistryView } from './AgentsRegistryView.js';
 import { DeploymentsView } from './DeploymentsView.js';
 import { TeamCanvasView } from './TeamCanvasView.js';
+import { AgentActivityTab } from './studio/AgentActivityTab.js';
+import { AgentEvalsTab } from './studio/AgentEvalsTab.js';
+import { AgentGuardrailsTab } from './studio/AgentGuardrailsTab.js';
+import { AgentMemoryTab } from './studio/AgentMemoryTab.js';
+import { AgentPlaygroundTab } from './studio/AgentPlaygroundTab.js';
+import { AgentToolsTab } from './studio/AgentToolsTab.js';
+import { AgentVersionsTab } from './studio/AgentVersionsTab.js';
 
 type StudioTab =
   | 'configure'
@@ -66,10 +73,6 @@ export interface AgentStudioViewProps {
   projectId?: string;
   environment: EnvironmentKind;
   ownerName?: string;
-}
-
-function formatUsdFromMicro(micro: number): string {
-  return `$${(micro / 1_000_000).toFixed(4)}`;
 }
 
 const PROMPT_TEMPLATES: Record<string, string> = {
@@ -1905,274 +1908,80 @@ export function AgentStudioView({
             </div>
           )}
 
-          {/* TAB: TOOLS */}
+          {/* TAB: TOOLS (Screen 04) */}
           {studioTab === 'tools' && (
-            <div role="tabpanel" aria-label="Agent Tools" style={{ padding: '18px 20px', display: 'grid', gap: '12px' }}>
-              {liveTrifectaWarning && (
-                <div
-                  role="alert"
-                  style={{
-                    padding: '12px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--warning-bg)',
-                    border: '1px solid var(--warning)',
-                    color: 'var(--warning)',
-                    fontWeight: 600,
-                  }}
-                >
-                  Lethal Trifecta Warning: Combining private data access, untrusted external
-                  input, and external communication tools requires strict domain allowlists or
-                  explicit approval.
-                </div>
-              )}
-
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '8px' }}>Grant</th>
-                    <th style={{ padding: '8px' }}>Tool</th>
-                    <th style={{ padding: '8px' }}>Side Effect</th>
-                    <th style={{ padding: '8px' }}>Approval</th>
-                    <th style={{ padding: '8px' }}>Allowed Domains</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {toolsCatalog.map((tool) => {
-                    const binding = draftToolBindings.find((b) => b.tool === tool.name);
-                    const enabled = Boolean(binding);
-                    return (
-                      <tr key={tool.name} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '8px' }}>
-                          <input
-                            type="checkbox"
-                            aria-label={`Enable tool ${tool.name}`}
-                            checked={enabled}
-                            onChange={() => toggleToolBinding(tool.name)}
-                          />
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <strong>{tool.name}</strong>
-                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                            {tool.description}
-                          </div>
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <StatusChip
-                            label={tool.sideEffectClass}
-                            tone={tool.sideEffectClass === 'external_comms' ? 'warning' : 'neutral'}
-                          />
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <select
-                            aria-label={`Approval mode for ${tool.name}`}
-                            disabled={!enabled}
-                            value={binding?.approval ?? 'auto'}
-                            onChange={(e) =>
-                              setDraftToolBindings((prev) =>
-                                prev.map((b) =>
-                                  b.tool === tool.name
-                                    ? { ...b, approval: e.target.value as 'never' | 'auto' | 'always' }
-                                    : b,
-                                ),
-                              )
-                            }
-                          >
-                            <option value="auto">auto</option>
-                            <option value="always">always</option>
-                            <option value="never">never</option>
-                          </select>
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <input
-                            type="text"
-                            aria-label={`Allowed domains for ${tool.name}`}
-                            disabled={!enabled}
-                            placeholder="e.g., docs.example.com"
-                            value={binding?.allowedDomainsText ?? ''}
-                            onChange={(e) =>
-                              setDraftToolBindings((prev) =>
-                                prev.map((b) =>
-                                  b.tool === tool.name
-                                    ? { ...b, allowedDomainsText: e.target.value }
-                                    : b,
-                                ),
-                              )
-                            }
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <AgentToolsTab
+              toolsCatalog={toolsCatalog}
+              draftToolBindings={draftToolBindings}
+              liveTrifectaWarning={liveTrifectaWarning}
+              agentName={selectedAgent.name}
+              onToggleTool={toggleToolBinding}
+              onUpdateBinding={(toolName, patch) =>
+                setDraftToolBindings((prev) =>
+                  prev.map((b) => (b.tool === toolName ? { ...b, ...patch } : b)),
+                )
+              }
+            />
           )}
 
-          {/* TAB: MEMORY */}
+          {/* TAB: MEMORY (Screen 05) */}
           {studioTab === 'memory' && (
-            <div role="tabpanel" aria-label="Agent Memory" style={{ padding: '18px 20px', display: 'grid', gap: '12px' }}>
-              <StateView
-                state="empty"
-                title="Agent Memory & Knowledge Scopes"
-                description="Configure Run, Session, User, Agent, Project, and Org memory scopes and Top-K Knowledge Base retrieval."
-              />
-            </div>
+            <AgentMemoryTab client={client} agentId={selectedAgent.id} />
           )}
 
-          {/* TAB: GUARDRAILS */}
-          {studioTab === 'guardrails' && (
-            <div role="tabpanel" aria-label="Agent Guardrails" style={{ padding: '18px 20px', display: 'grid', gap: '12px' }}>
-              <StateView
-                state="empty"
-                title="Input, Output & Tool Guardrails"
-                description="Configure PII redaction, prompt injection screening, schema validation, and escalation triggers."
-              />
-            </div>
-          )}
+          {/* TAB: GUARDRAILS (Screen 06) */}
+          {studioTab === 'guardrails' && <AgentGuardrailsTab />}
 
-          {/* TAB: TEST PLAYGROUND */}
+          {/* TAB: TEST PLAYGROUND (Screen 07) */}
           {studioTab === 'test' && (
-            <div role="tabpanel" aria-label="Test Playground" style={{ padding: '18px 20px', display: 'grid', gap: '14px' }}>
-              <form onSubmit={(e) => void handleRunPlayground(e)} style={{ display: 'grid', gap: '10px' }}>
-                <div>
-                  <label htmlFor="playground-prompt" style={{ display: 'block', fontWeight: 600 }}>
-                    Test Prompt
-                  </label>
-                  <textarea
-                    id="playground-prompt"
-                    rows={3}
-                    required
-                    value={testPrompt}
-                    onChange={(e) => setTestPrompt(e.target.value)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <input
-                      type="checkbox"
-                      checked={dryRun}
-                      onChange={(e) => setDryRun(e.target.checked)}
-                    />
-                    <span>Dry-run (validate policies &amp; args without executing external tools)</span>
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={runningTest}
-                    style={{
-                      minHeight: '34px',
-                      padding: '6px 14px',
-                      border: 'none',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--brand)',
-                      color: 'var(--brand-contrast)',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {runningTest ? 'Running…' : 'Run Test'}
-                  </button>
-                </div>
-              </form>
-
-              {lastRun && (
-                <div style={{ display: 'grid', gap: '10px', borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <StatusChip
-                        label={`${lastRun.status} (${lastRun.terminationReason ?? 'done'})`}
-                        tone={lastRun.status === 'succeeded' ? 'success' : 'warning'}
-                      />
-                      <span>
-                        Cost: <strong>{lastRun.costMicroUsd} micro-USD</strong> (
-                        {formatUsdFromMicro(lastRun.costMicroUsd)})
-                      </span>
-                      <span>
-                        Tokens: {lastRun.usage.tokensIn} in / {lastRun.usage.tokensOut} out
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSavedTestCases((prev) => [
-                          ...prev,
-                          { prompt: testPrompt, runId: lastRun.id },
-                        ])
-                      }
-                      style={{
-                        minHeight: '30px',
-                        padding: '4px 10px',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-sm)',
-                        backgroundColor: 'var(--surface-raised)',
-                        color: 'var(--text-primary)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Save as test case
-                    </button>
-                  </div>
-
-                  <div
-                    style={{
-                      padding: '10px',
-                      backgroundColor: 'var(--surface-raised)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                    }}
-                  >
-                    <strong>Output:</strong> <code>{JSON.stringify(lastRun.output)}</code>
-                  </div>
-
-                  <div>
-                    <h3 style={{ margin: '4px 0', fontSize: '14px' }}>
-                      Execution Trace ({lastSteps.length} steps · {lastLedger.length} ledger rows)
-                    </h3>
-                    <ul style={{ margin: 0, paddingLeft: '18px', display: 'grid', gap: '4px' }}>
-                      {lastSteps.map((s) => (
-                        <li key={s.id}>
-                          <code>
-                            #{s.seq} {s.type}
-                          </code>{' '}
-                          — {s.status} ({s.costMicroUsd} micro-USD, {s.latencyMs}ms)
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  {savedTestCases.length > 0 && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      Saved eval test cases: {savedTestCases.length}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <AgentPlaygroundTab
+              selectedAgent={selectedAgent}
+              studioEnv={studioEnv}
+              onEnvChange={setStudioEnv}
+              testPrompt={testPrompt}
+              onTestPromptChange={setTestPrompt}
+              dryRun={dryRun}
+              onDryRunChange={setDryRun}
+              runningTest={runningTest}
+              lastRun={lastRun}
+              lastSteps={lastSteps}
+              lastLedger={lastLedger}
+              savedTestCases={savedTestCases}
+              onRunTest={(e) => void handleRunPlayground(e)}
+              onSaveAsTestCase={(prompt, runId) =>
+                setSavedTestCases((prev) => [...prev, { prompt, runId }])
+              }
+            />
           )}
 
-          {/* TAB: EVALS */}
+          {/* TAB: EVALS (Screen 08) */}
           {studioTab === 'evals' && (
-            <div role="tabpanel" aria-label="Agent Evals" style={{ padding: '18px 20px' }}>
-              <StateView
-                state="empty"
-                title="Agent Evaluation Scorecards"
-                description="Run golden-set experiments in the Evaluations workspace to gate staging and production promotions."
-              />
-            </div>
+            <AgentEvalsTab
+              client={client}
+              agentVersionId={
+                selectedAgent.draftVersion?.id ?? selectedAgent.publishedVersion?.id ?? 'agv_1'
+              }
+            />
           )}
 
-          {/* TAB: VERSIONS */}
+          {/* TAB: VERSIONS (Screen 09) */}
           {studioTab === 'versions' && (
-            <div role="tabpanel" aria-label="Agent Versions" style={{ padding: '18px 20px', display: 'grid', gap: '10px' }}>
-              <h3 style={{ margin: 0, fontSize: '15px' }}>Version History ({selectedAgent.versions.length})</h3>
-              <ul style={{ margin: 0, paddingLeft: '18px', display: 'grid', gap: '6px' }}>
-                {selectedAgent.versions.map((v) => (
-                  <li key={v.id} style={{ fontSize: '13px' }}>
-                    <strong>v{v.semver}</strong> ({v.state}) — {v.message ?? 'Draft version'}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <AgentVersionsTab
+              agent={selectedAgent}
+              versionDiff={versionDiff}
+              onComputeDiff={() => void handleComputeDiff()}
+              onRestoreVersion={(semver) => {
+                setDraftSemver(`${semver}-restored`);
+                setStudioTab('configure');
+                setNotice(`Loaded v${semver} configuration into draft editor.`);
+              }}
+              onForkVersion={(semver) => {
+                setDraftSemver(`${semver}-fork`);
+                setStudioTab('configure');
+                setNotice(`Forked v${semver} into a new draft branch.`);
+              }}
+              onPromoteTab={() => setStudioTab('deployments')}
+            />
           )}
 
           {/* TAB: TEAM CANVAS */}
@@ -2187,7 +1996,7 @@ export function AgentStudioView({
             </div>
           )}
 
-          {/* TAB: DEPLOYMENTS */}
+          {/* TAB: DEPLOYMENTS (Screen 10) */}
           {studioTab === 'deployments' && (
             <div role="tabpanel" aria-label="Deployments" style={{ padding: '18px 20px', display: 'grid', gap: '14px' }}>
               <DeploymentsView
@@ -2201,15 +2010,14 @@ export function AgentStudioView({
             </div>
           )}
 
-          {/* TAB: ACTIVITY */}
+          {/* TAB: ACTIVITY (Screen 11) */}
           {studioTab === 'activity' && (
-            <div role="tabpanel" aria-label="Agent Activity" style={{ padding: '18px 20px' }}>
-              <StateView
-                state="empty"
-                title="Agent Activity Timeline"
-                description="Version updates, deployments, runs, and approval events for this agent appear here."
-              />
-            </div>
+            <AgentActivityTab
+              client={client}
+              workspaceId={workspaceId}
+              agent={selectedAgent}
+              actorName={ownerName}
+            />
           )}
 
           {/* Bottom Collapsible Run Console Strip (Image 1) */}

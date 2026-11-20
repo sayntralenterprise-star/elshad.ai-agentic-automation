@@ -215,7 +215,9 @@ export function DeploymentsView({
                   padding: '12px',
                   backgroundColor: 'var(--surface)',
                   border: '1px solid var(--border)',
+                  borderTop: d.environment === 'prod' ? '3px solid var(--env-prod)' : '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
@@ -232,6 +234,15 @@ export function DeploymentsView({
                 </div>
                 <div style={{ fontSize: '13px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
                   Live: {d.versionId}
+                </div>
+                <div style={{ height: '5px', borderRadius: '9999px', backgroundColor: 'var(--surface-raised)', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      width: `${Math.min(100, Math.max(0, d.trafficPct))}%`,
+                      height: '100%',
+                      backgroundColor: d.environment === 'prod' ? 'var(--env-prod)' : 'var(--brand)',
+                    }}
+                  />
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                   Previous: {d.previousVersionId ?? 'none'}
@@ -373,6 +384,26 @@ export function DeploymentsView({
                 color: 'var(--text-primary)',
               }}
             />
+            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+              {[10, 50, 100].map((pct) => (
+                <button
+                  key={pct}
+                  type="button"
+                  onClick={() => setCanaryPct(pct)}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '11px',
+                    borderRadius: '4px',
+                    border: canaryPct === pct ? '1px solid var(--brand)' : '1px solid var(--border)',
+                    backgroundColor: canaryPct === pct ? 'var(--lavender)' : 'var(--surface)',
+                    color: canaryPct === pct ? 'var(--brand)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
