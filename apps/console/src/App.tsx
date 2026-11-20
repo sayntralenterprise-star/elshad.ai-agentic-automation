@@ -1334,6 +1334,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                     client={client}
                     workspaceId={activeWorkspace?.id}
                     environment={env}
+                    auditEvents={auditEvents}
                   />
                 </div>
               )}

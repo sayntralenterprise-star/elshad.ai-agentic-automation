@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { PlatformError, type EnvironmentKind } from '@elshad/domain';
 import {
+  type AgentDto,
   type AgentIdentityDto,
+  type AuditEventDto,
   type AuditExportDto,
   type AuditVerifyDto,
   type BudgetDto,
@@ -26,18 +28,30 @@ import {
   ShieldCheck,
   Wallet,
 } from 'lucide-react';
+import {
+  AccessManagementPanel,
+  AgentGovernanceRegistryPanel,
+  AuditGovernancePanel,
+  BudgetHierarchyPanel,
+} from './governance/GovernanceSubpages.js';
 
 export interface GovernanceHardeningViewProps {
   client: PlatformClient;
   workspaceId?: string;
   environment: EnvironmentKind;
+  auditEvents?: AuditEventDto[];
 }
+
+type GovTab = 'overview' | 'policies' | 'agents' | 'budgets' | 'access' | 'audit';
 
 export function GovernanceHardeningView({
   client,
   workspaceId,
   environment,
+  auditEvents = [],
 }: GovernanceHardeningViewProps) {
+  const [govTab, setGovTab] = useState<GovTab>('overview');
+  const [agents, setAgents] = useState<AgentDto[]>([]);
   const [secrets, setSecrets] = useState<SecretMetadataDto[]>([]);
   const [budgets, setBudgets] = useState<BudgetDto[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchDto[]>([]);
@@ -78,6 +92,7 @@ export function GovernanceHardeningView({
   const [policyPoint, setPolicyPoint] = useState<PolicyPointDto>('tool_call');
   const [policyEffect, setPolicyEffect] = useState<'allow' | 'deny' | 'require_approval'>('deny');
   const [policyEnv, setPolicyEnv] = useState<'dev' | 'staging' | 'prod'>('prod');
+  const [policyMaxSpend, setPolicyMaxSpend] = useState('25.00');
   const [policySecondApprover, setPolicySecondApprover] = useState('prn_reviewer_2');
 
   const [aidAgentId, setAidAgentId] = useState('agt_1');
@@ -92,7 +107,7 @@ export function GovernanceHardeningView({
 
   const loadHardeningState = useCallback(async () => {
     try {
-      const [secList, budList, ksList, polList, aidList, tgList] = await Promise.all([
+      const [secList, budList, ksList, polList, aidList, tgList, agentList] = await Promise.all([
         client.secrets.list().catch(() => [] as SecretMetadataDto[]),
         client.budgets.list().catch(() => [] as BudgetDto[]),
         client.killswitches.list().catch(() => [] as KillSwitchDto[]),
@@ -103,6 +118,7 @@ export function GovernanceHardeningView({
         client.toolGrants?.list
           ? client.toolGrants.list().catch(() => [] as ToolGrantDto[])
           : Promise.resolve([]),
+        client.agents?.list ? client.agents.list().catch(() => [] as AgentDto[]) : Promise.resolve([]),
       ]);
       setSecrets(secList);
       setBudgets(budList);
@@ -110,6 +126,7 @@ export function GovernanceHardeningView({
       setPolicies(polList);
       setAgentIdentities(aidList);
       setToolGrants(tgList);
+      setAgents(agentList);
     } catch (err) {
       setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
     }
@@ -422,8 +439,83 @@ export function GovernanceHardeningView({
 
       {notice && <SuccessNotice message={notice} />}
 
-      {/* Audit Hash Chain Verification Bar */}
+      {/* elshad.ai Screen 22 Governance Header & Subpage Switcher */}
       <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          padding: '14px 16px',
+          backgroundColor: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: '14px',
+          boxShadow: 'var(--shadow-card)',
+        }}
+      >
+        <div>
+          <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--brand)' }}>
+            elshad.ai Governance
+          </div>
+          <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            Policy, Identity, Budget &amp; Compliance Control Plane
+          </h2>
+        </div>
+        <div
+          role="tablist"
+          aria-label="Governance sections"
+          style={{
+            display: 'flex',
+            gap: '6px',
+            flexWrap: 'wrap',
+            padding: '4px',
+            backgroundColor: 'var(--lavender-soft)',
+            borderRadius: '10px',
+            border: '1px solid var(--lavender-border)',
+          }}
+        >
+          {(
+            [
+              { id: 'overview', label: 'Overview' },
+              { id: 'policies', label: 'Policies' },
+              { id: 'agents', label: 'Agent Registry' },
+              { id: 'budgets', label: 'Budgets' },
+              { id: 'access', label: 'Access Management' },
+              { id: 'audit', label: 'Audit Log' },
+            ] as const
+          ).map((tab) => {
+            const active = govTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                id={`gov-tab-${tab.id}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setGovTab(tab.id)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  border: active ? '1px solid var(--brand)' : '1px solid transparent',
+                  backgroundColor: active ? 'var(--brand)' : 'transparent',
+                  color: active ? 'var(--brand-contrast)' : 'var(--text-primary)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {govTab === 'overview' && (
+        <>
+          {/* Audit Hash Chain Verification Bar */}
+          <div
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -927,8 +1019,10 @@ export function GovernanceHardeningView({
           )}
         </section>
       </div>
+        </>
+      )}
 
-      {/* S1.2 Governance v1: Declarative Policies & Simulation | Agent Identities & Tool Grants */}
+      {(govTab === 'overview' || govTab === 'policies') && (
       <div
         style={{
           display: 'grid',
@@ -1037,6 +1131,38 @@ export function GovernanceHardeningView({
               </div>
             </div>
 
+            <div
+              style={{
+                padding: '8px 10px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--lavender-soft)',
+                border: '1px solid var(--lavender-border)',
+                display: 'grid',
+                gap: '6px',
+              }}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--brand)' }}>
+                Visual Condition Builder
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: '12px' }}>
+                <span>WHEN</span>
+                <code>env == "{policyEnv}"</code>
+                <span>AND</span>
+                <label htmlFor="policy-max-spend-input" style={{ fontWeight: 600 }}>
+                  Max Run Spend (USD) &gt;
+                </label>
+                <input
+                  id="policy-max-spend-input"
+                  type="text"
+                  value={policyMaxSpend}
+                  onChange={(e) => setPolicyMaxSpend(e.target.value)}
+                  style={{ width: '80px', padding: '4px 6px', border: '1px solid var(--border)', borderRadius: '6px' }}
+                />
+                <span>THEN</span>
+                <code>{policyEffect}</code>
+              </div>
+            </div>
+
             <button
               type="submit"
               style={{
@@ -1100,7 +1226,20 @@ export function GovernanceHardeningView({
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                     <div>
-                      <strong>{pol.name}</strong> (<code>{pol.slug}</code>) · {pol.effect} ·{' '}
+                      <strong>{pol.name}</strong> (<code>{pol.slug}</code>){' '}
+                      <span
+                        style={{
+                          padding: '2px 6px',
+                          borderRadius: '999px',
+                          backgroundColor: 'var(--lavender-soft)',
+                          color: 'var(--brand)',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        v{pol.version}
+                      </span>{' '}
+                      · {pol.effect} ·{' '}
                       <StatusChip label={pol.mode} tone={pol.mode === 'enforce' ? 'success' : 'info'} />
                     </div>
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -1174,7 +1313,9 @@ export function GovernanceHardeningView({
           )}
         </section>
 
-        {/* 5. Agent Identities & Scoped Tool Grants */}
+        {govTab === 'overview' && (
+          <>
+            {/* 5. Agent Identities & Scoped Tool Grants */}
         <section
           aria-label="Agent Identities and Scoped Tool Grants"
           style={{
@@ -1358,7 +1499,56 @@ export function GovernanceHardeningView({
             </ul>
           )}
         </section>
+          </>
+        )}
+
+        {govTab === 'policies' && (
+          <section
+            aria-label="Policy Version History and Rollout"
+            style={{
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px',
+              display: 'grid',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Shield size={16} aria-hidden="true" />
+                <h2 style={{ margin: 0, fontSize: '15px' }}>Policy Version History &amp; Rollout Stages</h2>
+              </div>
+              <StatusChip label={`${policies.length} active rules`} tone="info" />
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              Active condition draft: <code>env == "{policyEnv}" &amp;&amp; run_cost &lt;= ${policyMaxSpend}</code> · Rollout progresses from <code>audit_only</code> shadow evaluation to two-person (SoD) <code>enforce</code>.
+            </div>
+            {policies.length === 0 ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                No policies created yet. Create a declarative rule on the left to track versions and rollout approvals.
+              </div>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', display: 'grid', gap: '6px' }}>
+                {policies.map((p) => (
+                  <li key={`${p.id}-history`}>
+                    <strong>{p.name}</strong> (<code>{p.slug}</code>) · <strong>v{p.version}</strong> · {p.point} →{' '}
+                    <code>{p.mode}</code> {p.approvedBy ? `(approved by ${p.approvedBy})` : '(awaiting SoD enforcement)'}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
       </div>
+      )}
+
+      {govTab === 'agents' && <AgentGovernanceRegistryPanel agents={agents} onNotice={(m) => setNotice(m)} />}
+      {govTab === 'budgets' && <BudgetHierarchyPanel budgets={budgets} />}
+      {govTab === 'access' && (
+        <AccessManagementPanel agentIdentities={agentIdentities} onNotice={(m) => setNotice(m)} />
+      )}
+      {govTab === 'audit' && <AuditGovernancePanel auditEvents={auditEvents} onNotice={(m) => setNotice(m)} />}
     </div>
   );
 }

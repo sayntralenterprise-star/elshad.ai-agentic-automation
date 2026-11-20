@@ -3441,4 +3441,73 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     });
     expect(axeKm.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 20_000);
+
+  it('renders Intelligence & Governance Screens 20-22: Eval Red-Team/Import, 5 Monitoring Dashboards/Widget Builder/Chargeback & Governance 5 Subpages', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+
+    // Screen 20: Evaluations & Experiments + CSV/JSONL Import + Review & Red-Team
+    const evalRender = render(<ConsoleApp client={client} initialPath="/w/default/e/dev/evaluations" />);
+    expect(await screen.findByText('Golden Datasets')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'New Set' }));
+    await user.type(screen.getByPlaceholderText('e.g. Support Triage Regression Set'), 'Red-Team Baseline');
+    await user.click(screen.getByRole('button', { name: 'Create Dataset' }));
+    await user.click(await screen.findByRole('button', { name: /Import CSV \/ JSONL/i }));
+    await user.click(await screen.findByRole('button', { name: 'Run Import' }));
+    await user.click(screen.getByRole('tab', { name: /Review & Red-Team/i }));
+    await user.click(await screen.findByRole('button', { name: 'Submit Grade' }));
+    await user.click(screen.getAllByRole('button', { name: /Run Attack Suite/i })[0]!);
+    const axeEval = await axe.run(evalRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeEval.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    evalRender.unmount();
+
+    // Screen 21: Monitoring & Cost — 5 Dashboards, Custom Widget Builder, Chargeback
+    const monRender = render(<ConsoleApp client={client} initialPath="/w/default/e/dev/monitoring" />);
+    await user.click(await screen.findByRole('button', { name: 'Operations' }));
+    await user.click(screen.getByRole('button', { name: 'Security' }));
+    await user.click(screen.getByRole('button', { name: /\+ Add Custom Widget/i }));
+    await user.click(await screen.findByRole('button', { name: 'Save Widget' }));
+    await user.click(screen.getByRole('button', { name: 'Cost & Usage' }));
+    expect(await screen.findByText(/30-Day Forecast/i)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Generate Chargeback Report/i }));
+    const axeMon = await axe.run(monRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeMon.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    monRender.unmount();
+
+    // Screen 22: Governance — Policies, Agent Registry, Budgets, Access Management, Audit Log
+    await client.agents.create(
+      {
+        workspaceId: 'ws_1',
+        definition: { name: 'Support Triage', version: '1.0.0', description: 'Customer triage agent' },
+      },
+      'idem-gov-agent-1',
+    );
+    const govRender = render(<ConsoleApp client={client} initialPath="/w/default/e/dev/governance" />);
+    await user.click(await screen.findByRole('tab', { name: 'Policies' }));
+    expect(await screen.findByRole('region', { name: 'Policy Version History and Rollout' })).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Agent Registry' }));
+    expect(await screen.findByRole('region', { name: 'Agent Risk Heatmap' })).toBeTruthy();
+    await user.click((await screen.findAllByRole('button', { name: 'Attest Agent' }))[0]!);
+
+    await user.click(screen.getByRole('tab', { name: 'Budgets' }));
+    expect(await screen.findByRole('region', { name: 'Hierarchical budget tree' })).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Access Management' }));
+    expect(await screen.findByRole('table', { name: 'Permission matrix' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Complete Review' }));
+
+    await user.click(screen.getByRole('tab', { name: 'Audit Log' }));
+    await user.click(await screen.findByRole('button', { name: 'Test SIEM Stream' }));
+
+    const axeGov = await axe.run(govRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeGov.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    govRender.unmount();
+  }, 20_000);
 });

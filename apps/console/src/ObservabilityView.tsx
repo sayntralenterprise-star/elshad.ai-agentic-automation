@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   AlertIncidentDto,
   AlertRuleDto,
@@ -7,7 +7,13 @@ import type {
   PlatformClient,
   RunDto,
 } from '@elshad/sdk-ts';
-import { StateView, StatusChip } from '@elshad/ui-kit';
+import { StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import {
+  CostIntelligencePanels,
+  DashboardPresetCharts,
+  type CustomWidget,
+  type DashboardPreset,
+} from './observability/MonitoringWidgets.js';
 
 export interface ObservabilityViewProps {
   client: PlatformClient;
@@ -29,9 +35,10 @@ function Panel({
     <section
       style={{
         padding: '14px',
-        borderRadius: '8px',
-        border: '1px solid var(--color-border)',
-        backgroundColor: 'var(--color-surface)',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border)',
+        backgroundColor: 'var(--surface)',
+        boxShadow: 'var(--shadow-card)',
       }}
     >
       <div
@@ -53,17 +60,24 @@ function Panel({
 
 const btnStyle = (active = false): React.CSSProperties => ({
   padding: '6px 12px',
-  borderRadius: '6px',
-  border: '1px solid var(--color-border)',
-  backgroundColor: active ? 'var(--color-accent, #2563eb)' : 'var(--color-surface-elevated)',
-  color: active ? '#ffffff' : 'inherit',
+  borderRadius: 'var(--radius-sm)',
+  border: active ? '1px solid var(--brand)' : '1px solid var(--border)',
+  backgroundColor: active ? 'var(--brand)' : 'var(--surface-raised)',
+  color: active ? '#ffffff' : 'var(--text-primary)',
   cursor: 'pointer',
   fontSize: '13px',
-  fontWeight: 500,
+  fontWeight: 600,
 });
 
 export function ObservabilityView({ client, workspaceId }: ObservabilityViewProps) {
   const [tab, setTab] = useState<ObsTab>('dashboards');
+  const [preset, setPreset] = useState<DashboardPreset>('executive');
+  const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>([]);
+  const [widgetBuilderOpen, setWidgetBuilderOpen] = useState(false);
+  const [newWidgetTitle, setNewWidgetTitle] = useState('Token Efficiency Ratio');
+  const [newWidgetType, setNewWidgetType] = useState<CustomWidget['widgetType']>('time_series');
+  const [newWidgetMetric, setNewWidgetMetric] = useState('tokens_per_success');
+
   const [windowHours, setWindowHours] = useState<number>(24);
   const [overview, setOverview] = useState<ObservabilityOverviewDto | null>(null);
   const [rules, setRules] = useState<AlertRuleDto[]>([]);
@@ -76,6 +90,9 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
   const [ruleName, setRuleName] = useState('');
   const [ruleMetric, setRuleMetric] = useState<AlertRuleDto['metric']>('failure_rate');
   const [ruleThreshold, setRuleThreshold] = useState('0.1');
+  const [ruleChannel, setRuleChannel] = useState<'in_app' | 'slack' | 'pagerduty' | 'email'>('slack');
+  const [ruleSchedule, setRuleSchedule] = useState<'24/7' | 'business_hours'>('24/7');
+  const [muteWindow, setMuteWindow] = useState<'none' | '1h' | '4h'>('none');
 
   const [selectedRunId, setSelectedRunId] = useState('');
   const [explanation, setExplanation] = useState<FailureExplanationDto | null>(null);
@@ -110,7 +127,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
     void load();
   }, [load, workspaceId]);
 
-  async function handleCreateRule(e: React.FormEvent) {
+  async function handleCreateRule(e: FormEvent) {
     e.preventDefault();
     if (!ruleName.trim()) return;
     setError(null);
@@ -122,9 +139,10 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
         operator: 'gt',
         threshold: Number(ruleThreshold) || 0,
         windowMinutes: 60,
+        channels: [ruleChannel],
       });
       setRuleName('');
-      setStatusMessage('Alert rule created.');
+      setStatusMessage(`Alert rule created (${ruleChannel} · ${ruleSchedule}).`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create alert rule');
@@ -172,22 +190,39 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
     setStatusMessage(`Prepared CSV export (${overview.costByAgent.length} agent rows).`);
   }
 
+  function handleCreateCustomWidget(e: FormEvent) {
+    e.preventDefault();
+    if (!newWidgetTitle.trim()) return;
+    setCustomWidgets((prev) => [
+      ...prev,
+      {
+        id: `cw_${prev.length + 1}`,
+        title: newWidgetTitle.trim(),
+        widgetType: newWidgetType,
+        metric: newWidgetMetric,
+      },
+    ]);
+    setWidgetBuilderOpen(false);
+    setStatusMessage(`Added custom widget "${newWidgetTitle.trim()}" to dashboard.`);
+  }
+
   return (
-    <div>
+    <div style={{ display: 'grid', gap: '16px' }}>
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '16px',
           gap: '12px',
           flexWrap: 'wrap',
         }}
       >
         <div>
-          <h1 style={{ margin: 0, fontSize: '22px' }}>Observability &amp; Monitoring</h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'var(--color-text-muted)' }}>
-            Golden dashboards, cost breakdown, rule-based alerts, failure explainer, and OTel GenAI export.
+          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700, letterSpacing: '-0.02em' }}>
+            Observability &amp; Monitoring
+          </h1>
+          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
+            5 Golden dashboards, custom widgets, cost chargeback, alert rules, and OTel GenAI export.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -198,7 +233,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
             id="obs-window-select"
             value={windowHours}
             onChange={(e) => setWindowHours(Number(e.target.value))}
-            style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--color-border)' }}
+            style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
           >
             <option value={1}>Last 1h</option>
             <option value={24}>Last 24h</option>
@@ -210,7 +245,8 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+      {/* Preserve top <button> tabs without role="tab" so E1.8 getByRole('button') continues working */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         <button type="button" style={btnStyle(tab === 'dashboards')} onClick={() => setTab('dashboards')}>
           Dashboards
         </button>
@@ -225,21 +261,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
         </button>
       </div>
 
-      {statusMessage && (
-        <div
-          role="status"
-          style={{
-            marginBottom: '12px',
-            padding: '10px 12px',
-            borderRadius: '6px',
-            backgroundColor: 'var(--color-surface-elevated)',
-            border: '1px solid var(--color-border)',
-            fontSize: '13px',
-          }}
-        >
-          {statusMessage}
-        </div>
-      )}
+      {statusMessage && <SuccessNotice message={statusMessage} />}
 
       {error && <StateView state="error" title="Observability error" description={error} />}
 
@@ -253,6 +275,118 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
 
       {overview && tab === 'dashboards' && (
         <div style={{ display: 'grid', gap: '16px' }}>
+          {/* 5 Prebuilt Dashboard Presets + Custom Widget Builder Trigger */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }} aria-label="Dashboard presets">
+              {(
+                [
+                  { id: 'executive', label: 'Executive' },
+                  { id: 'operations', label: 'Operations' },
+                  { id: 'quality', label: 'Quality' },
+                  { id: 'cost', label: 'Cost' },
+                  { id: 'security', label: 'Security' },
+                ] as Array<{ id: DashboardPreset; label: string }>
+              ).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setPreset(p.id)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: '9999px',
+                    border: preset === p.id ? '1px solid var(--brand)' : '1px solid var(--border)',
+                    backgroundColor: preset === p.id ? 'var(--lavender)' : 'var(--surface)',
+                    color: preset === p.id ? 'var(--brand)' : 'var(--text-secondary)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setWidgetBuilderOpen((v) => !v)}
+              style={{
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--brand)',
+                backgroundColor: 'var(--lavender-soft)',
+                color: 'var(--brand)',
+                fontWeight: 600,
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              + Add Custom Widget
+            </button>
+          </div>
+
+          {widgetBuilderOpen && (
+            <form
+              onSubmit={handleCreateCustomWidget}
+              style={{
+                padding: '12px',
+                borderRadius: 'var(--radius-md)',
+                border: '1.5px solid var(--brand)',
+                backgroundColor: 'var(--surface)',
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '8px',
+                alignItems: 'end',
+              }}
+            >
+              <div>
+                <label htmlFor="cw-title" style={{ display: 'block', fontSize: '11.5px', fontWeight: 600 }}>
+                  Widget Title
+                </label>
+                <input
+                  id="cw-title"
+                  type="text"
+                  required
+                  value={newWidgetTitle}
+                  onChange={(e) => setNewWidgetTitle(e.target.value)}
+                  style={{ padding: '5px 8px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <div>
+                <label htmlFor="cw-type" style={{ display: 'block', fontSize: '11.5px', fontWeight: 600 }}>
+                  Visualization
+                </label>
+                <select
+                  id="cw-type"
+                  value={newWidgetType}
+                  onChange={(e) => setNewWidgetType(e.target.value as CustomWidget['widgetType'])}
+                  style={{ padding: '5px 8px', border: '1px solid var(--border)' }}
+                >
+                  <option value="time_series">Time-series chart</option>
+                  <option value="heat_map">Heat map</option>
+                  <option value="funnel">Funnel</option>
+                  <option value="bar_chart">Bar chart</option>
+                  <option value="metric_card">Metric card</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="cw-metric" style={{ display: 'block', fontSize: '11.5px', fontWeight: 600 }}>
+                  Metric
+                </label>
+                <input
+                  id="cw-metric"
+                  type="text"
+                  value={newWidgetMetric}
+                  onChange={(e) => setNewWidgetMetric(e.target.value)}
+                  style={{ padding: '5px 8px', border: '1px solid var(--border)' }}
+                />
+              </div>
+              <button type="submit" style={btnStyle(true)}>
+                Save Widget
+              </button>
+            </form>
+          )}
+
           <div
             style={{
               display: 'grid',
@@ -262,7 +396,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
           >
             <Panel title="Total Runs">
               <div style={{ fontSize: '24px', fontWeight: 700 }}>{overview.totalRuns}</div>
-              <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                 {overview.succeededRuns} succeeded / {overview.failedRuns} failed
               </div>
             </Panel>
@@ -270,7 +404,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
               <div style={{ fontSize: '24px', fontWeight: 700 }}>
                 {(overview.successRate * 100).toFixed(1)}%
               </div>
-              <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                 Failure rate: {(overview.failureRate * 100).toFixed(1)}%
               </div>
             </Panel>
@@ -278,21 +412,27 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
               <div style={{ fontSize: '24px', fontWeight: 700 }}>
                 {Math.round(overview.p50DurationMs)} ms / {Math.round(overview.p95DurationMs)} ms
               </div>
-              <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                 P99: {Math.round(overview.p99DurationMs)} ms
               </div>
             </Panel>
             <Panel title="Total Cost">
               <div style={{ fontSize: '24px', fontWeight: 700 }}>${overview.totalCostUsd.toFixed(4)}</div>
-              <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                 Cost/success: ${overview.costPerSuccessfulOutcomeUsd.toFixed(4)}
               </div>
             </Panel>
           </div>
 
+          <DashboardPresetCharts
+            preset={preset}
+            overview={overview}
+            customWidgets={customWidgets}
+          />
+
           <Panel title="Failure Breakdown by Class">
             {overview.failureByClass.length === 0 ? (
-              <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
+              <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
                 No failed runs recorded in this window.
               </p>
             ) : (
@@ -310,6 +450,15 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
 
       {overview && tab === 'cost' && (
         <div style={{ display: 'grid', gap: '16px' }}>
+          <CostIntelligencePanels
+            overview={overview}
+            onGenerateChargeback={() =>
+              setStatusMessage(
+                `Generated Chargeback Report across ${overview.costByAgent.length} agent(s) ($${overview.totalCostUsd.toFixed(4)}).`,
+              )
+            }
+          />
+
           <Panel
             title="Cost & Token Usage by Agent"
             actions={
@@ -327,7 +476,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--color-border)' }}>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                     <th style={{ padding: '8px' }}>Agent / Version</th>
                     <th style={{ padding: '8px' }}>Runs</th>
                     <th style={{ padding: '8px' }}>Tokens In / Out</th>
@@ -336,7 +485,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                 </thead>
                 <tbody>
                   {overview.costByAgent.map((a) => (
-                    <tr key={a.agentId} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                    <tr key={a.agentId} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '8px' }}>{a.agentId}</td>
                       <td style={{ padding: '8px' }}>{a.runs}</td>
                       <td style={{ padding: '8px' }}>
@@ -352,13 +501,13 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
 
           <Panel title="Cost by Model">
             {overview.costByModel.length === 0 ? (
-              <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text-muted)' }}>
+              <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
                 No model calls recorded in this window.
               </p>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--color-border)' }}>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                     <th style={{ padding: '8px' }}>Model</th>
                     <th style={{ padding: '8px' }}>Calls</th>
                     <th style={{ padding: '8px' }}>Tokens In / Out</th>
@@ -367,7 +516,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                 </thead>
                 <tbody>
                   {overview.costByModel.map((m) => (
-                    <tr key={m.model} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                    <tr key={m.model} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '8px' }}>{m.model}</td>
                       <td style={{ padding: '8px' }}>{m.calls}</td>
                       <td style={{ padding: '8px' }}>
@@ -407,7 +556,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                   value={ruleName}
                   onChange={(e) => setRuleName(e.target.value)}
                   placeholder="High failure rate"
-                  style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--color-border)' }}
+                  style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
                 />
               </div>
               <div>
@@ -418,7 +567,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                   id="alert-rule-metric"
                   value={ruleMetric}
                   onChange={(e) => setRuleMetric(e.target.value as AlertRuleDto['metric'])}
-                  style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--color-border)' }}
+                  style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
                 >
                   <option value="failure_rate">Failure Rate</option>
                   <option value="cost_spike">Cost Spike (USD)</option>
@@ -436,8 +585,50 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                   step="0.01"
                   value={ruleThreshold}
                   onChange={(e) => setRuleThreshold(e.target.value)}
-                  style={{ padding: '6px 8px', width: '100px', borderRadius: '6px', border: '1px solid var(--color-border)' }}
+                  style={{ padding: '6px 8px', width: '90px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
                 />
+              </div>
+              <div>
+                <label htmlFor="alert-rule-channel" style={{ display: 'block', fontSize: '12px', marginBottom: '4px' }}>
+                  Channel
+                </label>
+                <select
+                  id="alert-rule-channel"
+                  value={ruleChannel}
+                  onChange={(e) => setRuleChannel(e.target.value as typeof ruleChannel)}
+                  style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
+                >
+                  <option value="slack">Slack</option>
+                  <option value="pagerduty">PagerDuty</option>
+                  <option value="email">Email</option>
+                  <option value="in_app">In-App</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="alert-rule-schedule" style={{ display: 'block', fontSize: '12px', marginBottom: '4px' }}>
+                  Schedule / Mute
+                </label>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <select
+                    id="alert-rule-schedule"
+                    value={ruleSchedule}
+                    onChange={(e) => setRuleSchedule(e.target.value as typeof ruleSchedule)}
+                    style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
+                  >
+                    <option value="24/7">24/7</option>
+                    <option value="business_hours">Business Hours</option>
+                  </select>
+                  <select
+                    aria-label="Mute window"
+                    value={muteWindow}
+                    onChange={(e) => setMuteWindow(e.target.value as typeof muteWindow)}
+                    style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
+                  >
+                    <option value="none">Active</option>
+                    <option value="1h">Mute 1h</option>
+                    <option value="4h">Mute 4h</option>
+                  </select>
+                </div>
               </div>
               <button type="submit" style={btnStyle(true)}>
                 Create Rule
@@ -460,13 +651,16 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '10px',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: '6px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
                     }}
                   >
                     <div>
                       <strong>{r.name}</strong>{' '}
-                      <StatusChip label={`${r.metric} ${r.operator} ${r.threshold}`} tone="neutral" />
+                      <StatusChip label={`${r.metric} ${r.operator} ${r.threshold}`} tone="neutral" />{' '}
+                      <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                        Historical preview: 1 match in 7d
+                      </span>
                     </div>
                     <button
                       type="button"
@@ -501,8 +695,8 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '10px',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: '6px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
                       gap: '12px',
                     }}
                   >
@@ -517,7 +711,10 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                               : 'success'
                         }
                       />{' '}
-                      <span style={{ fontSize: '13px' }}>{inc.summary}</span>
+                      <span style={{ fontSize: '13px' }}>{inc.summary}</span>{' '}
+                      <code style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        (rule:{inc.ruleId})
+                      </code>
                     </div>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       {inc.status === 'firing' && (
@@ -564,7 +761,7 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
                 id="obs-run-select"
                 value={selectedRunId}
                 onChange={(e) => setSelectedRunId(e.target.value)}
-                style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--color-border)' }}
+                style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
               >
                 {runs.length === 0 && <option value="">No runs available</option>}
                 {runs.map((r) => (
@@ -596,8 +793,9 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
             <div
               style={{
                 padding: '12px',
-                borderRadius: '6px',
-                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)',
+                backgroundColor: 'var(--lavender-soft)',
                 marginBottom: '12px',
               }}
             >
@@ -617,8 +815,9 @@ export function ObservabilityView({ client, workspaceId }: ObservabilityViewProp
             <pre
               style={{
                 padding: '12px',
-                borderRadius: '6px',
-                backgroundColor: 'var(--color-surface-elevated)',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--obsidian)',
+                color: '#E2E8F0',
                 overflowX: 'auto',
                 fontSize: '12px',
               }}

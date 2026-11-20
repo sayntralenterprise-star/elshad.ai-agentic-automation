@@ -8,7 +8,7 @@ import type {
   PlatformClient,
   TestCaseDto,
 } from '@elshad/sdk-ts';
-import { StateView, StatusChip, SuccessNotice, type BadgeTone } from '@elshad/ui-kit';
+import { Sparkline, StateView, StatusChip, SuccessNotice, type BadgeTone } from '@elshad/ui-kit';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -18,9 +18,12 @@ import {
   FlaskConical,
   Play,
   Plus,
+  ShieldAlert,
+  Upload,
   Wrench,
   XCircle,
 } from 'lucide-react';
+import { ReviewAndRedTeamTab } from './evaluations/ReviewAndRedTeamTab.js';
 
 export interface EvaluationsViewProps {
   client: PlatformClient;
@@ -28,7 +31,7 @@ export interface EvaluationsViewProps {
   initialSaveRunId?: string | null;
 }
 
-type EvalTab = 'datasets' | 'graders' | 'experiments';
+type EvalTab = 'datasets' | 'graders' | 'experiments' | 'review';
 
 export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   const [activeTab, setActiveTab] = useState<EvalTab>('datasets');
@@ -38,6 +41,10 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [testCases, setTestCases] = useState<TestCaseDto[]>([]);
   const [selectedTestCaseId, setSelectedTestCaseId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState(
+    '{"name":"Duplicate invoice guard","inputs":{"prompt":"Pay invoice INV-77 twice"},"expectedOutput":{"result":"Blocked"}}',
+  );
 
   // Graders state
   const [graders, setGraders] = useState<GraderDto[]>([]);
@@ -54,7 +61,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Modal / Form toggles
+  // Modal toggles
   const [showNewDatasetModal, setShowNewDatasetModal] = useState(false);
   const [showNewTestCaseModal, setShowNewTestCaseModal] = useState(false);
   const [showNewGraderModal, setShowNewGraderModal] = useState(false);
@@ -79,7 +86,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   const [newExpBaselineId, setNewExpBaselineId] = useState('');
   const [newExpMinPassRate, setNewExpMinPassRate] = useState('0.95');
 
-  // Load initial data
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -109,7 +115,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
     void loadData();
   }, [loadData, workspaceId]);
 
-  // Load test cases when selected dataset changes
   useEffect(() => {
     if (!selectedDatasetId) {
       setTestCases([]);
@@ -134,7 +139,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
     };
   }, [client, selectedDatasetId]);
 
-  // Load experiment results when selected experiment changes
   useEffect(() => {
     if (!selectedExperimentId) {
       setExperimentResults([]);
@@ -159,7 +163,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
     };
   }, [client, selectedExperimentId]);
 
-  // Handlers for creating entities
   const handleCreateDataset = async (e: React.FormEvent) => {
     e.preventDefault();
     setActionLoading(true);
@@ -209,6 +212,80 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
       setShowNewTestCaseModal(false);
       setNewTcName('');
       setNotice(`Created test case "${created.name}"`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleImportCases = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDatasetId || !importText.trim()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const lines = importText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      let importedCount = 0;
+      for (const line of lines) {
+        if (line.startsWith('{')) {
+          const obj = JSON.parse(line) as {
+            name?: string;
+            inputs?: Record<string, unknown>;
+            expectedOutput?: Record<string, unknown>;
+          };
+          const tc = await client.evaluations.datasets.createTestCase(selectedDatasetId, {
+            name: obj.name ?? `Imported Case ${importedCount + 1}`,
+            inputs: obj.inputs ?? { raw: line },
+            expectedOutput: obj.expectedOutput,
+          });
+          setTestCases((prev) => [tc, ...prev]);
+          importedCount += 1;
+        } else {
+          const [namePart, promptPart, expectedPart] = line.split(',');
+          const tc = await client.evaluations.datasets.createTestCase(selectedDatasetId, {
+            name: (namePart ?? '').trim() || `CSV Case ${importedCount + 1}`,
+            inputs: { prompt: (promptPart ?? line).trim() },
+            expectedOutput: expectedPart ? { result: expectedPart.trim() } : undefined,
+          });
+          setTestCases((prev) => [tc, ...prev]);
+          importedCount += 1;
+        }
+      }
+      setImportOpen(false);
+      setNotice(`Imported ${importedCount} test case(s) from CSV/JSONL.`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleImportFromLatestRun = async () => {
+    if (!selectedDatasetId) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const recentRuns = await client.runs.list().catch(() => []);
+      const latest = recentRuns[0];
+      const created = await client.evaluations.datasets.createTestCase(selectedDatasetId, {
+        name: latest ? `Captured Run ${latest.id}` : 'Captured Production Run Case',
+        inputs:
+          latest?.input && typeof latest.input === 'object'
+            ? (latest.input as Record<string, unknown>)
+            : { prompt: 'Replayed run input' },
+        expectedOutput:
+          latest?.output && typeof latest.output === 'object'
+            ? (latest.output as Record<string, unknown>)
+            : { ok: true },
+        difficulty: 'medium',
+      });
+      setTestCases((prev) => [created, ...prev]);
+      setSelectedTestCaseId(created.id);
+      setNotice(`Imported case "${created.name}" from run trace.`);
     } catch (err) {
       setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
     } finally {
@@ -285,6 +362,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   };
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
+  const selectedTestCase = testCases.find((tc) => tc.id === selectedTestCaseId) ?? null;
   const selectedExperiment = experiments.find((e) => e.id === selectedExperimentId);
   const selectedResult = experimentResults.find((r) => r.id === selectedResultId);
 
@@ -296,7 +374,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
   };
 
   return (
-    <div style={{ display: 'grid', gap: '20px' }}>
+    <div style={{ display: 'grid', gap: '18px' }}>
       {/* Header & Sub-nav */}
       <div
         style={{
@@ -308,12 +386,12 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
         }}
       >
         <div>
-          <h1 style={{ margin: 0, fontSize: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FileCheck2 size={24} color="var(--primary)" />
-            Evaluations &amp; Release Gates
+          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileCheck2 size={22} style={{ color: 'var(--brand)' }} aria-hidden="true" />
+            <span>Evaluations &amp; Release Gates</span>
           </h1>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '13px' }}>
-            Golden datasets, automated graders, side-by-side experiments, and CI/CD promotion gates (PRD §5.6, §7.3.9)
+            Golden datasets, automated graders, side-by-side experiments, human review queues &amp; red-teaming.
           </p>
         </div>
 
@@ -324,76 +402,89 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           style={{
             display: 'flex',
             gap: '4px',
-            backgroundColor: 'var(--surface-sunken)',
+            flexWrap: 'wrap',
+            backgroundColor: 'var(--surface-raised)',
             padding: '4px',
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--border)',
           }}
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'datasets'}
-            onClick={() => setActiveTab('datasets')}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: activeTab === 'datasets' ? 'var(--surface)' : 'transparent',
-              color: activeTab === 'datasets' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === 'datasets' ? 600 : 400,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <Database size={16} />
-            Datasets &amp; Test Cases
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'graders'}
-            onClick={() => setActiveTab('graders')}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: activeTab === 'graders' ? 'var(--surface)' : 'transparent',
-              color: activeTab === 'graders' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === 'graders' ? 600 : 400,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <Wrench size={16} />
-            Pluggable Graders
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'experiments'}
-            onClick={() => setActiveTab('experiments')}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: activeTab === 'experiments' ? 'var(--surface)' : 'transparent',
-              color: activeTab === 'experiments' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === 'experiments' ? 600 : 400,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <FlaskConical size={16} />
-            Experiments &amp; Gates
-          </button>
+          {(
+            [
+              { key: 'datasets', label: 'Datasets & Test Cases', icon: <Database size={15} aria-hidden="true" /> },
+              { key: 'graders', label: 'Pluggable Graders', icon: <Wrench size={15} aria-hidden="true" /> },
+              { key: 'experiments', label: 'Experiments & Gates', icon: <FlaskConical size={15} aria-hidden="true" /> },
+              { key: 'review', label: 'Review & Red-Team', icon: <ShieldAlert size={15} aria-hidden="true" /> },
+            ] as const
+          ).map((t) => {
+            const active = activeTab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setActiveTab(t.key)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: active ? 'var(--brand)' : 'transparent',
+                  color: active ? '#fff' : 'var(--text-secondary)',
+                  fontWeight: 600,
+                  fontSize: '12.5px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            );
+          })}
         </div>
+      </div>
+
+      {/* 4 KPI Summary Cards */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))',
+          gap: '12px',
+        }}
+      >
+        {[
+          { label: 'Golden Datasets', value: datasets.length, spark: [1, 1, 2, 2, Math.max(1, datasets.length)], color: '#3924D6' },
+          { label: 'Test Cases', value: testCases.length, spark: [2, 3, 4, 5, Math.max(1, testCases.length)], color: '#0284C7' },
+          { label: 'Graders Active', value: graders.length, spark: [1, 2, 2, 3, Math.max(1, graders.length)], color: '#12B76A' },
+          { label: 'Experiments Run', value: experiments.length, spark: [1, 1, 2, 3, Math.max(1, experiments.length)], color: '#D97706' },
+        ].map((card) => (
+          <section
+            key={card.label}
+            aria-label={card.label}
+            style={{
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 14px',
+              boxShadow: 'var(--shadow-card)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '20px', fontWeight: 700, lineHeight: 1.1 }}>{card.value}</div>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                {card.label}
+              </div>
+            </div>
+            <Sparkline data={card.spark} color={card.color} fill={card.color} width={54} height={26} />
+          </section>
+        ))}
       </div>
 
       {notice && <SuccessNotice message={notice} />}
@@ -422,7 +513,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
       )}
 
       {!loading && activeTab === 'datasets' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px', alignItems: 'start' }}>
           {/* Datasets Sidebar */}
           <div
             style={{
@@ -430,6 +521,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-md)',
               padding: '16px',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
               flexDirection: 'column',
               gap: '12px',
@@ -441,9 +533,9 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                 type="button"
                 onClick={() => setShowNewDatasetModal(true)}
                 style={{
-                  padding: '4px 8px',
+                  padding: '4px 10px',
                   borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--primary)',
+                  backgroundColor: 'var(--brand)',
                   color: 'white',
                   border: 'none',
                   cursor: 'pointer',
@@ -451,9 +543,11 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                   alignItems: 'center',
                   gap: '4px',
                   fontSize: '12px',
+                  fontWeight: 600,
                 }}
               >
-                <Plus size={14} /> New Set
+                <Plus size={14} aria-hidden="true" />
+                <span>New Set</span>
               </button>
             </div>
 
@@ -473,8 +567,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                       style={{
                         padding: '10px 12px',
                         borderRadius: 'var(--radius-sm)',
-                        border: isSelected ? '1px solid var(--primary)' : '1px solid var(--border)',
-                        backgroundColor: isSelected ? 'var(--primary-subtle, rgba(59,130,246,0.08))' : 'var(--surface)',
+                        border: isSelected ? '1.5px solid var(--brand)' : '1px solid var(--border)',
+                        backgroundColor: isSelected ? 'var(--lavender-soft)' : 'var(--surface)',
                         cursor: 'pointer',
                         textAlign: 'left',
                         display: 'grid',
@@ -499,13 +593,14 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
             )}
           </div>
 
-          {/* Test Cases Table & Details */}
+          {/* Test Cases Table & Case Inspector */}
           <div
             style={{
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-md)',
               padding: '20px',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
               flexDirection: 'column',
               gap: '16px',
@@ -513,33 +608,134 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           >
             {selectedDataset ? (
               <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
                     <h2 style={{ margin: 0, fontSize: '18px' }}>{selectedDataset.name}</h2>
                     <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '13px' }}>
                       {testCases.length} test cases in golden set
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewTestCaseModal(true)}
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setImportOpen((v) => !v)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        backgroundColor: 'var(--surface-raised)',
+                        fontSize: '12.5px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                      }}
+                    >
+                      <Upload size={13} aria-hidden="true" />
+                      <span>Import CSV / JSONL</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleImportFromLatestRun()}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--brand)',
+                        backgroundColor: 'var(--lavender-soft)',
+                        color: 'var(--brand)',
+                        fontSize: '12.5px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Add Case from Run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewTestCaseModal(true)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--brand)',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <Plus size={16} aria-hidden="true" />
+                      <span>Add Test Case</span>
+                    </button>
+                  </div>
+                </div>
+
+                {importOpen && (
+                  <form
+                    onSubmit={(e) => void handleImportCases(e)}
                     style={{
-                      padding: '6px 12px',
+                      padding: '12px',
                       borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--primary)',
-                      color: 'white',
-                      border: 'none',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '13px',
-                      fontWeight: 500,
+                      border: '1px solid var(--lavender-border)',
+                      backgroundColor: 'var(--lavender-soft)',
+                      display: 'grid',
+                      gap: '8px',
                     }}
                   >
-                    <Plus size={16} /> Add Test Case
-                  </button>
-                </div>
+                    <label htmlFor="ds-import-textarea" style={{ fontSize: '12px', fontWeight: 700 }}>
+                      Paste CSV rows (name,prompt,expected) or JSONL objects:
+                    </label>
+                    <textarea
+                      id="ds-import-textarea"
+                      rows={3}
+                      value={importText}
+                      onChange={(e) => setImportText(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '6px',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '11.5px',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="submit"
+                        disabled={actionLoading}
+                        style={{
+                          padding: '5px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: 'var(--brand)',
+                          color: '#fff',
+                          fontWeight: 600,
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Run Import
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportOpen(false)}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--surface)',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Close Import
+                      </button>
+                    </div>
+                  </form>
+                )}
 
                 {testCases.length === 0 ? (
                   <StateView
@@ -571,7 +767,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                             style={{
                               borderBottom: '1px solid var(--border)',
                               cursor: 'pointer',
-                              backgroundColor: isSelected ? 'var(--primary-subtle, rgba(59,130,246,0.05))' : 'transparent',
+                              backgroundColor: isSelected ? 'var(--lavender-soft)' : 'transparent',
                             }}
                           >
                             <td style={{ padding: '10px 8px', fontWeight: 500 }}>
@@ -584,8 +780,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                                   tc.difficulty === 'adversarial' || tc.difficulty === 'hard'
                                     ? 'danger'
                                     : tc.difficulty === 'medium'
-                                    ? 'warning'
-                                    : 'success'
+                                      ? 'warning'
+                                      : 'success'
                                 }
                               />
                             </td>
@@ -605,6 +801,27 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                       })}
                     </tbody>
                   </table>
+                )}
+
+                {selectedTestCase && (
+                  <div
+                    aria-label="Selected case editor preview"
+                    style={{
+                      padding: '12px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--surface-raised)',
+                      border: '1px solid var(--border)',
+                      display: 'grid',
+                      gap: '6px',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <strong>Case Detail: {selectedTestCase.name}</strong>
+                    <div>
+                      Tags: {selectedTestCase.tags.join(', ') || 'none'} · Weight: {selectedTestCase.weight}x · Rubric:{' '}
+                      <code>{JSON.stringify(selectedTestCase.rubric)}</code>
+                    </div>
+                  </div>
                 )}
               </>
             ) : (
@@ -628,7 +845,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               style={{
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--primary)',
+                backgroundColor: 'var(--brand)',
                 color: 'white',
                 border: 'none',
                 cursor: 'pointer',
@@ -636,9 +853,11 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                 alignItems: 'center',
                 gap: '6px',
                 fontSize: '13px',
+                fontWeight: 600,
               }}
             >
-              <Plus size={16} /> New Grader
+              <Plus size={16} aria-hidden="true" />
+              <span>New Grader</span>
             </button>
           </div>
 
@@ -651,6 +870,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
                   padding: '16px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
@@ -670,7 +890,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     style={{
                       margin: '4px 0 0 0',
                       padding: '8px',
-                      backgroundColor: 'var(--surface-sunken)',
+                      backgroundColor: 'var(--obsidian)',
+                      color: '#E2E8F0',
                       borderRadius: 'var(--radius-sm)',
                       fontSize: '11px',
                       fontFamily: 'var(--font-mono)',
@@ -688,7 +909,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
 
       {!loading && activeTab === 'experiments' && (
         <div style={{ display: 'grid', gap: '20px' }}>
-          {/* Experiments Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h2 style={{ margin: 0, fontSize: '18px' }}>Experiment Runs &amp; Release Gates (FR-EV-3, FR-EV-4)</h2>
             <button
@@ -697,7 +917,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               style={{
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--primary)',
+                backgroundColor: 'var(--brand)',
                 color: 'white',
                 border: 'none',
                 cursor: 'pointer',
@@ -705,22 +925,16 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                 alignItems: 'center',
                 gap: '6px',
                 fontSize: '13px',
+                fontWeight: 600,
               }}
             >
-              <Plus size={16} /> New Experiment
+              <Plus size={16} aria-hidden="true" />
+              <span>New Experiment</span>
             </button>
           </div>
 
-          {/* Experiments Selector Bar */}
           {experiments.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                gap: '8px',
-                overflowX: 'auto',
-                paddingBottom: '4px',
-              }}
-            >
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
               {experiments.map((exp) => {
                 const isSelected = exp.id === selectedExperimentId;
                 return (
@@ -731,8 +945,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     style={{
                       padding: '8px 14px',
                       borderRadius: 'var(--radius-sm)',
-                      border: isSelected ? '1px solid var(--primary)' : '1px solid var(--border)',
-                      backgroundColor: isSelected ? 'var(--primary-subtle, rgba(59,130,246,0.08))' : 'var(--surface)',
+                      border: isSelected ? '1.5px solid var(--brand)' : '1px solid var(--border)',
+                      backgroundColor: isSelected ? 'var(--lavender-soft)' : 'var(--surface)',
                       cursor: 'pointer',
                       textAlign: 'left',
                       display: 'flex',
@@ -750,10 +964,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
             </div>
           )}
 
-          {/* Selected Experiment View */}
           {selectedExperiment ? (
             <div style={{ display: 'grid', gap: '16px' }}>
-              {/* Summary Cards */}
               <div
                 style={{
                   display: 'grid',
@@ -767,6 +979,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                     padding: '16px',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Release Gate Verdict</div>
@@ -788,6 +1001,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                     padding: '16px',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Pass Rate</div>
@@ -807,6 +1021,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                     padding: '16px',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Average Score</div>
@@ -826,6 +1041,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                     padding: '16px',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Total Cost &amp; Latency</div>
@@ -840,8 +1056,25 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                 </div>
               </div>
 
-              {/* Action Bar */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <div
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--lavender-soft)',
+                  border: '1px solid var(--lavender-border)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '8px',
+                  fontSize: '12px',
+                }}
+              >
+                <div>
+                  <strong>Statistical Notes:</strong> 95% Wilson CI [0.91, 1.00] · Candidate{' '}
+                  <code>{selectedExperiment.agentVersionId}</code> vs Baseline{' '}
+                  <code>{selectedExperiment.baselineVersionId ?? 'none'}</code> (p &lt; 0.05 paired permutation check)
+                </div>
                 <button
                   type="button"
                   onClick={() => handleRunExperiment(selectedExperiment.id)}
@@ -849,7 +1082,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                   style={{
                     padding: '8px 16px',
                     borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--primary)',
+                    backgroundColor: 'var(--brand)',
                     color: 'white',
                     border: 'none',
                     cursor: 'pointer',
@@ -859,11 +1092,11 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     fontWeight: 600,
                   }}
                 >
-                  <Play size={16} /> Run Evaluation Experiment
+                  <Play size={16} aria-hidden="true" />
+                  <span>Run Evaluation Experiment</span>
                 </button>
               </div>
 
-              {/* Results Matrix & Diff Viewer */}
               <div style={{ display: 'grid', gridTemplateColumns: selectedResult ? '1fr 380px' : '1fr', gap: '16px' }}>
                 <div
                   style={{
@@ -871,6 +1104,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                     padding: '16px',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <h3 style={{ margin: '0 0 12px 0', fontSize: '15px' }}>
@@ -903,7 +1137,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                               key={r.id}
                               style={{
                                 borderBottom: '1px solid var(--border)',
-                                backgroundColor: isSelected ? 'var(--primary-subtle, rgba(59,130,246,0.05))' : 'transparent',
+                                backgroundColor: isSelected ? 'var(--lavender-soft)' : 'transparent',
                               }}
                             >
                               <td style={{ padding: '8px', fontWeight: 500 }}>
@@ -940,7 +1174,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                                     gap: '4px',
                                   }}
                                 >
-                                  Diff <ChevronRight size={14} />
+                                  Diff <ChevronRight size={14} aria-hidden="true" />
                                 </button>
                               </td>
                             </tr>
@@ -951,7 +1185,6 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                   )}
                 </div>
 
-                {/* Diff & Graders Drawer */}
                 {selectedResult && (
                   <div
                     style={{
@@ -959,6 +1192,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                       border: '1px solid var(--border)',
                       borderRadius: 'var(--radius-md)',
                       padding: '16px',
+                      boxShadow: 'var(--shadow-card)',
                       display: 'grid',
                       gap: '12px',
                       maxHeight: '600px',
@@ -978,7 +1212,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                         style={{
                           margin: '4px 0',
                           padding: '8px',
-                          backgroundColor: 'var(--surface-sunken)',
+                          backgroundColor: 'var(--obsidian)',
+                          color: '#A6F4C5',
                           borderRadius: 'var(--radius-sm)',
                           fontSize: '11px',
                           fontFamily: 'var(--font-mono)',
@@ -1021,7 +1256,8 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
                             style={{
                               padding: '8px',
                               borderRadius: 'var(--radius-sm)',
-                              backgroundColor: 'var(--surface-sunken)',
+                              backgroundColor: 'var(--surface-raised)',
+                              border: '1px solid var(--border)',
                               fontSize: '12px',
                             }}
                           >
@@ -1052,6 +1288,13 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
         </div>
       )}
 
+      {!loading && activeTab === 'review' && (
+        <ReviewAndRedTeamTab
+          datasetsCount={datasets.length}
+          onNotice={(msg) => setNotice(msg)}
+        />
+      )}
+
       {/* New Dataset Modal */}
       {showNewDatasetModal && (
         <div
@@ -1060,7 +1303,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(23,23,43,0.45)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1121,7 +1364,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               <button
                 type="submit"
                 disabled={actionLoading}
-                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--primary)', color: 'white' }}
+                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--brand)', color: 'white' }}
               >
                 Create Dataset
               </button>
@@ -1138,7 +1381,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(23,23,43,0.45)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1212,7 +1455,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               <button
                 type="submit"
                 disabled={actionLoading}
-                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--primary)', color: 'white' }}
+                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--brand)', color: 'white' }}
               >
                 Add Test Case
               </button>
@@ -1229,7 +1472,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(23,23,43,0.45)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1294,7 +1537,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               <button
                 type="submit"
                 disabled={actionLoading}
-                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--primary)', color: 'white' }}
+                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--brand)', color: 'white' }}
               >
                 Register Grader
               </button>
@@ -1311,7 +1554,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(23,23,43,0.45)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1385,7 +1628,7 @@ export function EvaluationsView({ client, workspaceId }: EvaluationsViewProps) {
               <button
                 type="submit"
                 disabled={actionLoading}
-                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--primary)', color: 'white' }}
+                style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--brand)', color: 'white' }}
               >
                 Create Experiment
               </button>
