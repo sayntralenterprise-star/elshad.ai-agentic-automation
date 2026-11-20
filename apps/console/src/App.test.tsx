@@ -3510,4 +3510,82 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(axeGov.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
     govRender.unmount();
   }, 20_000);
+
+  it('renders Workspace Administration Screen 23: Settings 9-Section Left Nav, Webhooks, Providers, Secrets, SSO/SCIM, Notifications, Data, Environments, Billing & Shell Help/Notifications', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+
+    const settingsRender = render(<ConsoleApp client={client} initialPath="/w/default/e/dev/settings" />);
+    expect(await screen.findByRole('heading', { name: 'Workspace Settings' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'API Keys' })).toBeTruthy();
+
+    // API & Webhooks: add endpoint & send test event
+    const whUrl = screen.getByLabelText('Webhook Endpoint URL');
+    await user.clear(whUrl);
+    await user.type(whUrl, 'https://ci.example.internal/webhook');
+    await user.click(screen.getByRole('button', { name: 'Add Webhook Endpoint' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Send Test Event' }))[0]!);
+    expect(await screen.findByText(/Delivered signed webhook ping/)).toBeTruthy();
+
+    // Workspace Profile
+    await user.click(screen.getByRole('tab', { name: 'Workspace Profile' }));
+    await user.click(await screen.findByRole('button', { name: 'Save Profile' }));
+    expect(await screen.findByText(/Saved workspace profile/)).toBeTruthy();
+
+    // Model Providers
+    await user.click(screen.getByRole('tab', { name: 'Model Providers' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Test Provider' }))[0]!);
+    expect(await screen.findByText(/health check succeeded/i)).toBeTruthy();
+
+    // Secrets (write-only verification)
+    await user.click(screen.getByRole('tab', { name: 'Secrets' }));
+    const secretInput = await screen.findByLabelText('Secret Value (Write-Only)');
+    await user.type(secretInput, 'super-secret-settings-val');
+    await user.click(screen.getByRole('button', { name: 'Store Secret' }));
+    expect(await screen.findByRole('table', { name: 'Workspace secrets' })).toBeTruthy();
+    expect(settingsRender.container.textContent).not.toContain('super-secret-settings-val');
+
+    // SSO / SCIM
+    await user.click(screen.getByRole('tab', { name: 'SSO / SCIM' }));
+    await user.click(await screen.findByRole('button', { name: 'Test SSO Connection' }));
+    await user.click(screen.getByRole('button', { name: 'Generate SCIM Token' }));
+    expect(await screen.findByText(/Issued new SCIM bearer token/)).toBeTruthy();
+
+    // Notifications
+    await user.click(screen.getByRole('tab', { name: 'Notifications' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Send Test' }))[0]!);
+    expect(await screen.findByText(/Dispatched test notification/)).toBeTruthy();
+
+    // Data Management
+    await user.click(screen.getByRole('tab', { name: 'Data Management' }));
+    await user.click(await screen.findByRole('button', { name: 'Save Data Policy' }));
+    expect(await screen.findByText(/Saved retention/)).toBeTruthy();
+
+    // Environments
+    await user.click(screen.getByRole('tab', { name: 'Environments' }));
+    expect(await screen.findByRole('region', { name: 'DEV environment configuration' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'STAGING environment configuration' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'PROD environment configuration' })).toBeTruthy();
+
+    // Billing
+    await user.click(screen.getByRole('tab', { name: 'Billing' }));
+    expect(await screen.findByRole('table', { name: 'Billing invoices' })).toBeTruthy();
+    await user.click(screen.getAllByRole('button', { name: 'Download Receipt' })[0]!);
+    expect(await screen.findByText(/Prepared receipt download/)).toBeTruthy();
+
+    // Global Shell Help & Notifications
+    await user.click(screen.getByRole('button', { name: 'Help and shortcuts' }));
+    expect(await screen.findByRole('dialog', { name: 'Help and keyboard shortcuts' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    await user.click(screen.getByRole('button', { name: 'Notifications' }));
+    expect(await screen.findByRole('region', { name: 'Notifications feed' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Notifications' }));
+
+    const axeSettings = await axe.run(settingsRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeSettings.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    settingsRender.unmount();
+  }, 20_000);
 });

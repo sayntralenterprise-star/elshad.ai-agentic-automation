@@ -9,8 +9,8 @@ import {
   Database,
   FileCheck2,
   GitBranch,
+  HelpCircle,
   Home,
-  KeyRound,
   Moon,
   Network,
   PanelBottom,
@@ -37,7 +37,8 @@ import {
   type RunEventDto,
   type RunStepDto,
 } from '@elshad/sdk-ts';
-import { ElshadLogo, EnvBadge, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { ElshadLogo, EnvBadge, StateView, StatusChip } from '@elshad/ui-kit';
+import { WorkspaceSettingsView, type SettingsSectionId } from './WorkspaceSettingsView.js';
 import { AgentStudioView } from './AgentStudioView.js';
 import { ApprovalsView } from './ApprovalsView.js';
 import { EvaluationsView } from './EvaluationsView.js';
@@ -155,6 +156,9 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsSectionId>('api_webhooks');
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
@@ -341,6 +345,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
       } else if (e.key === 'Escape') {
         setPaletteOpen(false);
         setShortcutsOpen(false);
+        setNotificationsOpen(false);
+        setHelpOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -665,7 +671,10 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                   <button
                     type="button"
                     aria-current={active ? 'page' : undefined}
-                    onClick={() => setSection(item.id)}
+                    onClick={() => {
+                      if (item.id === 'settings') setSettingsInitialTab('api_webhooks');
+                      setSection(item.id);
+                    }}
                     style={{
                       width: '100%',
                       minHeight: '36px',
@@ -758,7 +767,10 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
             </div>
             <button
               type="button"
-              onClick={() => setSection('settings')}
+              onClick={() => {
+                setSettingsInitialTab('billing');
+                setSection('settings');
+              }}
               style={{
                 minHeight: '32px',
                 border: 'none',
@@ -966,11 +978,110 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               <PanelBottom size={15} aria-hidden="true" />
             </button>
 
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                aria-label="Notifications"
+                aria-expanded={notificationsOpen}
+                onClick={() => setNotificationsOpen((v) => !v)}
+                style={{
+                  position: 'relative',
+                  minWidth: '32px',
+                  minHeight: '32px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--surface)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Bell size={15} aria-hidden="true" />
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '5px',
+                    right: '6px',
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '9999px',
+                    backgroundColor: 'var(--danger)',
+                  }}
+                />
+              </button>
+              {notificationsOpen && (
+                <div
+                  role="region"
+                  aria-label="Notifications feed"
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: '38px',
+                    width: '300px',
+                    zIndex: 45,
+                    backgroundColor: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: 'var(--shadow-card)',
+                    padding: '12px',
+                    display: 'grid',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong style={{ fontSize: '13px' }}>Notifications</strong>
+                    <StatusChip label={`${pendingApprovalsCount || 4} pending`} tone="info" />
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {pendingApprovalsCount || 4} approval request(s) awaiting review in {env.toUpperCase()}.
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSection('approvals');
+                        setNotificationsOpen(false);
+                      }}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        backgroundColor: 'var(--brand)',
+                        color: 'var(--brand-contrast)',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open Approvals
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNotificationsOpen(false)}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        backgroundColor: 'var(--surface-raised)',
+                        color: 'var(--text-primary)',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
-              aria-label="Notifications"
+              aria-label="Help and shortcuts"
+              onClick={() => setHelpOpen((v) => !v)}
               style={{
-                position: 'relative',
                 minWidth: '32px',
                 minHeight: '32px',
                 display: 'inline-flex',
@@ -983,18 +1094,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                 cursor: 'pointer',
               }}
             >
-              <Bell size={15} aria-hidden="true" />
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '5px',
-                  right: '6px',
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '9999px',
-                  backgroundColor: 'var(--danger)',
-                }}
-              />
+              <HelpCircle size={15} aria-hidden="true" />
             </button>
 
             <button
@@ -1085,176 +1185,24 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               )}
 
               {section === 'settings' && (
-                <div style={{ display: 'grid', gap: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <KeyRound size={20} aria-hidden="true" />
-                    <h1 style={{ margin: 0, fontSize: '22px' }}>{t('settings.apikeys.title')}</h1>
-                  </div>
-
-                  <form
-                    onSubmit={(e) => void handleCreateApiKey(e)}
-                    style={{
-                      display: 'flex',
-                      gap: '10px',
-                      alignItems: 'end',
-                      padding: '16px',
-                      backgroundColor: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-md)',
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <label
-                        htmlFor="new-api-key-name"
-                        style={{ display: 'block', fontWeight: 600, marginBottom: '4px' }}
-                      >
-                        API Key Name
-                      </label>
-                      <input
-                        id="new-api-key-name"
-                        type="text"
-                        placeholder="e.g., CI Pipeline Key"
-                        value={newKeyName}
-                        onChange={(e) => setNewKeyName(e.target.value)}
-                        style={{
-                          width: '100%',
-                          minHeight: '34px',
-                          padding: '6px 10px',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          backgroundColor: 'var(--bg)',
-                          color: 'var(--text-primary)',
-                        }}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      style={{
-                        minHeight: '34px',
-                        padding: '6px 14px',
-                        border: 'none',
-                        borderRadius: 'var(--radius-sm)',
-                        backgroundColor: 'var(--brand)',
-                        color: 'var(--brand-contrast)',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Create API Key
-                    </button>
-                  </form>
-
-                  {createdKeySecret && (
-                    <div
-                      role="status"
-                      style={{
-                        padding: '14px',
-                        backgroundColor: 'var(--success-bg)',
-                        border: '1px solid var(--success)',
-                        borderRadius: 'var(--radius-md)',
-                        display: 'grid',
-                        gap: '6px',
-                      }}
-                    >
-                      <SuccessNotice message="API key created. Copy this secret now — it will not be shown again." />
-                      <code style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
-                        {createdKeySecret.secret}
-                      </code>
-                    </div>
-                  )}
-
-                  {apiKeysLoading && (
-                    <StateView
-                      state="loading"
-                      title="Loading API keys"
-                      description="Fetching active and revoked keys..."
-                    />
-                  )}
-
-                  {!apiKeysLoading && apiKeysError && (
-                    <StateView
-                      state={apiKeysError.code === 'AUTH_FORBIDDEN' ? 'forbidden' : 'error'}
-                      title={
-                        apiKeysError.code === 'AUTH_FORBIDDEN'
-                          ? 'Permission required'
-                          : 'Failed to load API keys'
-                      }
-                      description={apiKeysError.message}
-                      errorCode={apiKeysError.code}
-                      requiredPermission={
-                        apiKeysError.code === 'AUTH_FORBIDDEN' ? 'api_key:manage' : undefined
-                      }
-                      actionLabel="Retry"
-                      onAction={() => void loadApiKeys()}
-                    />
-                  )}
-
-                  {!apiKeysLoading && !apiKeysError && apiKeys.length === 0 && (
-                    <StateView
-                      state="empty"
-                      title="No API keys yet"
-                      description="Create a scoped API key above to call the REST API or run agentctl."
-                    />
-                  )}
-
-                  {!apiKeysLoading && !apiKeysError && apiKeys.length > 0 && (
-                    <table
-                      aria-label="API keys"
-                      style={{
-                        width: '100%',
-                        borderCollapse: 'collapse',
-                        backgroundColor: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                      }}
-                    >
-                      <thead>
-                        <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-                          <th style={{ padding: '10px' }}>Name</th>
-                          <th style={{ padding: '10px' }}>Prefix</th>
-                          <th style={{ padding: '10px' }}>Status</th>
-                          <th style={{ padding: '10px' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {apiKeys.map((k) => (
-                          <tr key={k.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td style={{ padding: '10px' }}>{k.name}</td>
-                            <td style={{ padding: '10px', fontFamily: 'var(--font-mono)' }}>
-                              {k.keyPrefix}…
-                            </td>
-                            <td style={{ padding: '10px' }}>
-                              <StatusChip
-                                label={k.revokedAt ? 'Revoked' : 'Active'}
-                                tone={k.revokedAt ? 'danger' : 'success'}
-                              />
-                            </td>
-                            <td style={{ padding: '10px' }}>
-                              {!k.revokedAt && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRevokeApiKey(k.id)}
-                                  style={{
-                                    minHeight: '28px',
-                                    minWidth: '64px',
-                                    padding: '4px 10px',
-                                    border: '1px solid var(--danger)',
-                                    borderRadius: 'var(--radius-sm)',
-                                    backgroundColor: 'var(--danger-bg)',
-                                    color: 'var(--danger)',
-                                    cursor: 'pointer',
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  Revoke
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                <WorkspaceSettingsView
+                  client={client}
+                  me={me}
+                  activeWorkspace={activeWorkspace}
+                  projects={projects}
+                  env={env}
+                  onChangeEnv={setEnv}
+                  initialSection={settingsInitialTab}
+                  apiKeys={apiKeys}
+                  apiKeysLoading={apiKeysLoading}
+                  apiKeysError={apiKeysError}
+                  newKeyName={newKeyName}
+                  onNewKeyNameChange={setNewKeyName}
+                  createdKeySecret={createdKeySecret}
+                  onCreateApiKey={handleCreateApiKey}
+                  onRevokeApiKey={handleRevokeApiKey}
+                  onRetryApiKeys={loadApiKeys}
+                />
               )}
 
               {section === 'governance' && (
@@ -1630,6 +1578,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                   key={item.id}
                   type="button"
                   onClick={() => {
+                    if (item.id === 'settings') setSettingsInitialTab('api_webhooks');
                     setSection(item.id);
                     setPaletteOpen(false);
                     setPaletteQuery('');
@@ -1719,6 +1668,70 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {helpOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Help and keyboard shortcuts"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(23, 23, 43, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '440px',
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '20px',
+              display: 'grid',
+              gap: '10px',
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: '17px' }}>elshad.ai Help &amp; Keyboard Shortcuts</h2>
+            <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px', display: 'grid', gap: '6px' }}>
+              <li>
+                <code>Ctrl/Cmd + K</code>: Open global Command Palette &amp; Quick Navigation
+              </li>
+              <li>
+                <code>Esc</code>: Close active overlays and dialogs
+              </li>
+              <li>
+                <strong>Theme Switcher</strong>: Toggle Light, Dark, or High-Contrast WCAG 2.2 AA theme in the top bar
+              </li>
+              <li>
+                <strong>Documentation</strong>: OpenAPI contracts at <code>/openapi.json</code> · Governance &amp; Runbooks in Workspace Settings
+              </li>
+            </ul>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setHelpOpen(false)}
+                style={{
+                  minHeight: '32px',
+                  padding: '6px 14px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--surface-raised)',
+                  color: 'var(--text-primary)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
