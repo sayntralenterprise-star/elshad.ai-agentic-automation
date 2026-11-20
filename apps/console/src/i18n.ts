@@ -1,6 +1,6 @@
 export const MESSAGES_EN = {
-  'app.title': 'Elshad Platform',
-  'login.title': 'Sign in to Elshad Platform',
+  'app.title': 'elshad.ai',
+  'login.title': 'Sign in to elshad.ai',
   'login.subtitle': 'Unified AI Agent & Workflow Automation Control Plane',
   'login.email': 'Work email',
   'login.password': 'Password',
@@ -8,7 +8,7 @@ export const MESSAGES_EN = {
   'login.sso': 'Continue with SSO (OIDC)',
   'env.prod.banner':
     'Production environment active — changes affect live runs and require confirmation.',
-  'home.title': 'Platform Overview',
+  'home.title': 'Workspace overview',
   'home.onboarding': 'Getting Started Checklist',
   'settings.apikeys.title': 'API Keys',
   'governance.audit.title': 'Immutable Audit Log',

@@ -266,3 +266,126 @@ export function SuccessNotice({ message }: { message: string }) {
     </div>
   );
 }
+
+export interface ElshadLogoProps {
+  collapsed?: boolean;
+  size?: number;
+}
+
+/**
+ * Brand orbital ring mark and wordmark for elshad.ai.
+ */
+export function ElshadLogo({ collapsed = false, size = 28 }: ElshadLogoProps) {
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '10px',
+        userSelect: 'none',
+      }}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        fill="none"
+        aria-hidden="true"
+      >
+        <circle cx="16" cy="16" r="11" stroke="var(--brand)" strokeWidth="4.2" />
+        <ellipse
+          cx="16"
+          cy="16"
+          rx="13.5"
+          ry="5.4"
+          transform="rotate(-24 16 16)"
+          stroke="var(--brand)"
+          strokeWidth="2.4"
+          strokeOpacity="0.45"
+        />
+        <circle cx="24" cy="9" r="2.4" fill="var(--brand)" />
+      </svg>
+      {!collapsed && (
+        <span
+          style={{
+            fontSize: '18px',
+            fontWeight: 800,
+            letterSpacing: '-0.02em',
+            color: 'var(--text-primary)',
+          }}
+        >
+          elshad.ai
+        </span>
+      )}
+    </div>
+  );
+}
+
+export interface SparklineProps {
+  data: number[];
+  color: string;
+  fill?: string;
+  width?: number;
+  height?: number;
+  bars?: boolean;
+}
+
+/**
+ * Compact inline SVG sparkline / optional mini bar backdrop for KPI cards.
+ */
+export function Sparkline({
+  data,
+  color,
+  fill,
+  width = 84,
+  height = 36,
+  bars = false,
+}: SparklineProps) {
+  const safe = data.length >= 2 ? data : [0, ...data, 1];
+  const min = Math.min(...safe);
+  const max = Math.max(...safe);
+  const span = max - min || 1;
+  const padY = 4;
+  const innerH = height - padY * 2;
+  const stepX = width / Math.max(safe.length - 1, 1);
+
+  const pts = safe.map((v, i) => {
+    const x = Number((i * stepX).toFixed(1));
+    const y = Number((padY + innerH - ((v - min) / span) * innerH).toFixed(1));
+    return { x, y };
+  });
+
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  const areaPath = `${linePath} L ${pts[pts.length - 1]!.x} ${height} L ${pts[0]!.x} ${height} Z`;
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0, overflow: 'visible' }}
+    >
+      {bars &&
+        pts.map((p, i) => {
+          const barW = Math.max(3, Math.floor(width / safe.length) - 3);
+          const barH = Math.max(4, height - p.y);
+          return (
+            <rect
+              key={i}
+              x={Math.max(0, p.x - barW / 2)}
+              y={height - barH}
+              width={barW}
+              height={barH}
+              rx={1.5}
+              fill={color}
+              fillOpacity={0.22}
+            />
+          );
+        })}
+      {fill && !bars && <path d={areaPath} fill={fill} fillOpacity={0.18} />}
+      <path d={linePath} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

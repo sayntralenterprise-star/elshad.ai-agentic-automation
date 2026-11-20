@@ -1,60 +1,80 @@
-/* Design tokens per PRD Appendix E.2 (Light, Dark, High-Contrast) */
+/* Design tokens for elshad.ai (Light, Dark, High-Contrast; PRD Appendix E.2) */
 :root,
 [data-theme='light'] {
-  --bg: #f8fafc;
+  --bg: #f6f7fb;
   --surface: #ffffff;
-  --surface-raised: #f1f5f9;
-  --border: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-disabled: #94a3b8;
-  --brand: #2563eb;
+  --surface-raised: #f3f4f8;
+  --border: #e5e7f0;
+  --border-subtle: #eef0f6;
+  --text-primary: #17172b;
+  --text-secondary: #5b6178;
+  --text-muted: #848b9f;
+  --text-disabled: #a1a7b8;
+  --brand: #3924d6;
+  --brand-hover: #2e1cb8;
   --brand-contrast: #ffffff;
-  --success: #15803d;
-  --success-bg: #dcfce7;
-  --danger: #b91c1c;
-  --danger-bg: #fee2e2;
-  --warning: #b45309;
-  --warning-bg: #fef3c7;
-  --info: #1d4ed8;
-  --info-bg: #dbeafe;
+  --lavender: #eae8f7;
+  --lavender-soft: #f6f5fd;
+  --lavender-border: #d9d5f4;
+  --obsidian: #17172b;
+  --obsidian-surface: #1f1f38;
+  --obsidian-text: #e9ecfa;
+  --success: #12b76a;
+  --success-bg: #ecfdf3;
+  --danger: #d92d20;
+  --danger-bg: #fef3f2;
+  --warning: #d97706;
+  --warning-bg: #fef7e6;
+  --info: #3924d6;
+  --info-bg: #eae8f7;
   --human: #6d28d9;
-  --human-bg: #ede9fe;
-  --env-dev: #0f766e;
-  --env-staging: #b45309;
-  --env-prod: #dc2626;
-  --focus-ring: #2563eb;
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --human-bg: #f3e8ff;
+  --env-dev: #12b76a;
+  --env-staging: #d97706;
+  --env-prod: #d92d20;
+  --focus-ring: #3924d6;
+  --shadow-card: 0 1px 2px rgba(23, 23, 43, 0.04), 0 1px 3px rgba(23, 23, 43, 0.03);
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 }
 
 [data-theme='dark'] {
-  --bg: #0b1120;
-  --surface: #111827;
-  --surface-raised: #1e293b;
-  --border: #334155;
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-disabled: #64748b;
-  --brand: #60a5fa;
-  --brand-contrast: #0f172a;
+  --bg: #0f1021;
+  --surface: #17172b;
+  --surface-raised: #22223c;
+  --border: #313154;
+  --border-subtle: #272745;
+  --text-primary: #f5f6fc;
+  --text-secondary: #c4c7df;
+  --text-muted: #9398b8;
+  --text-disabled: #656a8a;
+  --brand: #7b6bff;
+  --brand-hover: #6755f5;
+  --brand-contrast: #ffffff;
+  --lavender: #27234d;
+  --lavender-soft: #1d1b3a;
+  --lavender-border: #3d3678;
+  --obsidian: #0c0c19;
+  --obsidian-surface: #15152a;
+  --obsidian-text: #eef0ff;
   --success: #4ade80;
-  --success-bg: #14532d;
+  --success-bg: #123b26;
   --danger: #f87171;
-  --danger-bg: #7f1d1d;
+  --danger-bg: #4c181d;
   --warning: #fbbf24;
-  --warning-bg: #78350f;
-  --info: #60a5fa;
-  --info-bg: #1e3a8a;
-  --human: #a78bfa;
-  --human-bg: #4c1d95;
+  --warning-bg: #482d0b;
+  --info: #9385ff;
+  --info-bg: #27234d;
+  --human: #c4b5fd;
+  --human-bg: #3b1d70;
   --env-dev: #2dd4bf;
   --env-staging: #fbbf24;
   --env-prod: #ef4444;
-  --focus-ring: #93c5fd;
+  --focus-ring: #9385ff;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 [data-theme='high-contrast'] {
@@ -62,11 +82,20 @@
   --surface: #0a0a0a;
   --surface-raised: #171717;
   --border: #ffffff;
+  --border-subtle: #d4d4d4;
   --text-primary: #ffffff;
   --text-secondary: #e5e5e5;
+  --text-muted: #d4d4d4;
   --text-disabled: #a3a3a3;
   --brand: #facc15;
+  --brand-hover: #eab308;
   --brand-contrast: #000000;
+  --lavender: #1e1e1e;
+  --lavender-soft: #121212;
+  --lavender-border: #ffffff;
+  --obsidian: #000000;
+  --obsidian-surface: #121212;
+  --obsidian-text: #ffffff;
   --success: #4ade80;
   --success-bg: #052e16;
   --danger: #ff6b6b;
@@ -81,6 +110,7 @@
   --env-staging: #fde047;
   --env-prod: #ff4444;
   --focus-ring: #facc15;
+  --shadow-card: none;
 }
 
 *,
@@ -96,6 +126,14 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 :focus-visible {

@@ -2366,8 +2366,19 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     await user.type(pwInput, 'ChangeMe123!');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    // Home dashboard appears
-    expect(await screen.findByRole('heading', { name: 'Platform Overview' })).toBeTruthy();
+    // Home dashboard appears (Screen 01: Workspace overview)
+    expect(await screen.findByRole('heading', { name: 'Workspace overview' })).toBeTruthy();
+    expect(screen.getByText('elshad.ai')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Runs Today' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Success Rate' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Escalation Rate' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Spend vs Budget' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'P95 Duration' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Run Volume Trend' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Needs Attention' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Recent Runs' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Top Agents by Volume' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Cost Trend' })).toBeTruthy();
 
     // Switch environment to PROD -> URL updates and safety banner renders
     const envSelect = screen.getByLabelText('Environment');
@@ -2414,7 +2425,7 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     const { container: loginContainer } = render(
       <ConsoleApp client={clientUnauth} initialTheme="dark" />,
     );
-    await screen.findByRole('heading', { name: 'Sign in to Elshad Platform' });
+    await screen.findByRole('heading', { name: 'Sign in to elshad.ai' });
     const axeLogin = await axe.run(loginContainer, {
       rules: { 'color-contrast': { enabled: false } },
     });
@@ -2531,10 +2542,16 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
       <ConsoleApp client={client} initialPath="/w/default/e/dev/agents" />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Agents Studio' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Agents' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Total Agents' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Active Agents' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Draft Agents' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Needs Attention' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /All agents/i })).toBeTruthy();
+    expect(screen.getByLabelText('Search agents')).toBeTruthy();
 
     // Open Create Agent dialog and submit
-    const createBtns = screen.getAllByRole('button', { name: '+ Create Agent' });
+    const createBtns = screen.getAllByRole('button', { name: '+ Create agent' });
     await user.click(createBtns[0]!);
 
     const nameInput = await screen.findByLabelText('Agent Name (kebab-case)');
@@ -2543,6 +2560,10 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     await user.click(screen.getByRole('button', { name: 'Create Agent Draft' }));
 
     expect(await screen.findByRole('heading', { name: 'ops-triage-agent' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Agent Studio' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Safety Configuration' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Configure sections' })).toBeTruthy();
+    expect(screen.getByText(/Live logs \/ Test output \/ Run console/i)).toBeTruthy();
 
     // Switch to Tools tab and enable confidential_kb_read + web_fetch + http_request
     await user.click(screen.getByRole('tab', { name: 'Tools' }));
@@ -2553,10 +2574,10 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(alertBanner.textContent).toContain('Lethal Trifecta Warning');
 
     // Publish version & run in Test Playground
-    await user.click(screen.getByRole('button', { name: 'Publish Version' }));
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
     expect(await screen.findByText(/Published v1\.0\.0/)).toBeTruthy();
 
-    await user.click(screen.getByRole('tab', { name: 'Test Playground' }));
+    await user.click(screen.getByRole('tab', { name: 'Test' }));
     await user.click(screen.getByRole('button', { name: 'Run Test' }));
 
     const costMatches = await screen.findAllByText(/275 micro-USD/);
@@ -3024,10 +3045,10 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
       <ConsoleApp client={client} initialPath="/w/default/e/dev/agents" />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Agents Studio' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Agents' })).toBeTruthy();
 
     // First create an agent so Studio tabs appear
-    const createBtns = screen.getAllByRole('button', { name: '+ Create Agent' });
+    const createBtns = screen.getAllByRole('button', { name: '+ Create agent' });
     await user.click(createBtns[0]!);
     await user.click(await screen.findByRole('button', { name: 'Create Agent Draft' }));
 
