@@ -3277,4 +3277,83 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     });
     expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 20_000);
+
+  it('renders Execution Infrastructure Screens 15-17: Runs Filters/Bulk/Export, 8-Tab Run Detail & Failure Explainer, and Approvals 3-View SLA Inbox', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+
+    // Part A: Screen 15 Runs List + Screen 16 8-Tab Run Detail & Failure Explainer
+    const runsRender = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/runs" />,
+    );
+    expect(await screen.findByRole('heading', { name: 'Runs & Traces' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Total Runs' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Total Spend' })).toBeTruthy();
+
+    await user.click(screen.getAllByRole('button', { name: 'Start Durable Run' })[0]!);
+    expect(await screen.findByRole('heading', { name: /Run Trace: run_1/ })).toBeTruthy();
+
+    // Save Filter, Export CSV & Bulk select
+    await user.click(screen.getByRole('button', { name: 'Save Filter' }));
+    expect(await screen.findByText(/Saved filter preset/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }));
+    expect(await screen.findByText(/Exported 1 run\(s\) to CSV/)).toBeTruthy();
+
+    await user.click(screen.getByLabelText('Select run run_1'));
+    expect(await screen.findByRole('region', { name: 'Bulk run actions' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    // Switch through Run Detail 8 tabs
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }));
+    expect(await screen.findByText(/Gantt span timeline/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Graph' }));
+    expect(await screen.findByText(/Execution path/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Messages' }));
+    expect(await screen.findByText(/Run Input:/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Cost' }));
+    expect(await screen.findByRole('table', { name: 'Run cost breakdown' })).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Memory' }));
+    expect(await screen.findByText(/Recent workspace memory reads\/writes/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+    await user.click(screen.getByRole('tab', { name: 'Raw' }));
+    expect(await screen.findByRole('button', { name: 'Copy JSON' })).toBeTruthy();
+
+    // Open Failure Explainer
+    await user.click(screen.getByRole('button', { name: 'Explain Failure' }));
+    const explainer = await screen.findByRole('region', { name: 'Failure explainer' });
+    expect(explainer.textContent).toContain('What failed:');
+    expect(explainer.textContent).toContain('Where it failed:');
+    expect(explainer.textContent).toContain('Why it likely failed:');
+    expect(explainer.textContent).toContain('Suggested remediation:');
+
+    const axeRuns = await axe.run(runsRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRuns.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    runsRender.unmount();
+
+    // Part B: Screen 17 Approvals Inbox 3-View Switcher, SLA urgency & Reject reason validation
+    const aprRender = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/approvals" />,
+    );
+    expect(await screen.findByRole('heading', { name: 'Approvals Inbox' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'My Queue' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'All Approvals' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Approval Policies' })).toBeTruthy();
+
+    // Reject without min 5 chars triggers validation alert
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+
+    // Switch to All Approvals filter view and Approval Policies view
+    await user.click(screen.getByRole('tab', { name: 'All Approvals' }));
+    expect(await screen.findByLabelText('Search approvals')).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Approval Policies' }));
+    expect(await screen.findByRole('table', { name: 'Approval policies table' })).toBeTruthy();
+
+    const axeApr = await axe.run(aprRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeApr.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
 });

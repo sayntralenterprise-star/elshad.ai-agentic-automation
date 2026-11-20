@@ -1386,6 +1386,8 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                   selectedSteps={selectedSteps}
                   selectedEvents={selectedEvents}
                   selectedStepId={selectedStep?.id}
+                  client={client}
+                  environment={env}
                   onRefresh={() => void loadRuns()}
                   onStartSampleRun={() => {
                     void (async () => {
@@ -1427,6 +1429,54 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                       await loadRuns();
                     })();
                   }}
+                  onBulkCancel={(runIds) => {
+                    void (async () => {
+                      for (const id of runIds) {
+                        await client.runs.cancel(id, 'Bulk cancelled from console', `ui-bcancel-${id}-${Date.now()}`).catch(() => {});
+                      }
+                      await loadRuns();
+                    })();
+                  }}
+                  onBulkRedrive={(runIds) => {
+                    void (async () => {
+                      await client.runs.bulkRedrive(runIds, `ui-bredrive-${Date.now()}`).catch(() => {});
+                      await loadRuns();
+                    })();
+                  }}
+                  onReplayRun={(run) => {
+                    void (async () => {
+                      const created = await client.runs.create(
+                        {
+                          workspaceId: activeWorkspace?.id,
+                          environment: env,
+                          subjectType: run.subjectType as 'agent_version' | 'workflow_version',
+                          subjectVersionId: run.subjectVersionId,
+                          input: run.input,
+                          executeInline: true,
+                        },
+                        `ui-replay-${run.id}-${Date.now()}`,
+                      );
+                      await loadRuns();
+                      await selectRun(created.id);
+                    })();
+                  }}
+                  onForkFromStep={(run, stepSeq) => {
+                    void (async () => {
+                      const created = await client.runs.create(
+                        {
+                          workspaceId: activeWorkspace?.id,
+                          environment: env,
+                          subjectType: run.subjectType as 'agent_version' | 'workflow_version',
+                          subjectVersionId: run.subjectVersionId,
+                          labels: { forked_from: run.id, fork_step: String(stepSeq) },
+                          executeInline: true,
+                        },
+                        `ui-fork-${run.id}-${stepSeq}-${Date.now()}`,
+                      );
+                      await loadRuns();
+                      await selectRun(created.id);
+                    })();
+                  }}
                   onSaveAsTestCase={() => {
                     setSection('evaluations');
                   }}
@@ -1434,7 +1484,11 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
               )}
 
               {section === 'approvals' && (
-                <ApprovalsView client={client} workspaceId={activeWorkspace?.id} />
+                <ApprovalsView
+                  client={client}
+                  workspaceId={activeWorkspace?.id}
+                  currentPrincipalId={me.principal.id}
+                />
               )}
 
               {section === 'evaluations' && (
