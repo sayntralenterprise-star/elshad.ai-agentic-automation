@@ -836,7 +836,11 @@ function createMockClient(
   client.memory.update = async (id, patch) => {
     const idx = memItems.findIndex((m) => m.id === id);
     if (idx < 0) throw new Error('not found');
-    memItems[idx] = { ...memItems[idx]!, pinned: patch.pinned ?? memItems[idx]!.pinned };
+    memItems[idx] = {
+      ...memItems[idx]!,
+      content: patch.content ?? memItems[idx]!.content,
+      pinned: patch.pinned ?? memItems[idx]!.pinned,
+    };
     return structuredClone(memItems[idx]!);
   };
   client.memory.delete = async (id) => {
@@ -3342,7 +3346,7 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(screen.getByRole('tab', { name: 'Approval Policies' })).toBeTruthy();
 
     // Reject without min 5 chars triggers validation alert
-    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    await user.click(await screen.findByRole('button', { name: 'Reject' }));
     expect(await screen.findByRole('alert')).toBeTruthy();
 
     // Switch to All Approvals filter view and Approval Policies view
@@ -3355,5 +3359,86 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(axeApr.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
+
+  it('renders Platform Infrastructure Screens 18-19: Tool Inspector Schema/Versions/UsedBy, Connectors Request/Categories, KB Chunks/Settings/ACL & Memory Detail/Contradictions', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+
+    // Part A: Screen 18 Tools & Connections
+    const toolsRender = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/tools" />,
+    );
+    expect(await screen.findByRole('heading', { name: /Tools, OpenAPI & MCP Registry/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Registered Tools' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Connectors Available' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Active Connections' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'MCP Servers' })).toBeTruthy();
+
+    // Verify 4-tab Tool Inspector (Schema Viewer, Version History, Used By)
+    await user.click(await screen.findByRole('tab', { name: 'Schema Viewer' }));
+    expect(await screen.findByText('Input JSON Schema')).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Version History' }));
+    expect(await screen.findByText('Contract Version History')).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Used By' }));
+    expect(await screen.findByText('Used-By Relationship Graph')).toBeTruthy();
+
+    // Connectors Gallery: Category pills + Request Connector workflow
+    await user.click(screen.getByRole('tab', { name: /Connectors Gallery/i }));
+    await user.click(screen.getByRole('button', { name: 'Request Connector' }));
+    await user.type(screen.getByLabelText('Integration Name'), 'PagerDuty');
+    await user.click(screen.getByRole('button', { name: 'Submit Request' }));
+    expect(await screen.findByText(/Submitted connector request for "PagerDuty"/)).toBeTruthy();
+
+    const axeTools = await axe.run(toolsRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeTools.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+    toolsRender.unmount();
+
+    // Part B: Screen 19 Knowledge Bases & Memory Explorer
+    const kmRender = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/knowledge" />,
+    );
+    expect(await screen.findByRole('heading', { name: /Knowledge & Memory/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Knowledge Bases' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Memory Records' })).toBeTruthy();
+
+    // Create KB, ingest document & verify Chunk Preview + Settings + Access Mapping + Query Scores
+    await user.click(screen.getAllByRole('button', { name: /\+ New Knowledge Base/i })[0]!);
+    await user.click(await screen.findByRole('button', { name: 'Create Knowledge Base' }));
+    await user.click(await screen.findByRole('button', { name: 'Ingest Document' }));
+
+    expect(await screen.findByRole('region', { name: 'Chunk preview' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Ask KB' }));
+    expect(await screen.findByText(/Retrieved Chunks & Relevance Scores/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Ingestion Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Save Ingestion Settings' }));
+    expect(await screen.findByText(/Updated ingestion settings/)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Access Mapping' }));
+    expect(await screen.findByRole('table', { name: 'KB access list' })).toBeTruthy();
+
+    // Switch to Memory Explorer -> Agent/User & Age filters, Contradictions Queue & Detail Drawer
+    await user.click(screen.getByRole('tab', { name: /Memory Explorer/i }));
+    expect(await screen.findByLabelText('Filter by agent or user')).toBeTruthy();
+    expect(screen.getByLabelText('Filter by age')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Contradiction review queue' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: '+ Add Memory Item' }));
+    const drawer = await screen.findByRole('complementary', { name: 'Memory item detail drawer' });
+    expect(drawer).toBeTruthy();
+
+    const editField = screen.getByLabelText('Editable Content');
+    await user.clear(editField);
+    await user.type(editField, 'Updated customer preference for PagerDuty escalation');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(await screen.findByText(/Updated content for memory item mem_1/)).toBeTruthy();
+
+    const axeKm = await axe.run(kmRender.container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeKm.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 20_000);
 });

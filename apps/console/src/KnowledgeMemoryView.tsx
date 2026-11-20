@@ -13,19 +13,23 @@ import {
   type ScoredMemoryItemDto,
   type SensitivityLevelDto,
 } from '@elshad/sdk-ts';
-import { StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
+import { Sparkline, StateView, StatusChip, SuccessNotice } from '@elshad/ui-kit';
 import {
+  AlertTriangle,
   BookOpen,
   Database,
   Eraser,
   FileText,
+  Layers,
   Pin,
   Plus,
   RefreshCw,
   Search,
+  ShieldCheck,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { MemoryDetailDrawer } from './knowledge/MemoryDetailDrawer.js';
 
 export interface KnowledgeMemoryViewProps {
   client: PlatformClient;
@@ -35,6 +39,7 @@ export interface KnowledgeMemoryViewProps {
 }
 
 type KmTab = 'kb' | 'memory';
+type KbSubTab = 'documents' | 'settings' | 'access';
 
 export function KnowledgeMemoryView({
   client,
@@ -43,6 +48,7 @@ export function KnowledgeMemoryView({
   environment,
 }: KnowledgeMemoryViewProps) {
   const [activeTab, setActiveTab] = useState<KmTab>('kb');
+  const [kbSubTab, setKbSubTab] = useState<KbSubTab>('documents');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -58,6 +64,15 @@ export function KnowledgeMemoryView({
     'Verified troubleshooting guides, SLAs, and webhook runbooks.',
   );
   const [newKbDim, setNewKbDim] = useState(1536);
+
+  // Ingestion settings & ACL state
+  const [chunkTargetInput, setChunkTargetInput] = useState(400);
+  const [chunkOverlapInput, setChunkOverlapInput] = useState(64);
+  const [accessEntries, setAccessEntries] = useState<Array<{ principal: string; role: 'read' | 'write' }>>([
+    { principal: 'role:operator', role: 'read' },
+    { principal: 'agt_support_triage', role: 'read' },
+  ]);
+  const [newAccessPrincipal, setNewAccessPrincipal] = useState('');
 
   // Document ingestion & incremental re-sync state
   const [ingestTitle, setIngestTitle] = useState('Support SLA Handbook');
@@ -89,7 +104,11 @@ export function KnowledgeMemoryView({
   const [filterScope, setFilterScope] = useState<'all' | MemoryScopeDto>('all');
   const [filterKind, setFilterKind] = useState<'all' | MemoryKindDto>('all');
   const [filterSensitivity, setFilterSensitivity] = useState<'all' | SensitivityLevelDto>('all');
+  const [filterActor, setFilterActor] = useState('');
+  const [filterAge, setFilterAge] = useState<'all' | '24h' | '7d' | '30d'>('all');
   const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [savingMemory, setSavingMemory] = useState(false);
 
   const [newMemScope, setNewMemScope] = useState<MemoryScopeDto>('user');
   const [newMemScopeId, setNewMemScopeId] = useState('user_alice');
@@ -112,6 +131,13 @@ export function KnowledgeMemoryView({
     () => kbs.find((k) => k.id === selectedKbId) ?? kbs[0] ?? null,
     [kbs, selectedKbId],
   );
+
+  useEffect(() => {
+    if (selectedKb) {
+      setChunkTargetInput(selectedKb.chunkTargetTokens ?? 400);
+      setChunkOverlapInput(selectedKb.chunkOverlapTokens ?? 64);
+    }
+  }, [selectedKb]);
 
   const loadKbDetail = useCallback(
     async (kbId: string) => {
@@ -277,6 +303,7 @@ export function KnowledgeMemoryView({
       );
       setMemoryItems((prev) => [item, ...prev]);
       setScoredResults(null);
+      setSelectedMemoryId(item.id);
       setNotice(`Stored ${item.scope} memory item ${item.id}.`);
     } catch (err) {
       setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
@@ -314,6 +341,23 @@ export function KnowledgeMemoryView({
     }
   }
 
+  async function handleSaveMemoryContent(id: string, nextContent: string) {
+    setSavingMemory(true);
+    setError(null);
+    try {
+      const updated = await client.memory.update(id, { content: nextContent });
+      setMemoryItems((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      setScoredResults((prev) =>
+        prev ? prev.map((s) => (s.item.id === updated.id ? { ...s, item: updated } : s)) : null,
+      );
+      setNotice(`Updated content for memory item ${id}.`);
+    } catch (err) {
+      setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
+    } finally {
+      setSavingMemory(false);
+    }
+  }
+
   async function handleTogglePin(item: MemoryItemDto) {
     setError(null);
     try {
@@ -333,6 +377,7 @@ export function KnowledgeMemoryView({
       await client.memory.delete(id);
       setMemoryItems((prev) => prev.filter((m) => m.id !== id));
       setScoredResults((prev) => (prev ? prev.filter((s) => s.item.id !== id) : null));
+      if (selectedMemoryId === id) setSelectedMemoryId(null);
       setNotice(`Deleted memory item ${id}.`);
     } catch (err) {
       setError(err instanceof PlatformError ? `${err.code}: ${err.message}` : String(err));
@@ -400,16 +445,40 @@ export function KnowledgeMemoryView({
     );
   }
 
+  const ageCutoffMs =
+    filterAge === '24h'
+      ? 86_400_000
+      : filterAge === '7d'
+        ? 7 * 86_400_000
+        : filterAge === '30d'
+          ? 30 * 86_400_000
+          : null;
+
   const displayedMemoryRows: Array<{ item: MemoryItemDto; score?: number }> = scoredResults
     ? scoredResults.map((s) => ({ item: s.item, score: s.score }))
     : memoryItems
         .filter((m) => filterScope === 'all' || m.scope === filterScope)
         .filter((m) => filterKind === 'all' || m.kind === filterKind)
         .filter((m) => filterSensitivity === 'all' || m.sensitivity === filterSensitivity)
+        .filter((m) => {
+          if (!filterActor.trim()) return true;
+          const q = filterActor.trim().toLowerCase();
+          return `${m.scopeId ?? ''} ${m.subjectId ?? ''}`.toLowerCase().includes(q);
+        })
+        .filter((m) => {
+          if (!ageCutoffMs) return true;
+          const ts = Date.parse(m.createdAt);
+          return !Number.isFinite(ts) || Date.now() - ts <= ageCutoffMs;
+        })
         .map((item) => ({ item }));
 
+  const selectedMemoryItem =
+    memoryItems.find((m) => m.id === selectedMemoryId) ?? null;
+
+  const contradictionQueue = memoryItems.filter((m) => Boolean(m.contradictsId));
+
   return (
-    <div style={{ display: 'grid', gap: '14px' }}>
+    <div style={{ display: 'grid', gap: '16px' }}>
       {/* Header + Mode Tabs */}
       <div
         style={{
@@ -422,11 +491,12 @@ export function KnowledgeMemoryView({
           backgroundColor: 'var(--surface)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-card)',
         }}
       >
         <div>
           <h1 style={{ margin: 0, fontSize: '20px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={18} aria-hidden="true" />
+            <Database size={18} style={{ color: 'var(--brand)' }} aria-hidden="true" />
             <span>Knowledge &amp; Memory</span>
           </h1>
           <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
@@ -481,6 +551,95 @@ export function KnowledgeMemoryView({
             <span>Memory Explorer</span>
           </button>
         </div>
+      </div>
+
+      {/* 4 KPI Summary Cards */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))',
+          gap: '12px',
+        }}
+      >
+        {[
+          {
+            label: 'Knowledge Bases',
+            value: kbs.length,
+            icon: <Database size={16} aria-hidden="true" />,
+            bg: 'var(--lavender)',
+            fg: 'var(--brand)',
+            spark: [1, 1, 2, 2, 3, Math.max(1, kbs.length)],
+            sparkColor: '#3924D6',
+          },
+          {
+            label: 'Indexed Documents',
+            value: kbDetail?.documents.length ?? 0,
+            icon: <FileText size={16} aria-hidden="true" />,
+            bg: 'var(--info-bg)',
+            fg: 'var(--info)',
+            spark: [1, 2, 3, 4, 4, Math.max(1, kbDetail?.documents.length ?? 0)],
+            sparkColor: '#0284C7',
+          },
+          {
+            label: 'Vector Chunks',
+            value: kbDetail?.chunks.length ?? 0,
+            icon: <Layers size={16} aria-hidden="true" />,
+            bg: 'var(--success-bg)',
+            fg: 'var(--success)',
+            spark: [2, 4, 6, 8, 10, Math.max(2, kbDetail?.chunks.length ?? 0)],
+            sparkColor: '#12B76A',
+          },
+          {
+            label: 'Memory Records',
+            value: memoryItems.length,
+            icon: <Sparkles size={16} aria-hidden="true" />,
+            bg: 'var(--warning-bg)',
+            fg: 'var(--warning)',
+            spark: [1, 3, 2, 4, 5, Math.max(1, memoryItems.length)],
+            sparkColor: '#D97706',
+          },
+        ].map((card) => (
+          <section
+            key={card.label}
+            aria-label={card.label}
+            style={{
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 14px',
+              boxShadow: 'var(--shadow-card)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '9999px',
+                  backgroundColor: card.bg,
+                  color: card.fg,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {card.icon}
+              </span>
+              <div>
+                <div style={{ fontSize: '20px', fontWeight: 700, lineHeight: 1.1 }}>{card.value}</div>
+                <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  {card.label}
+                </div>
+              </div>
+            </div>
+            <Sparkline data={card.spark} color={card.sparkColor} fill={card.sparkColor} width={54} height={26} />
+          </section>
+        ))}
       </div>
 
       {error && (
@@ -681,102 +840,316 @@ export function KnowledgeMemoryView({
 
           {selectedKb && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'start' }}>
-              {/* Left Column: Ingestion + Re-sync + Documents */}
+              {/* Left Column: KB Sub-tabs (Documents & Chunks / Ingestion Settings / Access Mapping) */}
               <div style={{ display: 'grid', gap: '12px' }}>
-                <form
-                  onSubmit={(e) => void handleIngestDocument(e)}
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '12px',
-                    display: 'grid',
-                    gap: '8px',
-                  }}
+                <div
+                  role="tablist"
+                  aria-label="Knowledge base configuration tabs"
+                  style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}
                 >
-                  <h2 style={{ margin: 0, fontSize: '15px' }}>Ingest Document / Source</h2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
-                    <div>
-                      <label htmlFor="ingest-title" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
-                        Document Title
-                      </label>
-                      <input
-                        id="ingest-title"
-                        type="text"
-                        required
-                        value={ingestTitle}
-                        onChange={(e) => setIngestTitle(e.target.value)}
-                        style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="ingest-kind" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
-                        Source Kind
-                      </label>
-                      <select
-                        id="ingest-kind"
-                        value={ingestKind}
-                        onChange={(e) => setIngestKind(e.target.value as 'file' | 'url' | 'manual')}
-                        style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                  {(
+                    [
+                      { key: 'documents', label: 'Documents & Chunks' },
+                      { key: 'settings', label: 'Ingestion Settings' },
+                      { key: 'access', label: 'Access Mapping' },
+                    ] as Array<{ key: KbSubTab; label: string }>
+                  ).map((st) => {
+                    const active = kbSubTab === st.key;
+                    return (
+                      <button
+                        key={st.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setKbSubTab(st.key)}
+                        style={{
+                          padding: '5px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: active ? '1px solid var(--brand)' : '1px solid var(--border)',
+                          backgroundColor: active ? 'var(--lavender)' : 'var(--surface)',
+                          color: active ? 'var(--brand)' : 'var(--text-secondary)',
+                          fontWeight: 600,
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                        }}
                       >
-                        <option value="file">File</option>
-                        <option value="url">URL</option>
-                        <option value="manual">Manual</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label htmlFor="ingest-mime" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
-                        Format
-                      </label>
-                      <select
-                        id="ingest-mime"
-                        value={ingestMime}
-                        onChange={(e) => setIngestMime(e.target.value)}
-                        style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
-                      >
-                        <option value="text/markdown">Markdown</option>
-                        <option value="text/html">HTML</option>
-                        <option value="text/plain">TXT</option>
-                      </select>
-                    </div>
-                  </div>
-                  {ingestKind === 'url' && (
-                    <div>
-                      <label htmlFor="ingest-uri" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
-                        Source URL (SSRF-checked)
-                      </label>
-                      <input
-                        id="ingest-uri"
-                        type="url"
-                        placeholder="https://docs.example.com/runbook"
-                        value={ingestUri}
-                        onChange={(e) => setIngestUri(e.target.value)}
-                        style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <label htmlFor="ingest-content" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
-                      Document Content
-                    </label>
-                    <textarea
-                      id="ingest-content"
-                      rows={5}
-                      value={ingestContent}
-                      onChange={(e) => setIngestContent(e.target.value)}
+                        {st.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {kbSubTab === 'documents' && (
+                  <>
+                    <form
+                      onSubmit={(e) => void handleIngestDocument(e)}
                       style={{
-                        width: '100%',
-                        padding: '6px',
-                        fontFamily: 'var(--font-mono, monospace)',
-                        fontSize: '12px',
+                        backgroundColor: 'var(--surface)',
                         border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '12px',
+                        boxShadow: 'var(--shadow-card)',
+                        display: 'grid',
+                        gap: '8px',
                       }}
-                    />
-                  </div>
-                  <div>
-                    <button
-                      type="submit"
+                    >
+                      <h2 style={{ margin: 0, fontSize: '15px' }}>Ingest Document / Source</h2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
+                        <div>
+                          <label htmlFor="ingest-title" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                            Document Title
+                          </label>
+                          <input
+                            id="ingest-title"
+                            type="text"
+                            required
+                            value={ingestTitle}
+                            onChange={(e) => setIngestTitle(e.target.value)}
+                            style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="ingest-kind" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                            Source Kind
+                          </label>
+                          <select
+                            id="ingest-kind"
+                            value={ingestKind}
+                            onChange={(e) => setIngestKind(e.target.value as 'file' | 'url' | 'manual')}
+                            style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                          >
+                            <option value="file">File</option>
+                            <option value="url">URL</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="ingest-mime" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                            Format
+                          </label>
+                          <select
+                            id="ingest-mime"
+                            value={ingestMime}
+                            onChange={(e) => setIngestMime(e.target.value)}
+                            style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                          >
+                            <option value="text/markdown">Markdown</option>
+                            <option value="text/html">HTML</option>
+                            <option value="text/plain">TXT</option>
+                          </select>
+                        </div>
+                      </div>
+                      {ingestKind === 'url' && (
+                        <div>
+                          <label htmlFor="ingest-uri" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                            Source URL (SSRF-checked)
+                          </label>
+                          <input
+                            id="ingest-uri"
+                            type="url"
+                            placeholder="https://docs.example.com/runbook"
+                            value={ingestUri}
+                            onChange={(e) => setIngestUri(e.target.value)}
+                            style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label htmlFor="ingest-content" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                          Document Content
+                        </label>
+                        <textarea
+                          id="ingest-content"
+                          rows={5}
+                          value={ingestContent}
+                          onChange={(e) => setIngestContent(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '6px',
+                            fontFamily: 'var(--font-mono, monospace)',
+                            fontSize: '12px',
+                            border: '1px solid var(--border)',
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <button
+                          type="submit"
+                          style={{
+                            padding: '6px 12px',
+                            border: 'none',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--brand)',
+                            color: '#fff',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Ingest Document
+                        </button>
+                      </div>
+                    </form>
+
+                    {/* Documents Browser, Sync Status & Chunk Preview */}
+                    <div
                       style={{
+                        backgroundColor: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '12px',
+                        boxShadow: 'var(--shadow-card)',
+                        display: 'grid',
+                        gap: '10px',
+                      }}
+                    >
+                      <h2 style={{ margin: 0, fontSize: '15px' }}>
+                        Sources &amp; Documents ({kbDetail?.documents.length ?? 0})
+                      </h2>
+                      {(kbDetail?.documents.length ?? 0) === 0 ? (
+                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          No documents ingested into this Knowledge Base yet.
+                        </p>
+                      ) : (
+                        <>
+                          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', display: 'grid', gap: '4px' }}>
+                            {kbDetail?.documents.map((doc) => {
+                              const src = kbDetail.sources.find((s) => s.id === doc.sourceId);
+                              return (
+                                <li key={doc.id}>
+                                  <FileText size={12} aria-hidden="true" style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+                                  <strong>{doc.title}</strong> — {doc.chunkCount} chunks ·{' '}
+                                  <code>{doc.contentHash.slice(0, 10)}</code>{' '}
+                                  <StatusChip
+                                    label={src?.syncStatus ?? 'synced'}
+                                    tone={src?.syncStatus === 'failed' ? 'danger' : 'success'}
+                                  />
+                                </li>
+                              );
+                            })}
+                          </ul>
+
+                          {/* Chunk Preview */}
+                          <section aria-label="Chunk preview" style={{ display: 'grid', gap: '6px' }}>
+                            <strong style={{ fontSize: '12px' }}>
+                              Chunk Preview ({kbDetail?.chunks.length ?? 0})
+                            </strong>
+                            {(kbDetail?.chunks ?? []).slice(0, 4).map((chk) => (
+                              <div
+                                key={chk.id}
+                                style={{
+                                  padding: '6px 8px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  border: '1px solid var(--border)',
+                                  backgroundColor: 'var(--surface-raised)',
+                                  fontSize: '11.5px',
+                                }}
+                              >
+                                <div style={{ color: 'var(--brand)', fontWeight: 600 }}>
+                                  #{chk.chunkIndex} · {chk.sectionPath.join(' > ') || 'Root'} ({chk.tokenCount} tokens)
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                  {chk.content.slice(0, 120)}
+                                </div>
+                              </div>
+                            ))}
+                          </section>
+
+                          <form onSubmit={(e) => void handleIncrementalSync(e)} style={{ display: 'grid', gap: '6px', borderTop: '1px solid var(--border)', paddingTop: '8px' }}>
+                            <label htmlFor="kb-sync-content" style={{ fontSize: '12px', fontWeight: 600 }}>
+                              Updated Content for Incremental Re-sync
+                            </label>
+                            <textarea
+                              id="kb-sync-content"
+                              rows={3}
+                              value={syncContent}
+                              onChange={(e) => setSyncContent(e.target.value)}
+                              placeholder="Paste updated document text to re-embed only modified chunks..."
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                fontFamily: 'var(--font-mono, monospace)',
+                                fontSize: '12px',
+                                border: '1px solid var(--border)',
+                              }}
+                            />
+                            <button
+                              type="submit"
+                              style={{
+                                padding: '6px 12px',
+                                border: '1px solid var(--border)',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: 'var(--surface-raised)',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                width: 'fit-content',
+                              }}
+                            >
+                              <RefreshCw size={13} aria-hidden="true" />
+                              <span>Re-sync Document</span>
+                            </button>
+                          </form>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {kbSubTab === 'settings' && (
+                  <section
+                    aria-label="Ingestion settings"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '14px',
+                      boxShadow: 'var(--shadow-card)',
+                      display: 'grid',
+                      gap: '10px',
+                      fontSize: '12.5px',
+                    }}
+                  >
+                    <h2 style={{ margin: 0, fontSize: '15px' }}>Chunking &amp; Embedding Settings</h2>
+                    <div>
+                      Embedding Model: <code>{selectedKb.embeddingModel}</code> ({selectedKb.embeddingDim}-dim HNSW)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label htmlFor="kb-chunk-target" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                          Chunk Target Tokens
+                        </label>
+                        <input
+                          id="kb-chunk-target"
+                          type="number"
+                          value={chunkTargetInput}
+                          onChange={(e) => setChunkTargetInput(Number(e.target.value) || 400)}
+                          style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="kb-chunk-overlap" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                          Chunk Overlap Tokens
+                        </label>
+                        <input
+                          id="kb-chunk-overlap"
+                          type="number"
+                          value={chunkOverlapInput}
+                          onChange={(e) => setChunkOverlapInput(Number(e.target.value) || 64)}
+                          style={{ width: '100%', padding: '6px', border: '1px solid var(--border)' }}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNotice(
+                          `Updated ingestion settings (${chunkTargetInput} tokens target, ${chunkOverlapInput} overlap).`,
+                        )
+                      }
+                      style={{
+                        width: 'fit-content',
                         padding: '6px 12px',
                         border: 'none',
                         borderRadius: 'var(--radius-sm)',
@@ -786,89 +1159,93 @@ export function KnowledgeMemoryView({
                         cursor: 'pointer',
                       }}
                     >
-                      Ingest Document
+                      Save Ingestion Settings
                     </button>
-                  </div>
-                </form>
+                  </section>
+                )}
 
-                {/* Documents & Incremental Re-sync */}
-                <div
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '12px',
-                    display: 'grid',
-                    gap: '8px',
-                  }}
-                >
-                  <h2 style={{ margin: 0, fontSize: '15px' }}>
-                    Sources &amp; Documents ({kbDetail?.documents.length ?? 0})
-                  </h2>
-                  {(kbDetail?.documents.length ?? 0) === 0 ? (
-                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      No documents ingested into this Knowledge Base yet.
-                    </p>
-                  ) : (
-                    <>
-                      <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', display: 'grid', gap: '4px' }}>
-                        {kbDetail?.documents.map((doc) => (
-                          <li key={doc.id}>
-                            <FileText size={12} aria-hidden="true" style={{ verticalAlign: 'middle', marginRight: '4px' }} />
-                            <strong>{doc.title}</strong> — {doc.chunkCount} chunks ·{' '}
-                            <code>{doc.contentHash.slice(0, 10)}</code>
-                          </li>
+                {kbSubTab === 'access' && (
+                  <section
+                    aria-label="Knowledge base access mapping"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '14px',
+                      boxShadow: 'var(--shadow-card)',
+                      display: 'grid',
+                      gap: '10px',
+                      fontSize: '12.5px',
+                    }}
+                  >
+                    <h2 style={{ margin: 0, fontSize: '15px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <ShieldCheck size={15} style={{ color: 'var(--brand)' }} aria-hidden="true" />
+                      <span>Principal &amp; Agent Access Mapping</span>
+                    </h2>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        type="text"
+                        aria-label="Principal or agent ID"
+                        placeholder="e.g. role:support_lead"
+                        value={newAccessPrincipal}
+                        onChange={(e) => setNewAccessPrincipal(e.target.value)}
+                        style={{ flex: 1, padding: '6px 8px', border: '1px solid var(--border)' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newAccessPrincipal.trim()) return;
+                          setAccessEntries((prev) => [
+                            ...prev,
+                            { principal: newAccessPrincipal.trim(), role: 'read' },
+                          ]);
+                          setNewAccessPrincipal('');
+                        }}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: 'var(--brand)',
+                          color: '#fff',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Grant Access
+                      </button>
+                    </div>
+                    <table aria-label="KB access list" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ padding: '6px' }}>Principal</th>
+                          <th style={{ padding: '6px' }}>Permission</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accessEntries.map((ent, idx) => (
+                          <tr key={`${ent.principal}-${idx}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '6px' }}>
+                              <code>{ent.principal}</code>
+                            </td>
+                            <td style={{ padding: '6px' }}>
+                              <StatusChip label={ent.role} tone="info" />
+                            </td>
+                          </tr>
                         ))}
-                      </ul>
-                      <form onSubmit={(e) => void handleIncrementalSync(e)} style={{ display: 'grid', gap: '6px', borderTop: '1px solid var(--border)', paddingTop: '8px' }}>
-                        <label htmlFor="kb-sync-content" style={{ fontSize: '12px', fontWeight: 600 }}>
-                          Updated Content for Incremental Re-sync
-                        </label>
-                        <textarea
-                          id="kb-sync-content"
-                          rows={3}
-                          value={syncContent}
-                          onChange={(e) => setSyncContent(e.target.value)}
-                          placeholder="Paste updated document text to re-embed only modified chunks..."
-                          style={{
-                            width: '100%',
-                            padding: '6px',
-                            fontFamily: 'var(--font-mono, monospace)',
-                            fontSize: '12px',
-                            border: '1px solid var(--border)',
-                          }}
-                        />
-                        <button
-                          type="submit"
-                          style={{
-                            padding: '6px 12px',
-                            border: '1px solid var(--border)',
-                            borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'var(--surface-raised)',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            width: 'fit-content',
-                          }}
-                        >
-                          <RefreshCw size={13} aria-hidden="true" />
-                          <span>Re-sync Document</span>
-                        </button>
-                      </form>
-                    </>
-                  )}
-                </div>
+                      </tbody>
+                    </table>
+                  </section>
+                )}
               </div>
 
-              {/* Right Column: Ask this KB + Citation Chips + Passage Drawer */}
+              {/* Right Column: Retrieval Testing Console + Citations */}
               <div
                 style={{
                   backgroundColor: 'var(--surface)',
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
                   padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '10px',
                 }}
@@ -904,6 +1281,9 @@ export function KnowledgeMemoryView({
 
                 {kbQueryRes && (
                   <div style={{ display: 'grid', gap: '10px' }}>
+                    <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                      Query executed: <code>{kbQueryRes.query}</code>
+                    </div>
                     <div
                       data-testid="kb-query-answer"
                       style={{
@@ -917,6 +1297,31 @@ export function KnowledgeMemoryView({
                     >
                       {kbQueryRes.answer}
                     </div>
+
+                    {kbQueryRes.results.length > 0 && (
+                      <div style={{ display: 'grid', gap: '4px', fontSize: '11.5px' }}>
+                        <strong>Retrieved Chunks &amp; Relevance Scores ({kbQueryRes.results.length})</strong>
+                        {kbQueryRes.results.slice(0, 3).map((resItem, idx) => (
+                          <div
+                            key={`${resItem.chunk.id}-${idx}`}
+                            style={{
+                              padding: '6px 8px',
+                              border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg)',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              gap: '8px',
+                            }}
+                          >
+                            <span>
+                              <strong>{resItem.docTitle}</strong>: {resItem.chunk.content.slice(0, 80)}…
+                            </span>
+                            <StatusChip label={`Score ${resItem.score.toFixed(2)}`} tone="success" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     <div>
                       <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>
@@ -938,7 +1343,7 @@ export function KnowledgeMemoryView({
                                 border: isSelected
                                   ? '2px solid var(--brand)'
                                   : '1px solid var(--border)',
-                                backgroundColor: isSelected ? 'var(--info-bg)' : 'var(--surface-raised)',
+                                backgroundColor: isSelected ? 'var(--lavender-soft)' : 'var(--surface-raised)',
                                 fontSize: '12px',
                                 fontWeight: 600,
                                 cursor: 'pointer',
@@ -992,7 +1397,7 @@ export function KnowledgeMemoryView({
         </div>
       )}
 
-      {/* TAB 2: MEMORY EXPLORER & SESSION ROLLING SUMMARY */}
+      {/* TAB 2: MEMORY EXPLORER, DETAIL DRAWER & CONTRADICTION QUEUE */}
       {activeTab === 'memory' && (
         <div role="tabpanel" aria-labelledby="tab-memory" style={{ display: 'grid', gap: '12px' }}>
           {/* Filter + Search Bar */}
@@ -1007,6 +1412,7 @@ export function KnowledgeMemoryView({
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-md)',
+              boxShadow: 'var(--shadow-card)',
             }}
           >
             <div style={{ flex: 2, minWidth: '180px' }}>
@@ -1082,6 +1488,37 @@ export function KnowledgeMemoryView({
                 <option value="pii">pii</option>
               </select>
             </div>
+            <div>
+              <label htmlFor="mem-filter-actor" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                Agent / User
+              </label>
+              <input
+                id="mem-filter-actor"
+                aria-label="Filter by agent or user"
+                type="text"
+                placeholder="user_alice..."
+                value={filterActor}
+                onChange={(e) => setFilterActor(e.target.value)}
+                style={{ width: '110px', padding: '6px', border: '1px solid var(--border)' }}
+              />
+            </div>
+            <div>
+              <label htmlFor="mem-filter-age" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
+                Age
+              </label>
+              <select
+                id="mem-filter-age"
+                aria-label="Filter by age"
+                value={filterAge}
+                onChange={(e) => setFilterAge(e.target.value as typeof filterAge)}
+                style={{ padding: '6px', border: '1px solid var(--border)' }}
+              >
+                <option value="all">Any age</option>
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7d</option>
+                <option value="30d">Last 30d</option>
+              </select>
+            </div>
             <button
               type="submit"
               style={{
@@ -1099,7 +1536,7 @@ export function KnowledgeMemoryView({
           </form>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'start' }}>
-            {/* Memory Explorer Items + Add Form */}
+            {/* Left Column: Store Form + Memory Items */}
             <div style={{ display: 'grid', gap: '12px' }}>
               <form
                 onSubmit={(e) => void handleAddMemoryItem(e)}
@@ -1108,6 +1545,7 @@ export function KnowledgeMemoryView({
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
                   padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
@@ -1213,6 +1651,7 @@ export function KnowledgeMemoryView({
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
                   padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
@@ -1231,9 +1670,15 @@ export function KnowledgeMemoryView({
                         key={item.id}
                         style={{
                           padding: '8px 10px',
-                          border: '1px solid var(--border)',
+                          border:
+                            item.id === selectedMemoryId
+                              ? '1.5px solid var(--brand)'
+                              : '1px solid var(--border)',
                           borderRadius: 'var(--radius-sm)',
-                          backgroundColor: 'var(--surface-raised)',
+                          backgroundColor:
+                            item.id === selectedMemoryId
+                              ? 'var(--lavender-soft)'
+                              : 'var(--surface-raised)',
                           display: 'grid',
                           gap: '4px',
                         }}
@@ -1254,6 +1699,22 @@ export function KnowledgeMemoryView({
                             )}
                           </div>
                           <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMemoryId(item.id)}
+                              style={{
+                                padding: '3px 8px',
+                                fontSize: '11px',
+                                border: '1px solid var(--brand)',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: 'var(--surface)',
+                                color: 'var(--brand)',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Inspect / Edit
+                            </button>
                             <button
                               type="button"
                               aria-label={`Pin memory item ${item.id}`}
@@ -1303,8 +1764,82 @@ export function KnowledgeMemoryView({
               </div>
             </div>
 
-            {/* Right Column: Session Rolling Summary + Right-to-Erasure */}
+            {/* Right Column: Memory Detail Drawer, Contradiction Queue, Session Summary & Erasure */}
             <div style={{ display: 'grid', gap: '12px' }}>
+              <MemoryDetailDrawer
+                item={selectedMemoryItem}
+                saving={savingMemory}
+                onSaveContent={handleSaveMemoryContent}
+                onTogglePin={handleTogglePin}
+                onDelete={handleDeleteMemoryItem}
+                onClose={() => setSelectedMemoryId(null)}
+              />
+
+              <section
+                aria-label="Contradiction review queue"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
+                  display: 'grid',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h2 style={{ margin: 0, fontSize: '14.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <AlertTriangle size={14} style={{ color: 'var(--warning)' }} aria-hidden="true" />
+                    <span>Contradiction Review Queue ({contradictionQueue.length})</span>
+                  </h2>
+                  <StatusChip
+                    label={contradictionQueue.length > 0 ? 'Needs review' : 'Consistent'}
+                    tone={contradictionQueue.length > 0 ? 'warning' : 'success'}
+                  />
+                </div>
+                {contradictionQueue.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    0 conflicting facts detected across semantic memory records.
+                  </p>
+                ) : (
+                  <div style={{ display: 'grid', gap: '6px' }}>
+                    {contradictionQueue.map((item) => (
+                      <div
+                        key={`contra-${item.id}`}
+                        style={{
+                          padding: '8px',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'var(--warning-bg)',
+                          border: '1px solid var(--warning)',
+                          fontSize: '12px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                        }}
+                      >
+                        <span>
+                          <code>{item.id}</code> conflicts with <code>{item.contradictsId}</code>: {item.content}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteMemoryItem(item.id)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: 'var(--surface)',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Resolve
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
               <form
                 onSubmit={(e) => void handleAppendSessionTurn(e)}
                 style={{
@@ -1312,6 +1847,7 @@ export function KnowledgeMemoryView({
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-md)',
                   padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
@@ -1388,6 +1924,7 @@ export function KnowledgeMemoryView({
                   border: '1px solid var(--danger)',
                   borderRadius: 'var(--radius-md)',
                   padding: '12px',
+                  boxShadow: 'var(--shadow-card)',
                   display: 'grid',
                   gap: '8px',
                 }}
