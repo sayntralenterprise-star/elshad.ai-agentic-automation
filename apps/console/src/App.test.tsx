@@ -3194,4 +3194,87 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     });
     expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 20_000);
+
+  it('renders Workflow Engine Screens 12-14: Registry & Templates, Builder Undo/Redo/Auto-Layout/Sticky Notes/6-Tab Inspector/JSON, and Executions Overlay', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const { container } = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/workflows" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Canvas' })).toBeTruthy();
+
+    // Screen 12: Switch to Workflows Registry & use a template
+    await user.click(screen.getByRole('tab', { name: 'Registry' }));
+    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Total Workflows' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Active Workflows' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Draft Workflows' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Failed Workflows' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Workflow template gallery' })).toBeTruthy();
+
+    const useTemplateBtns = screen.getAllByRole('button', { name: 'Use Template' });
+    await user.click(useTemplateBtns[1]!);
+    expect(
+      await screen.findByText(/Created workflow "invoice-3way-match-1" from template "Invoice 3-Way Match"/),
+    ).toBeTruthy();
+
+    // Screen 13: Builder controls, Auto-Layout, Sticky Note, Undo/Redo, 6-Tab Inspector & JSON Modal
+    await user.click(screen.getByRole('button', { name: 'Auto-Layout' }));
+    expect(await screen.findByText(/Auto-arranged canvas nodes/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Sticky Note' }));
+    expect(await screen.findByLabelText('Sticky note')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.queryByLabelText('Sticky note')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(await screen.findByLabelText('Sticky note')).toBeTruthy();
+
+    // Right Inspector: Expression preview + 6 tabs
+    expect(screen.getByLabelText('Expression evaluation preview').textContent).toContain(
+      'Urgent: Server latency alert!',
+    );
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(screen.getByText(/Outgoing Connections/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Input' }));
+    expect(screen.getByText(/Upstream nodes/)).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Notes' }));
+    expect(screen.getByLabelText('Node Implementation Notes')).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Parameters' }));
+
+    // YAML & JSON lossless modal
+    await user.click(screen.getByRole('button', { name: 'View as YAML' }));
+    await user.click(screen.getByRole('tab', { name: 'JSON' }));
+    const jsonArea = (await screen.findByLabelText('workflow_json')) as HTMLTextAreaElement;
+    expect(jsonArea.value).toContain('"schema_version": 1');
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Execute workflow and open Screen 14 Executions
+    await user.click(screen.getByRole('button', { name: 'Test Workflow' }));
+    expect(await screen.findByText(/Triggered workflow run run_wf_full/)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: /Executions \(/ }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Executions' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Total Executions' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Successful' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Avg Duration' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Workflow executions' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Timeline' }));
+    expect(await screen.findByRole('region', { name: 'Execution timeline details' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }));
+    expect(await screen.findByText(/Exported 1 workflow execution row\(s\) to CSV/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Inspect on Canvas' }));
+    expect(await screen.findByRole('region', { name: 'Execution overlay status' })).toBeTruthy();
+    const overlaidNodes = screen.getAllByTestId('canvas-node');
+    expect(overlaidNodes[0]?.getAttribute('data-overlay-status')).toBe('succeeded');
+
+    const axeRes = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(axeRes.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
+  }, 20_000);
 });

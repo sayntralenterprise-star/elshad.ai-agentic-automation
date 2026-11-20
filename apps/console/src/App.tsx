@@ -1353,6 +1353,7 @@ export function ConsoleApp({ client: providedClient, initialPath, initialTheme }
                   workspaceId={activeWorkspace?.id}
                   projectId={projects[0]?.id}
                   environment={env}
+                  ownerName={me.principal.displayName}
                 />
               )}
 
