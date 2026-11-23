@@ -248,6 +248,7 @@ export function WorkflowCanvasView({
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const [connectingFromNodeId, setConnectingFromNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [versionsDrawerOpen, setVersionsDrawerOpen] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 520 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -2658,9 +2659,20 @@ export function WorkflowCanvasView({
                           : 'var(--warning-bg)'
                       : 'var(--surface)';
 
+                    const isHovered = hoveredNodeId === node.id;
+                    const showPorts = isHovered || isSelected || Boolean(connectingFromNodeId);
+
                     return (
                       <div
                         key={node.id}
+                        onMouseEnter={() => setHoveredNodeId(node.id)}
+                        onMouseLeave={() => setHoveredNodeId((prev) => (prev === node.id ? null : prev))}
+                        onFocus={() => setHoveredNodeId(node.id)}
+                        onBlur={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                            setHoveredNodeId((prev) => (prev === node.id ? null : prev));
+                          }
+                        }}
                         style={{
                           position: 'absolute',
                           left: `${node.position.x}px`,
@@ -2703,6 +2715,8 @@ export function WorkflowCanvasView({
                               justifyContent: 'center',
                               cursor: connectingFromNodeId ? 'crosshair' : 'default',
                               zIndex: 2,
+                              opacity: showPorts ? 1 : 0,
+                              transition: 'opacity 120ms ease',
                             }}
                           >
                             {connectingFromNodeId && connectingFromNodeId !== node.id ? '+' : ''}
@@ -2846,6 +2860,8 @@ export function WorkflowCanvasView({
                                 cursor: 'pointer',
                                 zIndex: 3,
                                 boxShadow: '0 1px 4px rgba(23, 23, 43, 0.14)',
+                                opacity: showPorts ? 1 : 0,
+                                transition: 'opacity 120ms ease',
                               }}
                             >
                               +
