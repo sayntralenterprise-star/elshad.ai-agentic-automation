@@ -4,10 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent,
 } from 'react';
 import { PlatformError, type EnvironmentKind } from '@elshad/domain';
 import {
@@ -48,6 +46,7 @@ import {
 } from 'lucide-react';
 import { WorkflowExecutionsView } from './workflows/WorkflowExecutionsView.js';
 import { WorkflowInspectorPanel } from './workflows/WorkflowInspectorPanel.js';
+import { ReactFlowCanvas } from './workflows/ReactFlowCanvas.js';
 import { WorkflowsRegistryView } from './workflows/WorkflowsRegistryView.js';
 import {
   CATEGORY_META,
@@ -55,8 +54,6 @@ import {
   autoLayoutGraph,
   buildSupportTriageGraph,
   buildExecutionOverlay,
-  getNodeCategory,
-  getNodeConfigPreview,
   type NodeExecutionOverlay,
   type WorkflowTemplate,
 } from './workflows/workflowTemplates.js';
@@ -249,18 +246,10 @@ export function WorkflowCanvasView({
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const [connectingFromNodeId, setConnectingFromNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [versionsDrawerOpen, setVersionsDrawerOpen] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 520 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const dragOriginRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
-  const nodeDragRef = useRef<{
-    nodeId: string;
-    startX: number;
-    startY: number;
-    origX: number;
-    origY: number;
-    moved: boolean;
-  } | null>(null);
 
   // Execution status overlay on canvas
   const [activeOverlayRun, setActiveOverlayRun] = useState<RunDto | null>(null);
@@ -675,13 +664,11 @@ export function WorkflowCanvasView({
     setNotice(`Added "${newNode.name}" (${desc.type}) to canvas draft.`);
   }
 
-  function handleDeleteSelectedNode() {
-    if (!selectedNode) return;
+  function handleDeleteNodeById(targetId: string) {
     if (draftGraph.nodes.length <= 1) {
       setError('A workflow must retain at least one node.');
       return;
     }
-    const targetId = selectedNode.id;
     commitGraphChange((g) => {
       const nextPinned = { ...g.pinned_data };
       delete nextPinned[targetId];
@@ -692,20 +679,28 @@ export function WorkflowCanvasView({
         pinned_data: nextPinned,
       };
     });
-    const remaining = draftGraph.nodes.find((n) => n.id !== targetId);
-    setSelectedNodeId(remaining?.id ?? null);
+    if (selectedNodeId === targetId) {
+      const remaining = draftGraph.nodes.find((n) => n.id !== targetId);
+      setSelectedNodeId(remaining?.id ?? null);
+    }
   }
 
-  function handleDuplicateSelectedNode() {
+  function handleDeleteSelectedNode() {
     if (!selectedNode) return;
-    const copyId = `${selectedNode.id}_copy_${Date.now().toString(36).slice(-3)}`;
+    handleDeleteNodeById(selectedNode.id);
+  }
+
+  function handleDuplicateNodeById(targetId: string) {
+    const sourceNode = draftGraph.nodes.find((n) => n.id === targetId);
+    if (!sourceNode) return;
+    const copyId = `${sourceNode.id}_copy_${Date.now().toString(36).slice(-3)}`;
     const clone: WorkflowNodeDto = {
-      ...structuredClone(selectedNode),
+      ...structuredClone(sourceNode),
       id: copyId,
-      name: `${selectedNode.name} Copy`,
+      name: `${sourceNode.name} Copy`,
       position: {
-        x: selectedNode.position.x + 48,
-        y: selectedNode.position.y + 96,
+        x: sourceNode.position.x + 48,
+        y: sourceNode.position.y + 96,
       },
     };
     commitGraphChange((g) => ({
@@ -713,7 +708,53 @@ export function WorkflowCanvasView({
       nodes: [...g.nodes, clone],
     }));
     setSelectedNodeId(copyId);
-    setNotice(`Duplicated node "${selectedNode.name}".`);
+    setNotice(`Duplicated node "${sourceNode.name}".`);
+  }
+
+  function handleDuplicateSelectedNode() {
+    if (!selectedNode) return;
+    handleDuplicateNodeById(selectedNode.id);
+  }
+
+  function handleDisconnectNodeEdges(targetId: string) {
+    const removedCount = draftGraph.edges.filter(
+      (e) => e.from.node === targetId || e.to.node === targetId,
+    ).length;
+    if (removedCount === 0) return;
+    commitGraphChange((g) => ({
+      ...g,
+      edges: g.edges.filter((e) => e.from.node !== targetId && e.to.node !== targetId),
+    }));
+    setNotice(`Disconnected ${removedCount} arrow(s) from node.`);
+  }
+
+  function handleTogglePinNodeById(targetId: string) {
+    const targetNode = draftGraph.nodes.find((n) => n.id === targetId);
+    if (!targetNode) return;
+    const isPinned = Array.isArray(draftGraph.pinned_data[targetId]);
+    if (isPinned) {
+      commitGraphChange((g) => {
+        const nextPinned = { ...g.pinned_data };
+        delete nextPinned[targetId];
+        return { ...g, pinned_data: nextPinned };
+      });
+      if (selectedNodeId === targetId) {
+        setPinJsonInput('[]');
+        setPinJsonError(null);
+      }
+      setNotice(`Cleared pinned output on "${targetNode.name}".`);
+      return;
+    }
+    const defaultPin = [{ priority: 'high', summary: 'Urgent outage report' }];
+    if (selectedNodeId === targetId) {
+      setPinJsonInput(JSON.stringify(defaultPin, null, 2));
+      setPinJsonError(null);
+    }
+    commitGraphChange((g) => ({
+      ...g,
+      pinned_data: { ...g.pinned_data, [targetId]: defaultPin },
+    }));
+    setNotice(`Pinned sample output data on "${targetNode.name}".`);
   }
 
   function handleUndo() {
@@ -887,29 +928,7 @@ export function WorkflowCanvasView({
   }
 
   function handleFitView() {
-    if (draftGraph.nodes.length === 0) {
-      setPan({ x: 0, y: 0 });
-      setZoom(1);
-      return;
-    }
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const n of draftGraph.nodes) {
-      minX = Math.min(minX, n.position.x);
-      minY = Math.min(minY, n.position.y);
-      maxX = Math.max(maxX, n.position.x + NODE_WIDTH);
-      maxY = Math.max(maxY, n.position.y + NODE_HEIGHT);
-    }
-    const graphW = Math.max(1, maxX - minX + 80);
-    const graphH = Math.max(1, maxY - minY + 80);
-    const nextZoom = Math.min(1, Math.max(0.4, Math.min(viewportSize.width / graphW, viewportSize.height / graphH)));
-    setZoom(Number(nextZoom.toFixed(2)));
-    setPan({
-      x: Math.round(40 - minX * nextZoom),
-      y: Math.round(40 - minY * nextZoom),
-    });
+    setFitViewTrigger((v) => v + 1);
   }
 
   function handleRemoveEdge(edgeId: string) {
@@ -1189,20 +1208,6 @@ export function WorkflowCanvasView({
     }
   }
 
-  function handleCanvasDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    const nodeType =
-      e.dataTransfer?.getData('application/x-elshad-node') ||
-      e.dataTransfer?.getData('text/plain');
-    if (!nodeType) return;
-    const desc = nodeCatalog.find((d) => d.type === nodeType);
-    if (!desc) return;
-    const rect = viewportRef.current?.getBoundingClientRect();
-    const x = rect ? Math.round((e.clientX - rect.left - pan.x) / zoom) : 120;
-    const y = rect ? Math.round((e.clientY - rect.top - pan.y) / zoom) : 120;
-    addNodeAtPosition(desc, { x: Math.max(20, x), y: Math.max(20, y) });
-  }
-
   function handleCanvasKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -1237,48 +1242,6 @@ export function WorkflowCanvasView({
     }
   }
 
-  function handleCanvasPointerDown(e: PointerEvent<HTMLDivElement>) {
-    const target = e.target as HTMLElement | null;
-    if (e.target !== e.currentTarget && target?.dataset?.canvasBg !== 'true') return;
-    dragOriginRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-  }
-
-  function handleCanvasPointerMove(e: PointerEvent<HTMLDivElement>) {
-    const nodeDrag = nodeDragRef.current;
-    if (nodeDrag) {
-      const dx = (e.clientX - nodeDrag.startX) / zoom;
-      const dy = (e.clientY - nodeDrag.startY) / zoom;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        nodeDrag.moved = true;
-      }
-      if (nodeDrag.moved) {
-        const nextX = Math.round(nodeDrag.origX + dx);
-        const nextY = Math.round(nodeDrag.origY + dy);
-        setDraftGraph((g) => ({
-          ...g,
-          nodes: g.nodes.map((n) =>
-            n.id === nodeDrag.nodeId ? { ...n, position: { x: nextX, y: nextY } } : n,
-          ),
-        }));
-      }
-      return;
-    }
-    const origin = dragOriginRef.current;
-    if (!origin) return;
-    setPan({
-      x: origin.panX + (e.clientX - origin.x),
-      y: origin.panY + (e.clientY - origin.y),
-    });
-  }
-
-  function handleCanvasPointerUp() {
-    if (nodeDragRef.current?.moved) {
-      setDraftDirty(true);
-    }
-    nodeDragRef.current = null;
-    dragOriginRef.current = null;
-  }
-
   const overlayCounts = useMemo(() => {
     if (!executionOverlay) return null;
     const vals = Object.values(executionOverlay);
@@ -1288,11 +1251,6 @@ export function WorkflowCanvasView({
       waiting: vals.filter((v) => v.status === 'waiting').length,
     };
   }, [executionOverlay]);
-
-  const minimapSample = useMemo(
-    () => (draftGraph.nodes.length > 80 ? draftGraph.nodes.slice(0, 80) : draftGraph.nodes),
-    [draftGraph.nodes],
-  );
 
   if (loading && workflows.length === 0) {
     return (
@@ -2498,537 +2456,63 @@ export function WorkflowCanvasView({
                 </div>
               </div>
 
-              <div
-                ref={viewportRef}
-                onPointerDown={handleCanvasPointerDown}
-                onPointerMove={handleCanvasPointerMove}
-                onPointerUp={handleCanvasPointerUp}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleCanvasDrop}
-                style={{
-                  position: 'relative',
-                  height: canvasExpanded ? '78vh' : 'clamp(580px, 68vh, 860px)',
-                  overflow: 'hidden',
-                  backgroundColor: 'var(--bg, #F6F7FB)',
-                  backgroundImage:
-                    'radial-gradient(var(--border-strong) 1px, transparent 1px)',
-                  backgroundSize: '20px 20px',
-                  cursor: 'grab',
-                }}
-              >
-                <div
-                  data-canvas-bg="true"
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                    transformOrigin: '0 0',
-                  }}
-                >
-                  <svg
-                    aria-hidden="true"
-                    width="4800"
-                    height="2400"
-                    style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 1 }}
-                  >
-                    <defs>
-                      <marker
-                        id="wf-arrow-default"
-                        viewBox="0 0 10 10"
-                        refX="8"
-                        refY="5"
-                        markerWidth="6"
-                        markerHeight="6"
-                        orient="auto-start-reverse"
-                      >
-                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#3924D6" />
-                      </marker>
-                      <marker
-                        id="wf-arrow-success"
-                        viewBox="0 0 10 10"
-                        refX="8"
-                        refY="5"
-                        markerWidth="6"
-                        markerHeight="6"
-                        orient="auto-start-reverse"
-                      >
-                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#12B76A" />
-                      </marker>
-                      <marker
-                        id="wf-arrow-danger"
-                        viewBox="0 0 10 10"
-                        refX="8"
-                        refY="5"
-                        markerWidth="6"
-                        markerHeight="6"
-                        orient="auto-start-reverse"
-                      >
-                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#D92D20" />
-                      </marker>
-                    </defs>
-                    {visibleEdges.map((edge) => {
-                      const fromNode = allNodeMap.get(edge.from.node);
-                      const toNode = allNodeMap.get(edge.to.node);
-                      if (!fromNode || !toNode) return null;
-                      const x1 = fromNode.position.x + NODE_WIDTH;
-                      const y1 = fromNode.position.y + NODE_HEIGHT / 2;
-                      const x2 = toNode.position.x - 4;
-                      const y2 = toNode.position.y + NODE_HEIGHT / 2;
-                      const midX = (x1 + x2) / 2;
-                      const midY = (y1 + y2) / 2;
-                      const edgeOverlay = executionOverlay?.[fromNode.id];
-                      const strokeColor =
-                        edgeOverlay?.status === 'succeeded'
-                          ? '#12B76A'
-                          : edgeOverlay?.status === 'failed'
-                            ? '#D92D20'
-                            : '#3924D6';
-                      const markerId =
-                        edgeOverlay?.status === 'succeeded'
-                          ? 'wf-arrow-success'
-                          : edgeOverlay?.status === 'failed'
-                            ? 'wf-arrow-danger'
-                            : 'wf-arrow-default';
-                      return (
-                        <g key={edge.id} data-testid="canvas-edge">
-                          <path
-                            d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
-                            fill="none"
-                            stroke={strokeColor}
-                            strokeWidth={edgeOverlay ? 2.6 : 2.1}
-                            markerEnd={`url(#${markerId})`}
-                          />
-                          {edge.from.port !== 'main' && (
-                            <text
-                              x={midX}
-                              y={midY - 6}
-                              textAnchor="middle"
-                              fontSize="10"
-                              fontWeight="600"
-                              fill="#3924D6"
-                            >
-                              {edge.from.port}
-                            </text>
-                          )}
-                        </g>
-                      );
-                    })}
-                  </svg>
-
-                  {/* Sticky Notes inside Canvas */}
-                  {(draftGraph.notes ?? []).map((note) => (
-                    <div
-                      key={note.id}
-                      style={{
-                        position: 'absolute',
-                        left: `${note.position?.x ?? 80}px`,
-                        top: `${note.position?.y ?? 260}px`,
-                        width: '210px',
-                        padding: '8px',
-                        backgroundColor: '#FEF3C7',
-                        border: '1px solid #F59E0B',
-                        borderRadius: 'var(--radius-sm)',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
-                        color: '#17172B',
-                        display: 'grid',
-                        gap: '4px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', fontWeight: 700 }}>
-                        <span>STICKY NOTE</span>
-                        <button
-                          type="button"
-                          aria-label="Remove sticky note"
-                          onClick={() => handleRemoveStickyNote(note.id)}
-                          style={{
-                            border: 'none',
-                            background: 'transparent',
-                            color: '#92400E',
-                            cursor: 'pointer',
-                            fontWeight: 700,
-                            fontSize: '11px',
-                          }}
-                        >
-                          x
-                        </button>
-                      </div>
-                      <textarea
-                        aria-label="Sticky note"
-                        rows={2}
-                        value={note.text}
-                        onChange={(e) => handleUpdateStickyNote(note.id, e.target.value)}
-                        style={{
-                          width: '100%',
-                          border: '1px solid #FCD34D',
-                          backgroundColor: '#FFFBEB',
-                          color: '#17172B',
-                          fontSize: '11.5px',
-                          padding: '4px',
-                          borderRadius: '4px',
-                        }}
-                      />
-                    </div>
-                  ))}
-
-                  {visibleNodes.map((node) => {
-                    const isSelected = node.id === selectedNodeId;
-                    const isMultiSelected = multiSelectedIds.includes(node.id);
-                    const isPinned = Array.isArray(draftGraph.pinned_data[node.id]);
-                    const nodeIssues = issueCountsByNode.get(node.id);
-                    const cat = getNodeCategory(node.type);
-                    const catMeta = CATEGORY_META[cat] ?? CATEGORY_META.control!;
-                    const overlay = executionOverlay?.[node.id];
-
-                    const borderStyle = overlay
-                      ? overlay.status === 'succeeded'
-                        ? '2px solid var(--success)'
-                        : overlay.status === 'failed'
-                          ? '2px solid var(--danger)'
-                          : '2px solid var(--warning)'
-                      : isSelected
-                        ? '2px solid var(--brand)'
-                        : isMultiSelected
-                          ? '2px dashed var(--brand)'
-                          : nodeIssues?.errors
-                            ? '2px solid var(--danger)'
-                            : '1px solid var(--border)';
-
-                    const bgStyle = overlay
-                      ? overlay.status === 'succeeded'
-                        ? 'var(--success-bg)'
-                        : overlay.status === 'failed'
-                          ? 'var(--danger-bg)'
-                          : 'var(--warning-bg)'
-                      : 'var(--surface)';
-
-                    const isHovered = hoveredNodeId === node.id;
-                    const showPorts = isHovered || isSelected || Boolean(connectingFromNodeId);
-
-                    return (
-                      <div
-                        key={node.id}
-                        onMouseEnter={() => setHoveredNodeId(node.id)}
-                        onMouseLeave={() => setHoveredNodeId((prev) => (prev === node.id ? null : prev))}
-                        onFocus={() => setHoveredNodeId(node.id)}
-                        onBlur={(e) => {
-                          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-                            setHoveredNodeId((prev) => (prev === node.id ? null : prev));
-                          }
-                        }}
-                        onPointerDown={(e) => {
-                          const target = e.target as HTMLElement | null;
-                          if (target?.closest('[data-port-handle="true"]')) return;
-                          e.stopPropagation();
-                          nodeDragRef.current = {
-                            nodeId: node.id,
-                            startX: e.clientX,
-                            startY: e.clientY,
-                            origX: node.position.x,
-                            origY: node.position.y,
-                            moved: false,
-                          };
-                        }}
-                        style={{
-                          position: 'absolute',
-                          left: `${node.position.x}px`,
-                          top: `${node.position.y}px`,
-                          width: `${NODE_WIDTH}px`,
-                          minHeight: `${NODE_HEIGHT}px`,
-                          zIndex: isSelected || isHovered ? 4 : 2,
-                        }}
-                      >
-                        {!node.type.startsWith('trigger.') && (
-                          <button
-                            type="button"
-                            data-port-handle="true"
-                            aria-label={`Input port (${node.id})`}
-                            title={`Connect to ${node.name} input`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (connectingFromNodeId && connectingFromNodeId !== node.id) {
-                                handleAddEdge(connectingFromNodeId, node.id);
-                              }
-                            }}
-                            style={{
-                              position: 'absolute',
-                              left: '-9px',
-                              top: `${NODE_HEIGHT / 2 - 9}px`,
-                              width: '18px',
-                              height: '18px',
-                              padding: 0,
-                              borderRadius: '9999px',
-                              border: connectingFromNodeId && connectingFromNodeId !== node.id
-                                ? '2px solid var(--brand)'
-                                : '1.5px solid var(--border-strong)',
-                              backgroundColor: connectingFromNodeId && connectingFromNodeId !== node.id
-                                ? 'var(--lavender)'
-                                : 'var(--surface)',
-                              color: 'var(--brand)',
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              lineHeight: 1,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: connectingFromNodeId ? 'crosshair' : 'default',
-                              zIndex: 2,
-                              opacity: showPorts ? 1 : 0,
-                              transition: 'opacity 120ms ease',
-                            }}
-                          >
-                            {connectingFromNodeId && connectingFromNodeId !== node.id ? '+' : ''}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          data-testid="canvas-node"
-                          data-overlay-status={overlay?.status}
-                          aria-pressed={isSelected}
-                          onClick={(e) => {
-                            setSelectedNodeId(node.id);
-                            if (e.shiftKey) {
-                              setMultiSelectedIds((prev) =>
-                                prev.includes(node.id)
-                                  ? prev.filter((id) => id !== node.id)
-                                  : [...prev, node.id],
-                              );
-                            }
-                          }}
-                          style={{
-                            width: '100%',
-                            minHeight: `${NODE_HEIGHT}px`,
-                            padding: '9px 10px',
-                            textAlign: 'left',
-                            backgroundColor: bgStyle,
-                            borderRight: borderStyle,
-                            borderBottom: borderStyle,
-                            borderLeft: borderStyle,
-                            borderTop: `4px solid ${catMeta.accent}`,
-                            borderRadius: 'var(--radius-md)',
-                            cursor: 'pointer',
-                            display: 'grid',
-                            gap: '3px',
-                            boxShadow: isSelected
-                              ? '0 0 0 3px var(--lavender)'
-                              : '0 2px 6px rgba(23, 23, 43, 0.06)',
-                          }}
-                        >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', alignItems: 'center' }}>
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              color: catMeta.accent,
-                            }}
-                          >
-                            {node.type}
-                          </span>
-                          <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
-                            {node.onError?.mode === 'retry' && (
-                              <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--info)' }}>
-                                Retry {node.onError.retry?.max ?? 3}x
-                              </span>
-                            )}
-                            {node.onError?.mode === 'route' && (
-                              <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--warning)' }}>
-                                Err Branch
-                              </span>
-                            )}
-                            {isPinned && (
-                              <span
-                                style={{
-                                  fontSize: '9.5px',
-                                  fontWeight: 700,
-                                  color: 'var(--warning)',
-                                }}
-                              >
-                                PINNED
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
-                          {node.name}
-                        </div>
-
-                        <div
-                          style={{
-                            fontSize: '10.5px',
-                            color: 'var(--text-secondary)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {getNodeConfigPreview(node)}
-                        </div>
-
-                        {overlay && (
-                          <div
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              color:
-                                overlay.status === 'succeeded'
-                                  ? 'var(--success)'
-                                  : overlay.status === 'failed'
-                                    ? 'var(--danger)'
-                                    : 'var(--warning)',
-                            }}
-                          >
-                            {overlay.status === 'succeeded'
-                              ? `OK · ${overlay.durationMs}ms`
-                              : overlay.status === 'failed'
-                                ? 'FAILED'
-                                : 'WAITING'}
-                          </div>
-                        )}
-                        </button>
-                        {node.type !== 'control.stop' && (
-                          <>
-                            <button
-                              type="button"
-                              data-port-handle="true"
-                              aria-label={`Output port (${node.id})`}
-                              title={`Connect or add node after ${node.name}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setConnectingFromNodeId((prev) => (prev === node.id ? null : node.id));
-                              }}
-                              style={{
-                                position: 'absolute',
-                                right: '-10px',
-                                top: `${NODE_HEIGHT / 2 - 10}px`,
-                                width: '20px',
-                                height: '20px',
-                                padding: 0,
-                                borderRadius: '9999px',
-                                border: '2px solid var(--brand)',
-                                backgroundColor: connectingFromNodeId === node.id
-                                  ? 'var(--brand)'
-                                  : 'var(--surface)',
-                                color: connectingFromNodeId === node.id ? '#FFFFFF' : 'var(--brand)',
-                                fontSize: '14px',
-                                fontWeight: 700,
-                                lineHeight: 1,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                                zIndex: 3,
-                                boxShadow: '0 1px 4px rgba(23, 23, 43, 0.14)',
-                                opacity: showPorts ? 1 : 0,
-                                transition: 'opacity 120ms ease',
-                              }}
-                            >
-                              +
-                            </button>
-                            {connectingFromNodeId === node.id && (
-                              <div
-                                role="region"
-                                aria-label="Quick connect next node"
-                                onClick={(e) => e.stopPropagation()}
-                                style={{
-                                  position: 'absolute',
-                                  left: `${NODE_WIDTH + 14}px`,
-                                  top: '0px',
-                                  width: '210px',
-                                  padding: '8px',
-                                  borderRadius: 'var(--radius-md)',
-                                  border: '1px solid var(--lavender-border)',
-                                  backgroundColor: 'var(--surface)',
-                                  boxShadow: 'var(--shadow-card)',
-                                  display: 'grid',
-                                  gap: '5px',
-                                  zIndex: 10,
-                                  fontSize: '11.5px',
-                                }}
-                              >
-                                <div style={{ fontWeight: 700, color: 'var(--brand)' }}>
-                                  Add &amp; Connect Next Node
-                                </div>
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '10.5px' }}>
-                                  Pick a node below or click another node&apos;s left + port:
-                                </div>
-                                {nodeCatalog
-                                  .filter((item) => !item.type.startsWith('trigger.'))
-                                  .slice(0, 6)
-                                  .map((item) => (
-                                    <button
-                                      key={`qc-${node.id}-${item.type}`}
-                                      type="button"
-                                      onClick={() => {
-                                        addNodeAtPosition(
-                                          item,
-                                          {
-                                            x: node.position.x + 260,
-                                            y: node.position.y,
-                                          },
-                                          node.id,
-                                        );
-                                        setConnectingFromNodeId(null);
-                                      }}
-                                      style={{
-                                        textAlign: 'left',
-                                        padding: '4px 8px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        border: '1px solid var(--border)',
-                                        backgroundColor: 'var(--surface-raised)',
-                                        color: 'var(--text-primary)',
-                                        fontWeight: 600,
-                                        cursor: 'pointer',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                      }}
-                                    >
-                                      <span>{item.label}</span>
-                                      <span style={{ color: 'var(--brand)' }}>+</span>
-                                    </button>
-                                  ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
+              <ReactFlowCanvas
+                nodes={draftGraph.nodes.length <= 80 ? draftGraph.nodes : visibleNodes}
+                edges={draftGraph.nodes.length <= 80 ? draftGraph.edges : visibleEdges}
+                nodeCatalog={nodeCatalog}
+                pinnedData={draftGraph.pinned_data}
+                selectedNodeId={selectedNodeId}
+                multiSelectedIds={multiSelectedIds}
+                connectingFromNodeId={connectingFromNodeId}
+                hoveredNodeId={hoveredNodeId}
+                issueCountsByNode={issueCountsByNode}
+                executionOverlay={executionOverlay}
+                showMinimap={showMinimap}
+                notes={draftGraph.notes ?? []}
+                canvasHeight={canvasExpanded ? '78vh' : 'clamp(580px, 68vh, 860px)'}
+                fitViewTrigger={fitViewTrigger}
+                totalNodeCount={draftGraph.nodes.length}
+                onSelectNode={(nodeId, shiftKey) => {
+                  setSelectedNodeId(nodeId);
+                  if (shiftKey) {
+                    setMultiSelectedIds((prev) =>
+                      prev.includes(nodeId)
+                        ? prev.filter((id) => id !== nodeId)
+                        : [...prev, nodeId],
                     );
-                  })}
-                </div>
-
-                {/* Minimap Overlay */}
-                {showMinimap && minimapSample.length > 0 && (
-                  <div
-                    aria-hidden="true"
-                    style={{
-                      position: 'absolute',
-                      right: '10px',
-                      bottom: '10px',
-                      width: '126px',
-                      height: '76px',
-                      backgroundColor: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      boxShadow: 'var(--shadow-card)',
-                      padding: '4px',
-                      pointerEvents: 'none',
-                    }}
-                  >
-                    <svg viewBox="0 0 1200 720" width="118" height="68">
-                      {minimapSample.map((n) => (
-                        <rect
-                          key={`mm-${n.id}`}
-                          x={Math.max(0, Math.min(1120, n.position.x))}
-                          y={Math.max(0, Math.min(660, n.position.y))}
-                          width={70}
-                          height={36}
-                          rx={6}
-                          fill={n.id === selectedNodeId ? '#3924D6' : '#CBD5E1'}
-                        />
-                      ))}
-                    </svg>
-                  </div>
-                )}
-              </div>
+                  }
+                }}
+                onHoverNode={setHoveredNodeId}
+                onMoveNode={(nodeId, pos, dragging) => {
+                  setDraftGraph((g) => ({
+                    ...g,
+                    nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, position: pos } : n)),
+                  }));
+                  if (!dragging) setDraftDirty(true);
+                }}
+                onConnectNodes={handleAddEdge}
+                onRemoveEdge={handleRemoveEdge}
+                onToggleConnectingFrom={setConnectingFromNodeId}
+                onQuickAddNode={addNodeAtPosition}
+                onDropNodeType={(nodeType, pos) => {
+                  const desc = nodeCatalog.find((d) => d.type === nodeType);
+                  if (desc) addNodeAtPosition(desc, pos);
+                }}
+                onUpdateStickyNote={handleUpdateStickyNote}
+                onRemoveStickyNote={handleRemoveStickyNote}
+                onDuplicateNode={handleDuplicateNodeById}
+                onDeleteNode={handleDeleteNodeById}
+                onDisconnectNodeEdges={handleDisconnectNodeEdges}
+                onTogglePinNode={handleTogglePinNodeById}
+                onInspectNode={(nodeId) => {
+                  setSelectedNodeId(nodeId);
+                  setInspectorCollapsed(false);
+                }}
+                onTestFromNode={(nodeId) => {
+                  setSelectedNodeId(nodeId);
+                  void handleRunWorkflow(true);
+                }}
+              />
             </section>
 
             {/* Right Contextual 6-Tab Inspector + Expression Editor */}

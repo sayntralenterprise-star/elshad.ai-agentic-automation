@@ -3,6 +3,54 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it } from 'vitest';
+
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    private cb: ResizeObserverCallback;
+    constructor(cb: ResizeObserverCallback) {
+      this.cb = cb;
+    }
+    observe(target: Element) {
+      this.cb(
+        [
+          {
+            target,
+            contentRect: { width: 1000, height: 600, top: 0, left: 0, bottom: 600, right: 1000, x: 0, y: 0, toJSON: () => ({}) },
+          } as ResizeObserverEntry,
+        ],
+        this,
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  };
+}
+if (typeof globalThis.DOMMatrixReadOnly === 'undefined') {
+  globalThis.DOMMatrixReadOnly = class DOMMatrixReadOnly {
+    m22 = 1;
+    constructor() {}
+  } as unknown as typeof globalThis.DOMMatrixReadOnly;
+}
+if (typeof window !== 'undefined' && window.HTMLElement) {
+  Object.defineProperties(window.HTMLElement.prototype, {
+    offsetHeight: {
+      configurable: true,
+      get() {
+        return parseFloat((this as HTMLElement).style?.height) || 92;
+      },
+    },
+    offsetWidth: {
+      configurable: true,
+      get() {
+        return parseFloat((this as HTMLElement).style?.width) || 216;
+      },
+    },
+  });
+}
+if (typeof globalThis.SVGElement !== 'undefined' && !('getBBox' in globalThis.SVGElement.prototype)) {
+  (globalThis.SVGElement.prototype as unknown as { getBBox: () => DOMRect }).getBBox = () =>
+    ({ x: 0, y: 0, width: 60, height: 18, top: 0, left: 0, bottom: 18, right: 60, toJSON: () => ({}) }) as DOMRect;
+}
 import { PlatformError } from '@elshad/domain';
 import {
   PlatformClient,
@@ -3833,4 +3881,35 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(axeSettings.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
     settingsRender.unmount();
   }, 20_000);
+
+  it('opens node right-click context menu and disconnects arrows from a node', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const wfRender = render(
+      <ConsoleApp client={client} initialPath="/w/default/e/dev/workflows" />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Canvas' })).toBeTruthy();
+    const nodes = await screen.findAllByTestId('canvas-node');
+    expect(nodes.length).toBeGreaterThan(1);
+    const initialEdges = screen.getAllByTestId('canvas-edge').length;
+    expect(initialEdges).toBeGreaterThan(0);
+
+    const targetNode = nodes[0]!;
+    const reactFlowNode = targetNode.closest('.react-flow__node') ?? targetNode;
+    fireEvent.contextMenu(reactFlowNode, { clientX: 200, clientY: 200 });
+
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'Configure node' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Duplicate node' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Delete node' })).toBeTruthy();
+
+    const disconnectBtn = within(menu).getByRole('menuitem', { name: /Disconnect arrows/ });
+    await user.click(disconnectBtn);
+
+    expect(await screen.findByText(/Disconnected \d+ arrow\(s\) from node\./)).toBeTruthy();
+    expect(screen.queryAllByTestId('canvas-edge').length).toBeLessThan(initialEdges);
+
+    wfRender.unmount();
+  });
 });

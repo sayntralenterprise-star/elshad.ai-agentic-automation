@@ -7,6 +7,7 @@
     "@elshad/domain": "workspace:*",
     "@elshad/sdk-ts": "workspace:*",
     "@elshad/ui-kit": "workspace:*",
+    "@xyflow/react": "^13.0.2",
     "lucide-react": "^1.75.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
