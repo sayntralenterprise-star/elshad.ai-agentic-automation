@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -498,20 +498,20 @@ function createMockClient(
     { type: 'trigger.webhook', category: 'trigger', label: 'Webhook Trigger', inputs: [], outputs: ['main'] },
     { type: 'trigger.schedule', category: 'trigger', label: 'Schedule Trigger', inputs: [], outputs: ['main'] },
     { type: 'trigger.manual', category: 'trigger', label: 'Manual Trigger', inputs: [], outputs: ['main'] },
-    { type: 'ai.agent', category: 'ai', label: 'Agent Step', inputs: ['main'], outputs: ['main'] },
-    { type: 'ai.llm', category: 'ai', label: 'LLM Prompt', inputs: ['main'], outputs: ['main'] },
-    { type: 'logic.if', category: 'logic', label: 'IF Branch', inputs: ['main'], outputs: ['true', 'false'] },
-    { type: 'logic.switch', category: 'logic', label: 'Switch Branch', inputs: ['main'], outputs: ['case_0', 'default'] },
-    { type: 'logic.loop', category: 'logic', label: 'Loop Items', inputs: ['main'], outputs: ['item', 'done'] },
-    { type: 'logic.parallel', category: 'logic', label: 'Parallel Fan-out', inputs: ['main'], outputs: ['branch_a', 'branch_b'] },
-    { type: 'logic.join', category: 'logic', label: 'Join Branches', inputs: ['a', 'b'], outputs: ['main'] },
-    { type: 'logic.wait', category: 'logic', label: 'Wait / Delay', inputs: ['main'], outputs: ['main'] },
-    { type: 'data.set', category: 'data', label: 'Set Fields', inputs: ['main'], outputs: ['main'] },
-    { type: 'data.code', category: 'data', label: 'JSONata Transform', inputs: ['main'], outputs: ['main'] },
-    { type: 'integration.http', category: 'integration', label: 'HTTP Request', inputs: ['main'], outputs: ['main'] },
-    { type: 'human.notify', category: 'human', label: 'Slack / Notify', inputs: ['main'], outputs: ['main'] },
-    { type: 'control.subworkflow', category: 'control', label: 'Sub-workflow', inputs: ['main'], outputs: ['main'] },
-    { type: 'control.stop', category: 'control', label: 'Stop Workflow', inputs: ['main'], outputs: [] },
+    { type: 'ai.agent', category: 'ai', label: 'Agent Step', inputs: ['in'], outputs: ['main', 'escalated', 'error'] },
+    { type: 'ai.llm', category: 'ai', label: 'LLM Prompt', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'logic.if', category: 'logic', label: 'IF Branch', inputs: ['in'], outputs: ['true', 'false', 'error'] },
+    { type: 'logic.switch', category: 'logic', label: 'Switch Branch', inputs: ['in'], outputs: ['default', 'error'] },
+    { type: 'logic.loop', category: 'logic', label: 'Loop Items', inputs: ['in'], outputs: ['loop', 'done', 'error'] },
+    { type: 'logic.parallel', category: 'logic', label: 'Parallel Fan-out', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'logic.join', category: 'logic', label: 'Join Branches', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'logic.wait', category: 'logic', label: 'Wait / Delay', inputs: ['in'], outputs: ['main', 'timeout'] },
+    { type: 'data.set', category: 'data', label: 'Set Fields', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'data.code', category: 'data', label: 'JSONata Transform', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'integration.http', category: 'integration', label: 'HTTP Request', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'human.notify', category: 'human', label: 'Slack / Notify', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'control.subworkflow', category: 'control', label: 'Sub-workflow', inputs: ['in'], outputs: ['main', 'error'] },
+    { type: 'control.stop', category: 'control', label: 'Stop Workflow', inputs: ['in'], outputs: [] },
   ];
 
   const makeYaml = (name: string, semver: string, graph: WorkflowGraphDto): string =>
@@ -2424,6 +2424,234 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(axeLight.violations.filter((v) => v.impact === 'critical')).toHaveLength(0);
   }, 15_000);
 
+  it('uses live workspace records for dashboard totals, alerts, and rankings', async () => {
+    const user = userEvent.setup();
+    const client = createMockClient({ authenticatedInitially: true });
+    const now = new Date();
+    const createdAt = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+    const version: AgentDto['versions'][number] = {
+      id: 'agv_live_1',
+      agentId: 'agt_live_1',
+      semver: '1.0.0',
+      state: 'published',
+      definition: {},
+      definitionHash: 'live_hash',
+      message: null,
+      lethalTrifecta: {
+        detected: false,
+        hasPrivateData: false,
+        hasUntrustedInput: false,
+        hasExternalComms: false,
+        reasons: [],
+      },
+      createdBy: 'prn_1',
+      createdAt,
+    };
+    const agent: AgentDto = {
+      id: 'agt_live_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      projectId: 'prj_1',
+      name: 'Live Support Agent',
+      description: null,
+      status: 'active',
+      currentVersionId: version.id,
+      draftVersion: null,
+      publishedVersion: version,
+      versions: [version],
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const createRun = (
+      id: string,
+      status: RunDto['status'],
+      costMicroUsd: number,
+      runCreatedAt = createdAt,
+    ): RunDto => ({
+      id,
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      environmentId: 'env_1',
+      rootRunId: id,
+      parentRunId: null,
+      subjectType: 'agent_version',
+      subjectVersionId: version.id,
+      status,
+      failureClass: status === 'failed' ? 'tool_error' : null,
+      terminationReason: status === 'failed' ? 'error' : 'final_answer',
+      initiatorId: 'prn_1',
+      input: {},
+      output: {},
+      usage: { steps: 1, tokensIn: 10, tokensOut: 5, toolCalls: 0 },
+      costMicroUsd,
+      labels: {},
+      lastEventSeq: 1,
+      createdAt: runCreatedAt,
+      startedAt: runCreatedAt,
+      endedAt: new Date(Date.parse(runCreatedAt) + 1_800).toISOString(),
+    });
+    const historicalCreatedAt = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const runs = [
+      createRun('run_live_success', 'succeeded', 250_000),
+      createRun('run_live_failed', 'failed', 250_000),
+      createRun('run_live_historical', 'failed', 250_000, historicalCreatedAt),
+    ];
+
+    client.runs.list = async () => runs;
+    client.agents.list = async () => [agent];
+    client.approvals.list = async () => [];
+    client.connections.list = async () => [{
+      id: 'conn_live_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      connectorId: 'connector_live',
+      name: 'Live connection',
+      authType: 'api_key',
+      sharingMode: 'shared',
+      ownerId: 'prn_1',
+      environmentMapping: {},
+      secretVersion: 1,
+      secretMasked: 'Stored',
+      scopes: [],
+      allowedAgents: [],
+      egressDomains: [],
+      status: 'expiring',
+      lastTestedAt: null,
+      lastError: null,
+      expiresAt: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      createdAt,
+      updatedAt: createdAt,
+    }];
+    client.budgets.list = async () => [
+      {
+        id: 'budget_live_1',
+        orgId: 'org_1',
+        workspaceId: 'ws_1',
+        projectId: 'prj_1',
+        agentId: null,
+        scopeType: 'project',
+        scopeId: 'prj_1',
+        period: 'monthly',
+        softLimitMicroUsd: 1_000_000,
+        hardLimitMicroUsd: 2_000_000,
+        softLimitTokens: null,
+        hardLimitTokens: null,
+        spentMicroUsd: 820_000,
+        spentTokens: 0,
+        actionOnBreach: 'require_approval',
+        alertEmittedAt: createdAt,
+        createdBy: 'prn_1',
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: 'budget_live_2',
+        orgId: 'org_1',
+        workspaceId: 'ws_1',
+        projectId: null,
+        agentId: null,
+        scopeType: 'workspace',
+        scopeId: 'ws_1',
+        period: 'monthly',
+        softLimitMicroUsd: 1_000_000,
+        hardLimitMicroUsd: 2_000_000,
+        softLimitTokens: null,
+        hardLimitTokens: null,
+        spentMicroUsd: 400_000,
+        spentTokens: 0,
+        actionOnBreach: 'require_approval',
+        alertEmittedAt: null,
+        createdBy: 'prn_1',
+        createdAt,
+        updatedAt: createdAt,
+      },
+    ];
+    client.evaluations.experiments.list = async () => [{
+      id: 'experiment_live_1',
+      orgId: 'org_1',
+      workspaceId: 'ws_1',
+      name: 'Live release gate',
+      datasetId: 'dataset_live',
+      agentVersionId: version.id,
+      baselineVersionId: null,
+      graderIds: [],
+      status: 'completed',
+      releaseGateConfig: {},
+      gateVerdict: 'failed',
+      metrics: {},
+      createdAt,
+      startedAt: createdAt,
+      completedAt: createdAt,
+    }];
+    client.observability.overview = async (windowHours = 24) => {
+      const recentRuns = runs.filter((run) => Date.parse(run.createdAt) >= Date.now() - windowHours * 60 * 60 * 1000);
+      const succeededRuns = recentRuns.filter((run) => run.status === 'succeeded').length;
+      const failedRuns = recentRuns.filter((run) => run.status === 'failed').length;
+      const totalCostUsd = recentRuns.reduce((total, run) => total + run.costMicroUsd / 1_000_000, 0);
+      return {
+      windowHours,
+      totalRuns: recentRuns.length,
+      succeededRuns,
+      failedRuns,
+      successRate: recentRuns.length ? succeededRuns / recentRuns.length : 1,
+      failureRate: recentRuns.length ? failedRuns / recentRuns.length : 0,
+      p50DurationMs: 1_800,
+      p95DurationMs: 1_800,
+      p99DurationMs: 1_800,
+      totalCostUsd,
+      costPerRunUsd: recentRuns.length ? totalCostUsd / recentRuns.length : 0,
+      costPerSuccessfulOutcomeUsd: succeededRuns ? totalCostUsd / succeededRuns : 0,
+      tokensIn: 20,
+      tokensOut: 10,
+      queueDepth: 0,
+      approvalPendingCount: 0,
+      failureByClass: [{ failureClass: 'tool_error', count: 1 }],
+      costByAgent: [],
+      costByModel: [],
+      dailySeries: [],
+      };
+    };
+
+    render(<ConsoleApp client={client} initialPath="/w/default/e/dev/home" />);
+
+    expect((await screen.findAllByText('Live Support Agent')).length).toBeGreaterThan(0);
+    expect(within(screen.getByRole('region', { name: 'Runs Today' })).getByText('2')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Success Rate' })).getByText('50.0%')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Spend vs Budget' })).getByText('$0.82')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Spend vs Budget' })).getByText('82%')).toBeTruthy();
+    expect(screen.getByText('1 agent failed its latest evaluation')).toBeTruthy();
+    expect(screen.getByText('1 credential expiring this week')).toBeTruthy();
+    expect(screen.queryByText('2,481')).toBeNull();
+    expect(screen.queryByText('Support Triage')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Custom' }));
+    expect(screen.getByLabelText('Start date')).toBeTruthy();
+    await waitFor(() => {
+      expect(within(screen.getByRole('region', { name: 'Success Rate' })).getByText('50.0%')).toBeTruthy();
+    });
+    const historicStartDate = new Date(now);
+    historicStartDate.setDate(historicStartDate.getDate() - 4);
+    const historicDateValue = `${historicStartDate.getFullYear()}-${String(historicStartDate.getMonth() + 1).padStart(2, '0')}-${String(historicStartDate.getDate()).padStart(2, '0')}`;
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: historicDateValue } });
+    await waitFor(() => {
+      expect(within(screen.getByRole('region', { name: 'Success Rate' })).getByText('33.3%')).toBeTruthy();
+    });
+  });
+
+  it('shows dashboard load failures instead of substituting sample values', async () => {
+    const client = createMockClient({ authenticatedInitially: true });
+    client.runs.list = async () => {
+      throw new Error('Run data unavailable');
+    };
+
+    render(<ConsoleApp client={client} initialPath="/w/default/e/dev/home" />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Run data unavailable');
+    expect(screen.queryByText('2,481')).toBeNull();
+    expect(screen.queryByText('Support Triage')).toBeNull();
+  });
+
   it('passes axe accessibility checks in dark theme on login and authenticated shell [NFR-15]', async () => {
     const clientUnauth = createMockClient({ authenticatedInitially: false });
     const { container: loginContainer } = render(
@@ -3246,6 +3474,15 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     await user.click(screen.getByRole('tab', { name: 'Notes' }));
     expect(screen.getByLabelText('Node Implementation Notes')).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Parameters' }));
+    expect(screen.getByLabelText('Cron Expression')).toBeTruthy();
+
+    // Connector arrows & collapsible workspace controls
+    expect(screen.getAllByTestId('canvas-edge').length).toBeGreaterThanOrEqual(3);
+    await user.click(screen.getByRole('button', { name: 'Fit View' }));
+    await user.click(screen.getByRole('button', { name: 'Toggle node palette' }));
+    expect(screen.queryByRole('complementary', { name: 'Node Palette' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Toggle node palette' }));
+    expect(screen.getByRole('complementary', { name: 'Node Palette' })).toBeTruthy();
 
     // YAML & JSON lossless modal
     await user.click(screen.getByRole('button', { name: 'View as YAML' }));

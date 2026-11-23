@@ -28,6 +28,10 @@ import {
   History,
   LayoutGrid,
   Map as MapIcon,
+  Maximize2,
+  Minimize2,
+  PanelLeft,
+  PanelRight,
   Plus,
   Redo2,
   Rocket,
@@ -106,7 +110,7 @@ function buildBenchmarkWorkflowGraph(count = 300): WorkflowGraphDto {
       edges.push({
         id: `e_bench_${i}`,
         from: { node: `n_bench_${i - 1}`, port: 'main' },
-        to: { node: `n_bench_${i}`, port: 'main' },
+        to: { node: `n_bench_${i}`, port: 'in' },
       });
     }
   }
@@ -240,6 +244,10 @@ export function WorkflowCanvasView({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [showMinimap, setShowMinimap] = useState(true);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const [connectingFromNodeId, setConnectingFromNodeId] = useState<string | null>(null);
   const [versionsDrawerOpen, setVersionsDrawerOpen] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 520 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -596,6 +604,18 @@ export function WorkflowCanvasView({
     setNotice(`Archived workflow "${wf.name}".`);
   }
 
+  function defaultOutputPortForNode(node: WorkflowNodeDto): string {
+    const desc = nodeCatalog.find((n) => n.type === node.type);
+    if (desc && desc.outputs.length > 0) {
+      if (desc.outputs.includes('main')) return 'main';
+      if (desc.outputs.includes('approved')) return 'approved';
+      if (desc.outputs.includes('true')) return 'true';
+      if (desc.outputs.includes('done')) return 'done';
+      return desc.outputs[0]!;
+    }
+    return 'main';
+  }
+
   function addNodeAtPosition(desc: WorkflowNodeDescriptorDto, position?: { x: number; y: number }) {
     const idx = draftGraph.nodes.length + 1;
     const prev = selectedNode ?? draftGraph.nodes[draftGraph.nodes.length - 1] ?? null;
@@ -605,7 +625,7 @@ export function WorkflowCanvasView({
       type: desc.type,
       name: `${desc.label} ${idx}`,
       position: position ?? {
-        x: prev ? prev.position.x + 240 : 40,
+        x: prev ? prev.position.x + 250 : 40,
         y: prev ? prev.position.y : 120,
       },
       config: defaultConfigForNodeType(desc.type),
@@ -615,8 +635,8 @@ export function WorkflowCanvasView({
       if (prev && !position) {
         nextEdges.push({
           id: `e_${Date.now()}_${idx}`,
-          from: { node: prev.id, port: 'main' },
-          to: { node: newId, port: 'main' },
+          from: { node: prev.id, port: defaultOutputPortForNode(prev) },
+          to: { node: newId, port: 'in' },
         });
       }
       return {
@@ -818,18 +838,52 @@ export function WorkflowCanvasView({
   }
 
   function handleAddEdge(fromId: string, toId: string) {
-    commitGraphChange((g) => ({
-      ...g,
-      edges: [
-        ...g.edges,
-        {
-          id: `e_${Date.now()}`,
-          from: { node: fromId, port: 'main' },
-          to: { node: toId, port: 'main' },
-        },
-      ],
-    }));
+    if (fromId === toId) return;
+    const fromNode = draftGraph.nodes.find((n) => n.id === fromId);
+    const fromPort = fromNode ? defaultOutputPortForNode(fromNode) : 'main';
+    commitGraphChange((g) => {
+      const alreadyExists = g.edges.some((e) => e.from.node === fromId && e.to.node === toId);
+      if (alreadyExists) return g;
+      return {
+        ...g,
+        edges: [
+          ...g.edges,
+          {
+            id: `e_${Date.now()}`,
+            from: { node: fromId, port: fromPort },
+            to: { node: toId, port: 'in' },
+          },
+        ],
+      };
+    });
+    setConnectingFromNodeId(null);
     setNotice('Connected workflow nodes.');
+  }
+
+  function handleFitView() {
+    if (draftGraph.nodes.length === 0) {
+      setPan({ x: 0, y: 0 });
+      setZoom(1);
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of draftGraph.nodes) {
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      maxX = Math.max(maxX, n.position.x + NODE_WIDTH);
+      maxY = Math.max(maxY, n.position.y + NODE_HEIGHT);
+    }
+    const graphW = Math.max(1, maxX - minX + 80);
+    const graphH = Math.max(1, maxY - minY + 80);
+    const nextZoom = Math.min(1, Math.max(0.4, Math.min(viewportSize.width / graphW, viewportSize.height / graphH)));
+    setZoom(Number(nextZoom.toFixed(2)));
+    setPan({
+      x: Math.round(40 - minX * nextZoom),
+      y: Math.round(40 - minY * nextZoom),
+    });
   }
 
   function handleRemoveEdge(edgeId: string) {
@@ -2072,26 +2126,27 @@ export function WorkflowCanvasView({
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '236px minmax(0, 1fr) 330px',
+              gridTemplateColumns: `${paletteCollapsed || canvasExpanded ? '' : '220px '}minmax(0, 1fr)${inspectorCollapsed || canvasExpanded ? '' : ' 310px'}`,
               gap: '12px',
               alignItems: 'start',
             }}
           >
             {/* Left Draggable Node Palette */}
-            <aside
-              aria-label="Node Palette"
-              style={{
-                backgroundColor: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '10px',
-                boxShadow: 'var(--shadow-card)',
-                display: 'grid',
-                gap: '10px',
-                maxHeight: '570px',
-                overflowY: 'auto',
-              }}
-            >
+            {!paletteCollapsed && !canvasExpanded && (
+              <aside
+                aria-label="Node Palette"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '10px',
+                  boxShadow: 'var(--shadow-card)',
+                  display: 'grid',
+                  gap: '10px',
+                  maxHeight: '640px',
+                  overflowY: 'auto',
+                }}
+              >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h2 style={{ margin: 0, fontSize: '14px' }}>Node Palette</h2>
                 <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Drag or click</span>
@@ -2171,7 +2226,8 @@ export function WorkflowCanvasView({
                   </div>
                 );
               })}
-            </aside>
+              </aside>
+            )}
 
             {/* Center Interactive Pan/Zoom Canvas */}
             <section
@@ -2211,7 +2267,68 @@ export function WorkflowCanvasView({
                   )}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                  {connectingFromNodeId && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--lavender-soft)',
+                        border: '1px solid var(--brand)',
+                        color: 'var(--brand)',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span>Click target input port to connect</span>
+                      <button
+                        type="button"
+                        onClick={() => setConnectingFromNodeId(null)}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: 'var(--brand)',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Toggle node palette"
+                    onClick={() => setPaletteCollapsed((c) => !c)}
+                    style={{
+                      padding: '4px 6px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: !paletteCollapsed && !canvasExpanded ? 'var(--lavender)' : 'var(--surface)',
+                      color: !paletteCollapsed && !canvasExpanded ? 'var(--brand)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <PanelLeft size={13} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Toggle node inspector"
+                    onClick={() => setInspectorCollapsed((c) => !c)}
+                    style={{
+                      padding: '4px 6px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: !inspectorCollapsed && !canvasExpanded ? 'var(--lavender)' : 'var(--surface)',
+                      color: !inspectorCollapsed && !canvasExpanded ? 'var(--brand)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <PanelRight size={13} aria-hidden="true" />
+                  </button>
                   {multiSelectedIds.length > 1 && (
                     <>
                       <StatusChip label={`${multiSelectedIds.length} selected`} tone="info" />
@@ -2284,6 +2401,20 @@ export function WorkflowCanvasView({
                   </button>
                   <button
                     type="button"
+                    onClick={handleFitView}
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--surface)',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Fit View
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setPan({ x: 0, y: 0 });
                       setZoom(1);
@@ -2299,6 +2430,21 @@ export function WorkflowCanvasView({
                   >
                     Reset View
                   </button>
+                  <button
+                    type="button"
+                    aria-label="Toggle fullscreen canvas"
+                    onClick={() => setCanvasExpanded((v) => !v)}
+                    style={{
+                      padding: '4px 6px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: canvasExpanded ? 'var(--lavender)' : 'var(--surface)',
+                      color: canvasExpanded ? 'var(--brand)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {canvasExpanded ? <Minimize2 size={13} aria-hidden="true" /> : <Maximize2 size={13} aria-hidden="true" />}
+                  </button>
                 </div>
               </div>
 
@@ -2311,7 +2457,7 @@ export function WorkflowCanvasView({
                 onDrop={handleCanvasDrop}
                 style={{
                   position: 'relative',
-                  height: '520px',
+                  height: canvasExpanded ? '78vh' : 'clamp(580px, 68vh, 860px)',
                   overflow: 'hidden',
                   backgroundColor: 'var(--bg, #F6F7FB)',
                   backgroundImage:
@@ -2334,30 +2480,86 @@ export function WorkflowCanvasView({
                     height="2400"
                     style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
                   >
+                    <defs>
+                      <marker
+                        id="wf-arrow-default"
+                        viewBox="0 0 10 10"
+                        refX="8"
+                        refY="5"
+                        markerWidth="6"
+                        markerHeight="6"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#3924D6" />
+                      </marker>
+                      <marker
+                        id="wf-arrow-success"
+                        viewBox="0 0 10 10"
+                        refX="8"
+                        refY="5"
+                        markerWidth="6"
+                        markerHeight="6"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#12B76A" />
+                      </marker>
+                      <marker
+                        id="wf-arrow-danger"
+                        viewBox="0 0 10 10"
+                        refX="8"
+                        refY="5"
+                        markerWidth="6"
+                        markerHeight="6"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#D92D20" />
+                      </marker>
+                    </defs>
                     {visibleEdges.map((edge) => {
                       const fromNode = visibleNodeMap.get(edge.from.node);
                       const toNode = visibleNodeMap.get(edge.to.node);
                       if (!fromNode || !toNode) return null;
                       const x1 = fromNode.position.x + NODE_WIDTH;
                       const y1 = fromNode.position.y + NODE_HEIGHT / 2;
-                      const x2 = toNode.position.x;
+                      const x2 = toNode.position.x - 4;
                       const y2 = toNode.position.y + NODE_HEIGHT / 2;
                       const midX = (x1 + x2) / 2;
+                      const midY = (y1 + y2) / 2;
                       const edgeOverlay = executionOverlay?.[fromNode.id];
                       const strokeColor =
                         edgeOverlay?.status === 'succeeded'
                           ? '#12B76A'
                           : edgeOverlay?.status === 'failed'
                             ? '#D92D20'
-                            : 'var(--border-strong)';
+                            : '#3924D6';
+                      const markerId =
+                        edgeOverlay?.status === 'succeeded'
+                          ? 'wf-arrow-success'
+                          : edgeOverlay?.status === 'failed'
+                            ? 'wf-arrow-danger'
+                            : 'wf-arrow-default';
                       return (
-                        <path
-                          key={edge.id}
-                          d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
-                          fill="none"
-                          stroke={strokeColor}
-                          strokeWidth={edgeOverlay ? 2.4 : 2}
-                        />
+                        <g key={edge.id} data-testid="canvas-edge">
+                          <path
+                            d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
+                            fill="none"
+                            stroke={strokeColor}
+                            strokeWidth={edgeOverlay ? 2.6 : 2.1}
+                            markerEnd={`url(#${markerId})`}
+                          />
+                          {edge.from.port !== 'main' && (
+                            <text
+                              x={midX}
+                              y={midY - 6}
+                              textAnchor="middle"
+                              fontSize="10"
+                              fontWeight="600"
+                              fill="#3924D6"
+                            >
+                              {edge.from.port}
+                            </text>
+                          )}
+                        </g>
                       );
                     })}
                   </svg>
@@ -2449,44 +2651,80 @@ export function WorkflowCanvasView({
                       : 'var(--surface)';
 
                     return (
-                      <button
+                      <div
                         key={node.id}
-                        type="button"
-                        data-testid="canvas-node"
-                        data-overlay-status={overlay?.status}
-                        aria-pressed={isSelected}
-                        onClick={(e) => {
-                          setSelectedNodeId(node.id);
-                          if (e.shiftKey) {
-                            setMultiSelectedIds((prev) =>
-                              prev.includes(node.id)
-                                ? prev.filter((id) => id !== node.id)
-                                : [...prev, node.id],
-                            );
-                          }
-                        }}
                         style={{
                           position: 'absolute',
                           left: `${node.position.x}px`,
                           top: `${node.position.y}px`,
                           width: `${NODE_WIDTH}px`,
                           minHeight: `${NODE_HEIGHT}px`,
-                          padding: '9px 10px',
-                          textAlign: 'left',
-                          backgroundColor: bgStyle,
-                          borderRight: borderStyle,
-                          borderBottom: borderStyle,
-                          borderLeft: borderStyle,
-                          borderTop: `4px solid ${catMeta.accent}`,
-                          borderRadius: 'var(--radius-md)',
-                          cursor: 'pointer',
-                          display: 'grid',
-                          gap: '3px',
-                          boxShadow: isSelected
-                            ? '0 0 0 3px var(--lavender)'
-                            : '0 2px 6px rgba(23, 23, 43, 0.06)',
                         }}
                       >
+                        {!node.type.startsWith('trigger.') && (
+                          <button
+                            type="button"
+                            aria-label={`Input port (${node.id})`}
+                            title={`Connect to ${node.name} input`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (connectingFromNodeId && connectingFromNodeId !== node.id) {
+                                handleAddEdge(connectingFromNodeId, node.id);
+                              }
+                            }}
+                            style={{
+                              position: 'absolute',
+                              left: '-7px',
+                              top: `${NODE_HEIGHT / 2 - 7}px`,
+                              width: '14px',
+                              height: '14px',
+                              padding: 0,
+                              borderRadius: '9999px',
+                              border: connectingFromNodeId && connectingFromNodeId !== node.id
+                                ? '2px solid var(--brand)'
+                                : '2px solid var(--border-strong)',
+                              backgroundColor: connectingFromNodeId && connectingFromNodeId !== node.id
+                                ? 'var(--lavender)'
+                                : 'var(--surface)',
+                              cursor: connectingFromNodeId ? 'crosshair' : 'default',
+                              zIndex: 2,
+                            }}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          data-testid="canvas-node"
+                          data-overlay-status={overlay?.status}
+                          aria-pressed={isSelected}
+                          onClick={(e) => {
+                            setSelectedNodeId(node.id);
+                            if (e.shiftKey) {
+                              setMultiSelectedIds((prev) =>
+                                prev.includes(node.id)
+                                  ? prev.filter((id) => id !== node.id)
+                                  : [...prev, node.id],
+                              );
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            minHeight: `${NODE_HEIGHT}px`,
+                            padding: '9px 10px',
+                            textAlign: 'left',
+                            backgroundColor: bgStyle,
+                            borderRight: borderStyle,
+                            borderBottom: borderStyle,
+                            borderLeft: borderStyle,
+                            borderTop: `4px solid ${catMeta.accent}`,
+                            borderRadius: 'var(--radius-md)',
+                            cursor: 'pointer',
+                            display: 'grid',
+                            gap: '3px',
+                            boxShadow: isSelected
+                              ? '0 0 0 3px var(--lavender)'
+                              : '0 2px 6px rgba(23, 23, 43, 0.06)',
+                          }}
+                        >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', alignItems: 'center' }}>
                           <span
                             style={{
@@ -2558,7 +2796,36 @@ export function WorkflowCanvasView({
                                 : 'WAITING'}
                           </div>
                         )}
-                      </button>
+                        </button>
+                        {node.type !== 'control.stop' && (
+                          <button
+                            type="button"
+                            aria-label={`Output port (${node.id})`}
+                            title={`Connect from ${node.name} output`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConnectingFromNodeId((prev) => (prev === node.id ? null : node.id));
+                            }}
+                            style={{
+                              position: 'absolute',
+                              right: '-7px',
+                              top: `${NODE_HEIGHT / 2 - 7}px`,
+                              width: '14px',
+                              height: '14px',
+                              padding: 0,
+                              borderRadius: '9999px',
+                              border: connectingFromNodeId === node.id
+                                ? '2px solid var(--brand)'
+                                : '2px solid var(--brand)',
+                              backgroundColor: connectingFromNodeId === node.id
+                                ? 'var(--brand)'
+                                : 'var(--surface)',
+                              cursor: 'crosshair',
+                              zIndex: 2,
+                            }}
+                          />
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -2600,32 +2867,34 @@ export function WorkflowCanvasView({
             </section>
 
             {/* Right Contextual 6-Tab Inspector + Expression Editor */}
-            <WorkflowInspectorPanel
-              selectedNode={selectedNode}
-              allNodes={draftGraph.nodes}
-              edges={draftGraph.edges}
-              nodeNameInput={nodeNameInput}
-              nodeConfigInput={nodeConfigInput}
-              nodeConfigError={nodeConfigError}
-              nodeOnErrorMode={nodeOnErrorMode}
-              isSelectedNodePinned={isSelectedNodePinned}
-              pinJsonInput={pinJsonInput}
-              pinJsonError={pinJsonError}
-              triggerPayloadText={triggerPayloadText}
-              pinnedData={draftGraph.pinned_data}
-              overlayEntry={selectedNode ? executionOverlay?.[selectedNode.id] : undefined}
-              onUpdateNodeName={handleUpdateNodeName}
-              onUpdateNodeConfig={handleUpdateNodeConfig}
-              onUpdateNodeOnError={handleUpdateNodeOnError}
-              onUpdateRetryConfig={handleUpdateRetryConfig}
-              onUpdateNodeNote={handleUpdateNodeNote}
-              onPinToggle={handlePinToggle}
-              onPinJsonChange={handlePinJsonChange}
-              onDeleteSelectedNode={handleDeleteSelectedNode}
-              onDuplicateSelectedNode={handleDuplicateSelectedNode}
-              onAddEdge={handleAddEdge}
-              onRemoveEdge={handleRemoveEdge}
-            />
+            {!inspectorCollapsed && !canvasExpanded && (
+              <WorkflowInspectorPanel
+                selectedNode={selectedNode}
+                allNodes={draftGraph.nodes}
+                edges={draftGraph.edges}
+                nodeNameInput={nodeNameInput}
+                nodeConfigInput={nodeConfigInput}
+                nodeConfigError={nodeConfigError}
+                nodeOnErrorMode={nodeOnErrorMode}
+                isSelectedNodePinned={isSelectedNodePinned}
+                pinJsonInput={pinJsonInput}
+                pinJsonError={pinJsonError}
+                triggerPayloadText={triggerPayloadText}
+                pinnedData={draftGraph.pinned_data}
+                overlayEntry={selectedNode ? executionOverlay?.[selectedNode.id] : undefined}
+                onUpdateNodeName={handleUpdateNodeName}
+                onUpdateNodeConfig={handleUpdateNodeConfig}
+                onUpdateNodeOnError={handleUpdateNodeOnError}
+                onUpdateRetryConfig={handleUpdateRetryConfig}
+                onUpdateNodeNote={handleUpdateNodeNote}
+                onPinToggle={handlePinToggle}
+                onPinJsonChange={handlePinJsonChange}
+                onDeleteSelectedNode={handleDeleteSelectedNode}
+                onDuplicateSelectedNode={handleDuplicateSelectedNode}
+                onAddEdge={handleAddEdge}
+                onRemoveEdge={handleRemoveEdge}
+              />
+            )}
           </div>
 
           {/* Bottom Execution Logs & Validation Panel */}
