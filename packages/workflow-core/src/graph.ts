@@ -325,6 +325,28 @@ const NotifyConfigSchema = z.object({
   recipients: z.array(z.string()).default(['#ops']),
 });
 
+const DbConfigSchema = z.object({
+  source: z.string().min(1).default('primary_pg'),
+  query: z.string().min(1),
+  params: z.array(z.unknown()).default([]),
+  readonly: z.boolean().default(true),
+});
+
+const CrmConfigSchema = z.object({
+  provider: z.enum(['salesforce', 'hubspot', 'custom']).default('salesforce'),
+  object: z.string().min(1).default('Lead'),
+  operation: z.enum(['upsert', 'create', 'update', 'query']).default('upsert'),
+  payload: z.record(z.string(), z.unknown()).default({}),
+});
+
+const ApprovalConfigSchema = z.object({
+  approverRole: z.string().min(1).default('operator'),
+  timeoutMinutes: z.number().int().min(1).max(43_200).default(60),
+  thresholdUsd: z.number().min(0).optional(),
+  reason: z.string().default('Human approval required before continuing workflow.'),
+  autoDecision: z.enum(['wait', 'approved', 'rejected']).optional(),
+});
+
 const SubworkflowConfigSchema = z.object({
   workflow: z.string().min(1),
   version: z.string().optional(),
@@ -740,6 +762,148 @@ export function createDefaultNodeHandlers(): NodeHandler<never>[] {
     },
   };
 
+  const dbNode: NodeHandler<z.infer<typeof DbConfigSchema>> = {
+    type: 'integration.db',
+    category: 'Integration',
+    label: 'Database Query',
+    configSchema: DbConfigSchema,
+    ports: { inputs: ['in'], outputs: ['main', 'error'] },
+    async execute(input, config, nodeCtx) {
+      const out: WorkflowItem[] = [];
+      for (let i = 0; i < input.length; i++) {
+        const item = input[i]!;
+        const scope = makeExprScope(item, i, nodeCtx);
+        const query = String(await nodeCtx.exprEngine.evaluateConfigValue(config.query, scope));
+        const params = (await Promise.all(
+          config.params.map((p) => nodeCtx.exprEngine.evaluateConfigValue(p, scope)),
+        )) as unknown[];
+        if (
+          config.readonly &&
+          /^\s*(DROP|TRUNCATE|DELETE|ALTER|UPDATE|INSERT)\b/i.test(query)
+        ) {
+          throw new PlatformError(
+            'POL_DENIED',
+            `Read-only database node "${nodeCtx.nodeName}" blocked mutating SQL statement.`,
+          );
+        }
+        if (nodeCtx.customActionExecutor) {
+          const res = await nodeCtx.customActionExecutor('integration.db', {
+            source: config.source,
+            query,
+            params,
+            readonly: config.readonly,
+          });
+          out.push(makeItem(res, nodeCtx.nodeId, i));
+        } else {
+          out.push(
+            makeItem(
+              {
+                source: config.source,
+                query,
+                params,
+                readonly: config.readonly,
+                rowCount: 0,
+                rows: [],
+              },
+              nodeCtx.nodeId,
+              i,
+            ),
+          );
+        }
+      }
+      return { kind: 'output', ports: { main: out } };
+    },
+  };
+
+  const crmNode: NodeHandler<z.infer<typeof CrmConfigSchema>> = {
+    type: 'integration.crm',
+    category: 'Integration',
+    label: 'CRM Sync',
+    configSchema: CrmConfigSchema,
+    ports: { inputs: ['in'], outputs: ['main', 'error'] },
+    async execute(input, config, nodeCtx) {
+      const out: WorkflowItem[] = [];
+      for (let i = 0; i < input.length; i++) {
+        const item = input[i]!;
+        const scope = makeExprScope(item, i, nodeCtx);
+        const evaluatedPayload = (await nodeCtx.exprEngine.evaluateConfigValue(
+          config.payload,
+          scope,
+        )) as Record<string, unknown>;
+        if (nodeCtx.customActionExecutor) {
+          const res = await nodeCtx.customActionExecutor('integration.crm', {
+            provider: config.provider,
+            object: config.object,
+            operation: config.operation,
+            payload: evaluatedPayload,
+          });
+          out.push(makeItem(res, nodeCtx.nodeId, i));
+        } else {
+          out.push(
+            makeItem(
+              {
+                provider: config.provider,
+                object: config.object,
+                operation: config.operation,
+                synced: true,
+                recordId: `crm_${nodeCtx.stepSeq + 1}_${i}`,
+                payload: evaluatedPayload,
+              },
+              nodeCtx.nodeId,
+              i,
+            ),
+          );
+        }
+      }
+      return { kind: 'output', ports: { main: out } };
+    },
+  };
+
+  const approvalNode: NodeHandler<z.infer<typeof ApprovalConfigSchema>> = {
+    type: 'human.approval',
+    category: 'Human',
+    label: 'Human Approval',
+    configSchema: ApprovalConfigSchema,
+    ports: { inputs: ['in'], outputs: ['approved', 'rejected', 'main', 'error'] },
+    async execute(input, config, nodeCtx): Promise<NodeResult> {
+      const decision =
+        config.autoDecision ??
+        (nodeCtx.triggerPayload['_approvalDecision'] as 'wait' | 'approved' | 'rejected' | undefined);
+      if (decision === 'approved') {
+        const approvedItems = input.map((item, i) =>
+          makeItem(
+            {
+              ...item.json,
+              approval: { status: 'approved', approverRole: config.approverRole },
+            },
+            nodeCtx.nodeId,
+            i,
+          ),
+        );
+        return { kind: 'output', ports: { approved: approvedItems, main: approvedItems } };
+      }
+      if (decision === 'rejected') {
+        const rejectedItems = input.map((item, i) =>
+          makeItem(
+            {
+              ...item.json,
+              approval: { status: 'rejected', approverRole: config.approverRole },
+            },
+            nodeCtx.nodeId,
+            i,
+          ),
+        );
+        return { kind: 'output', ports: { rejected: rejectedItems } };
+      }
+      return {
+        kind: 'wait',
+        waitKind: 'approval',
+        resumeAfterMs: config.timeoutMinutes * 60_000,
+        reason: `Awaiting ${config.approverRole} approval: ${config.reason}`,
+      };
+    },
+  };
+
   return [
     passThrough('trigger.webhook', 'Trigger', 'Webhook Trigger', WebhookConfigSchema, true) as unknown as NodeHandler<never>,
     passThrough('trigger.schedule', 'Trigger', 'Schedule Trigger', ScheduleConfigSchema, true) as unknown as NodeHandler<never>,
@@ -753,8 +917,11 @@ export function createDefaultNodeHandlers(): NodeHandler<never>[] {
     setNode as unknown as NodeHandler<never>,
     codeNode as unknown as NodeHandler<never>,
     httpNode as unknown as NodeHandler<never>,
+    dbNode as unknown as NodeHandler<never>,
+    crmNode as unknown as NodeHandler<never>,
     agentNode as unknown as NodeHandler<never>,
     llmNode as unknown as NodeHandler<never>,
+    approvalNode as unknown as NodeHandler<never>,
     notifyNode as unknown as NodeHandler<never>,
     subworkflowNode as unknown as NodeHandler<never>,
     stopNode as unknown as NodeHandler<never>,

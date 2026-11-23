@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { WorkflowEdgeDto, WorkflowNodeDto } from '@elshad/sdk-ts';
 import { StatusChip } from '@elshad/ui-kit';
 import { Copy, Link2, Pin, Sparkles, Trash2 } from 'lucide-react';
+import { NodeConfigForm } from './NodeConfigForm.js';
 import {
   CATEGORY_META,
   evaluateExpressionPreview,
@@ -287,6 +288,11 @@ export function WorkflowInspectorPanel({
           <div role="tabpanel" aria-label={TABS.find((t) => t.key === activeTab)?.label ?? 'Parameters'} style={{ display: 'grid', gap: '8px' }}>
             {activeTab === 'parameters' && (
               <>
+                <NodeConfigForm
+                  nodeType={selectedNode.type}
+                  nodeConfigInput={nodeConfigInput}
+                  onUpdateNodeConfig={onUpdateNodeConfig}
+                />
                 <div>
                   <label htmlFor="inspector-node-config" style={{ display: 'block', fontSize: '12px', fontWeight: 600 }}>
                     Config JSON (supports JSONata <code>=expr</code> or <code>{'{{ expr }}'}</code>)

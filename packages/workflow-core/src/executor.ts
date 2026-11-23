@@ -695,7 +695,7 @@ export async function executeWorkflowGraph(
             if (r.result.kind === 'wait') {
               if (lease) {
                 await executionEngine.suspend(lease, {
-                  kind: 'timer',
+                  kind: r.result.waitKind,
                   reason: r.result.reason,
                   fireAt: r.result.resumeAfterMs
                     ? new Date(clock.now().getTime() + r.result.resumeAfterMs).toISOString()
@@ -705,7 +705,12 @@ export async function executeWorkflowGraph(
               const steps = await executionEngine.listSteps(input.ctx.orgId, runRecord.id);
               return {
                 runId: runRecord.id,
-                status: 'waiting_timer',
+                status:
+                  r.result.waitKind === 'approval'
+                    ? 'waiting_approval'
+                    : r.result.waitKind === 'input'
+                      ? 'waiting_input'
+                      : 'waiting_timer',
                 terminationReason: 'escalated',
                 failureClass: null,
                 nodeOutputs: scratch.nodeOutputs,

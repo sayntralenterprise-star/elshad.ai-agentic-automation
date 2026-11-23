@@ -532,4 +532,96 @@ describe('@elshad/workflow-core JSONata, Graph Validation, Triggers, YAML & Exec
     expect(res.trace.map((t) => t.nodeId)).toEqual(['switch_node', 'notify_billing']);
     expect(res.notificationsLog[0]?.message).toBe('Billing ticket TCK-777');
   });
+
+  it('executes integration.db, integration.crm, and human.approval nodes (waiting_approval + approved/rejected)', async () => {
+    const baseGraph: WorkflowGraph = {
+      schema_version: 1,
+      settings: { max_concurrency: 5, queue: 'default', timeout_ms: 60_000 },
+      nodes: [
+        { id: 'trig', type: 'trigger.manual', name: 'Start', position: { x: 0, y: 0 }, config: {} },
+        {
+          id: 'db',
+          type: 'integration.db',
+          name: 'Load Account',
+          position: { x: 200, y: 0 },
+          config: { source: 'erp_pg', query: 'SELECT * FROM accounts WHERE id = $1', params: ['={{ $json.accountId }}'], readonly: true },
+        },
+        {
+          id: 'crm',
+          type: 'integration.crm',
+          name: 'Sync Lead',
+          position: { x: 400, y: 0 },
+          config: { provider: 'salesforce', object: 'Lead', operation: 'upsert', payload: { tier: '={{ $json.tier }}' } },
+        },
+        {
+          id: 'gate',
+          type: 'human.approval',
+          name: 'Finance Gate',
+          position: { x: 600, y: 0 },
+          config: { approverRole: 'finance_reviewer', timeoutMinutes: 30, reason: 'Approve CRM sync' },
+        },
+        {
+          id: 'done',
+          type: 'human.notify',
+          name: 'Notify Done',
+          position: { x: 800, y: 0 },
+          config: { channel: 'slack', template: 'Approved for {{ $json.object }}', recipients: ['#ops'] },
+        },
+      ],
+      edges: [
+        { id: 'e1', from: { node: 'trig', port: 'main' }, to: { node: 'db', port: 'in' } },
+        { id: 'e2', from: { node: 'db', port: 'main' }, to: { node: 'crm', port: 'in' } },
+        { id: 'e3', from: { node: 'crm', port: 'main' }, to: { node: 'gate', port: 'in' } },
+        { id: 'e4', from: { node: 'gate', port: 'approved' }, to: { node: 'done', port: 'in' } },
+      ],
+      pinned_data: {},
+      notes: [],
+    };
+
+    const paused = await executeWorkflowGraph({
+      ctx,
+      workflowId: 'wf_nodes',
+      workflowName: 'nodes-test',
+      versionId: 'wfv_nodes',
+      graph: baseGraph,
+      triggerPayload: { accountId: 'acc_9', tier: 'enterprise' },
+    });
+    expect(paused.status).toBe('waiting_approval');
+    expect(paused.trace.map((t) => t.nodeId)).toEqual(['trig', 'db', 'crm']);
+
+    const approved = await executeWorkflowGraph({
+      ctx,
+      workflowId: 'wf_nodes',
+      workflowName: 'nodes-test',
+      versionId: 'wfv_nodes',
+      graph: baseGraph,
+      triggerPayload: { accountId: 'acc_9', tier: 'enterprise', _approvalDecision: 'approved' },
+    });
+    expect(approved.status).toBe('succeeded');
+    expect(approved.trace.map((t) => t.nodeId)).toEqual(['trig', 'db', 'crm', 'gate', 'done']);
+    expect(approved.notificationsLog[0]?.message).toBe('Approved for Lead');
+
+    await expect(
+      executeWorkflowGraph({
+        ctx,
+        workflowId: 'wf_db_deny',
+        workflowName: 'db-deny',
+        versionId: 'wfv_db_deny',
+        graph: {
+          ...baseGraph,
+          nodes: [
+            { id: 'trig', type: 'trigger.manual', name: 'Start', position: { x: 0, y: 0 }, config: {} },
+            {
+              id: 'db_bad',
+              type: 'integration.db',
+              name: 'Drop Table',
+              position: { x: 200, y: 0 },
+              config: { source: 'erp_pg', query: 'DROP TABLE accounts', readonly: true },
+            },
+          ],
+          edges: [{ id: 'e1', from: { node: 'trig', port: 'main' }, to: { node: 'db_bad', port: 'in' } }],
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'failed' });
+  });
 });

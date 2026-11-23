@@ -49,6 +49,7 @@ import {
   CATEGORY_META,
   EXTENDED_FALLBACK_NODES,
   autoLayoutGraph,
+  buildSupportTriageGraph,
   buildExecutionOverlay,
   getNodeCategory,
   getNodeConfigPreview,
@@ -82,64 +83,7 @@ const CATEGORY_ORDER = [
 ] as const;
 
 export function buildStarterWorkflowGraph(): WorkflowGraphDto {
-  return {
-    schema_version: 1,
-    settings: {
-      max_concurrency: 5,
-      queue: 'default',
-      timeout_ms: 120_000,
-    },
-    nodes: [
-      {
-        id: 'n_webhook',
-        type: 'trigger.webhook',
-        name: 'Inbound Webhook',
-        position: { x: 40, y: 120 },
-        config: {
-          path: 'inbox-triage',
-          auth: 'none',
-          replay_protection: true,
-        },
-      },
-      {
-        id: 'n_agent',
-        type: 'ai.agent',
-        name: 'Agent Triage',
-        position: { x: 280, y: 120 },
-        config: {
-          prompt: '=trigger.body.message',
-          tier: 'fast',
-        },
-      },
-      {
-        id: 'n_switch',
-        type: 'logic.switch',
-        name: 'Priority Switch',
-        position: { x: 520, y: 120 },
-        config: {
-          expression: '=$prev.priority',
-          cases: ['high', 'normal'],
-        },
-      },
-      {
-        id: 'n_slack',
-        type: 'human.notify',
-        name: 'Slack Notify',
-        position: { x: 760, y: 120 },
-        config: {
-          channel: '#triage-alerts',
-          message: 'Urgent triage alert: {{$prev.summary}}',
-        },
-      },
-    ],
-    edges: [
-      { id: 'e_1', from: { node: 'n_webhook', port: 'main' }, to: { node: 'n_agent', port: 'main' } },
-      { id: 'e_2', from: { node: 'n_agent', port: 'main' }, to: { node: 'n_switch', port: 'main' } },
-      { id: 'e_3', from: { node: 'n_switch', port: 'case_0' }, to: { node: 'n_slack', port: 'main' } },
-    ],
-    pinned_data: {},
-    notes: [],
-  };
+  return buildSupportTriageGraph();
 }
 
 function buildBenchmarkWorkflowGraph(count = 300): WorkflowGraphDto {
@@ -183,39 +127,45 @@ function buildBenchmarkWorkflowGraph(count = 300): WorkflowGraphDto {
 function defaultConfigForNodeType(nodeType: string): Record<string, unknown> {
   switch (nodeType) {
     case 'trigger.webhook':
-      return { path: `hook-${Date.now()}`, auth: 'none' };
+      return { path: `hook-${Date.now()}`, methods: ['POST'], auth: { mode: 'none' } };
     case 'trigger.schedule':
-      return { cron: '*/15 * * * *', misfire: 'skip' };
+      return { cron: '*/15 * * * *', timezone: 'UTC', misfire_policy: 'skip' };
+    case 'trigger.manual':
+      return {};
     case 'ai.agent':
-      return { prompt: '=trigger.body.message', tier: 'fast' };
+      return { agent: 'triage-agent', version: 'channel:stable', input: '=trigger.body.message', dry_run: false };
     case 'ai.llm':
-      return { prompt: 'Summarize: {{$prev.text}}', tier: 'fast' };
+      return { tier: 'fast', prompt: 'Summarize: {{$prev.text}}' };
     case 'logic.if':
       return { condition: '=$prev.ok = true' };
     case 'logic.switch':
-      return { expression: '=$prev.priority', cases: ['high', 'normal'] };
+      return { cases: [{ id: 'high', expr: "$json.priority = 'high'" }], default: true };
     case 'logic.loop':
-      return { items: '=$prev.items' };
+      return { mode: 'for_each', items: '=$prev.items', max_iterations: 100 };
+    case 'logic.parallel':
+      return { concurrency_cap: 5 };
+    case 'logic.join':
+      return { join_mode: 'all' };
     case 'logic.wait':
-      return { delay_ms: 100 };
+      return { duration_ms: 1000, reason: 'Waiting on timer' };
     case 'data.set':
-      return { values: { normalized: '=$prev' } };
+      return { assignments: [{ path: 'normalized', expr: '=$prev' }], keep_only_set: false };
     case 'data.code':
-      return { expression: '$prev' };
+      return { language: 'javascript', code: 'return items;', timeout_ms: 3000 };
     case 'integration.http':
-      return { method: 'GET', url: 'https://api.example.com/status' };
+      return { method: 'GET', url: 'https://api.example.com/status', timeout_ms: 10000 };
     case 'integration.db':
-      return { query: 'SELECT * FROM records LIMIT 25', source: 'primary_pg' };
+      return { source: 'primary_pg', query: 'SELECT * FROM records LIMIT 25', readonly: true };
     case 'integration.crm':
-      return { object: 'Lead', operation: 'upsert' };
+      return { provider: 'salesforce', object: 'Lead', operation: 'upsert', payload: {} };
     case 'human.approval':
-      return { approverRole: 'operator', timeoutMinutes: 60 };
+      return { approverRole: 'operator', timeoutMinutes: 60, reason: 'Approve action before continuing' };
     case 'human.notify':
-      return { channel: '#ops', message: 'Workflow update: {{$prev.summary}}' };
+      return { channel: 'slack', template: 'Workflow update: {{$prev.summary}}', recipients: ['#ops'] };
     case 'control.subworkflow':
-      return { workflow_id: 'sub-flow' };
+      return { workflow: 'sub-flow', await: true };
     case 'control.stop':
-      return { status: 'succeeded' };
+      return { status: 'succeeded', message: 'Workflow stopped cleanly.' };
     default:
       return {};
   }
