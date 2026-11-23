@@ -253,6 +253,14 @@ export function WorkflowCanvasView({
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 520 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const dragOriginRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const nodeDragRef = useRef<{
+    nodeId: string;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    moved: boolean;
+  } | null>(null);
 
   // Execution status overlay on canvas
   const [activeOverlayRun, setActiveOverlayRun] = useState<RunDto | null>(null);
@@ -457,6 +465,12 @@ export function WorkflowCanvasView({
     return inView;
   }, [draftGraph.nodes, pan.x, pan.y, viewportSize.height, viewportSize.width, zoom]);
 
+  const allNodeMap = useMemo(() => {
+    const map = new Map<string, WorkflowNodeDto>();
+    for (const n of draftGraph.nodes) map.set(n.id, n);
+    return map;
+  }, [draftGraph.nodes]);
+
   const visibleNodeMap = useMemo(() => {
     const map = new Map<string, WorkflowNodeDto>();
     for (const n of visibleNodes) map.set(n.id, n);
@@ -466,9 +480,12 @@ export function WorkflowCanvasView({
   const visibleEdges = useMemo(
     () =>
       draftGraph.edges.filter(
-        (e) => visibleNodeMap.has(e.from.node) && visibleNodeMap.has(e.to.node),
+        (e) =>
+          allNodeMap.has(e.from.node) &&
+          allNodeMap.has(e.to.node) &&
+          (visibleNodeMap.has(e.from.node) || visibleNodeMap.has(e.to.node)),
       ),
-    [draftGraph.edges, visibleNodeMap],
+    [draftGraph.edges, allNodeMap, visibleNodeMap],
   );
 
   const workflowTriggers = useMemo(
@@ -1221,11 +1238,31 @@ export function WorkflowCanvasView({
   }
 
   function handleCanvasPointerDown(e: PointerEvent<HTMLDivElement>) {
-    if (e.target !== e.currentTarget) return;
+    const target = e.target as HTMLElement | null;
+    if (e.target !== e.currentTarget && target?.dataset?.canvasBg !== 'true') return;
     dragOriginRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
   }
 
   function handleCanvasPointerMove(e: PointerEvent<HTMLDivElement>) {
+    const nodeDrag = nodeDragRef.current;
+    if (nodeDrag) {
+      const dx = (e.clientX - nodeDrag.startX) / zoom;
+      const dy = (e.clientY - nodeDrag.startY) / zoom;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        nodeDrag.moved = true;
+      }
+      if (nodeDrag.moved) {
+        const nextX = Math.round(nodeDrag.origX + dx);
+        const nextY = Math.round(nodeDrag.origY + dy);
+        setDraftGraph((g) => ({
+          ...g,
+          nodes: g.nodes.map((n) =>
+            n.id === nodeDrag.nodeId ? { ...n, position: { x: nextX, y: nextY } } : n,
+          ),
+        }));
+      }
+      return;
+    }
     const origin = dragOriginRef.current;
     if (!origin) return;
     setPan({
@@ -1235,6 +1272,10 @@ export function WorkflowCanvasView({
   }
 
   function handleCanvasPointerUp() {
+    if (nodeDragRef.current?.moved) {
+      setDraftDirty(true);
+    }
+    nodeDragRef.current = null;
     dragOriginRef.current = null;
   }
 
@@ -2476,6 +2517,7 @@ export function WorkflowCanvasView({
                 }}
               >
                 <div
+                  data-canvas-bg="true"
                   style={{
                     position: 'absolute',
                     inset: 0,
@@ -2487,7 +2529,7 @@ export function WorkflowCanvasView({
                     aria-hidden="true"
                     width="4800"
                     height="2400"
-                    style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+                    style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 1 }}
                   >
                     <defs>
                       <marker
@@ -2525,8 +2567,8 @@ export function WorkflowCanvasView({
                       </marker>
                     </defs>
                     {visibleEdges.map((edge) => {
-                      const fromNode = visibleNodeMap.get(edge.from.node);
-                      const toNode = visibleNodeMap.get(edge.to.node);
+                      const fromNode = allNodeMap.get(edge.from.node);
+                      const toNode = allNodeMap.get(edge.to.node);
                       if (!fromNode || !toNode) return null;
                       const x1 = fromNode.position.x + NODE_WIDTH;
                       const y1 = fromNode.position.y + NODE_HEIGHT / 2;
@@ -2673,17 +2715,32 @@ export function WorkflowCanvasView({
                             setHoveredNodeId((prev) => (prev === node.id ? null : prev));
                           }
                         }}
+                        onPointerDown={(e) => {
+                          const target = e.target as HTMLElement | null;
+                          if (target?.closest('[data-port-handle="true"]')) return;
+                          e.stopPropagation();
+                          nodeDragRef.current = {
+                            nodeId: node.id,
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            origX: node.position.x,
+                            origY: node.position.y,
+                            moved: false,
+                          };
+                        }}
                         style={{
                           position: 'absolute',
                           left: `${node.position.x}px`,
                           top: `${node.position.y}px`,
                           width: `${NODE_WIDTH}px`,
                           minHeight: `${NODE_HEIGHT}px`,
+                          zIndex: isSelected || isHovered ? 4 : 2,
                         }}
                       >
                         {!node.type.startsWith('trigger.') && (
                           <button
                             type="button"
+                            data-port-handle="true"
                             aria-label={`Input port (${node.id})`}
                             title={`Connect to ${node.name} input`}
                             onClick={(e) => {
@@ -2832,6 +2889,7 @@ export function WorkflowCanvasView({
                           <>
                             <button
                               type="button"
+                              data-port-handle="true"
                               aria-label={`Output port (${node.id})`}
                               title={`Connect or add node after ${node.name}`}
                               onClick={(e) => {
