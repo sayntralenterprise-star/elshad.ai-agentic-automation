@@ -3477,7 +3477,15 @@ describe('@elshad/console shell, env safety, API keys, and accessibility [E0.1-7
     expect(screen.getByLabelText('Cron Expression')).toBeTruthy();
 
     // Connector arrows & collapsible workspace controls
-    expect(screen.getAllByTestId('canvas-edge').length).toBeGreaterThanOrEqual(3);
+    const initialEdgeCount = screen.getAllByTestId('canvas-edge').length;
+    expect(initialEdgeCount).toBeGreaterThanOrEqual(3);
+    const outPorts = screen.getAllByRole('button', { name: /Output port \(/ });
+    await user.click(outPorts[0]!);
+    expect(await screen.findByRole('region', { name: 'Quick connect next node' })).toBeTruthy();
+    const inPorts = screen.getAllByRole('button', { name: /Input port \(/ });
+    await user.click(inPorts[inPorts.length - 1]!);
+    expect(screen.getAllByTestId('canvas-edge').length).toBeGreaterThan(initialEdgeCount);
+
     await user.click(screen.getByRole('button', { name: 'Fit View' }));
     await user.click(screen.getByRole('button', { name: 'Toggle node palette' }));
     expect(screen.queryByRole('complementary', { name: 'Node Palette' })).toBeNull();

@@ -616,9 +616,17 @@ export function WorkflowCanvasView({
     return 'main';
   }
 
-  function addNodeAtPosition(desc: WorkflowNodeDescriptorDto, position?: { x: number; y: number }) {
+  function addNodeAtPosition(
+    desc: WorkflowNodeDescriptorDto,
+    position?: { x: number; y: number },
+    connectFromId?: string,
+  ) {
     const idx = draftGraph.nodes.length + 1;
-    const prev = selectedNode ?? draftGraph.nodes[draftGraph.nodes.length - 1] ?? null;
+    const prev =
+      (connectFromId ? draftGraph.nodes.find((n) => n.id === connectFromId) : null) ??
+      selectedNode ??
+      draftGraph.nodes[draftGraph.nodes.length - 1] ??
+      null;
     const newId = `n_${desc.type.replace(/\./g, '_')}_${idx}_${Date.now().toString(36).slice(-3)}`;
     const newNode: WorkflowNodeDto = {
       id: newId,
@@ -632,7 +640,7 @@ export function WorkflowCanvasView({
     };
     commitGraphChange((g) => {
       const nextEdges = [...g.edges];
-      if (prev && !position) {
+      if (prev && (!position || connectFromId)) {
         nextEdges.push({
           id: `e_${Date.now()}_${idx}`,
           from: { node: prev.id, port: defaultOutputPortForNode(prev) },
@@ -2674,22 +2682,31 @@ export function WorkflowCanvasView({
                             }}
                             style={{
                               position: 'absolute',
-                              left: '-7px',
-                              top: `${NODE_HEIGHT / 2 - 7}px`,
-                              width: '14px',
-                              height: '14px',
+                              left: '-9px',
+                              top: `${NODE_HEIGHT / 2 - 9}px`,
+                              width: '18px',
+                              height: '18px',
                               padding: 0,
                               borderRadius: '9999px',
                               border: connectingFromNodeId && connectingFromNodeId !== node.id
                                 ? '2px solid var(--brand)'
-                                : '2px solid var(--border-strong)',
+                                : '1.5px solid var(--border-strong)',
                               backgroundColor: connectingFromNodeId && connectingFromNodeId !== node.id
                                 ? 'var(--lavender)'
                                 : 'var(--surface)',
+                              color: 'var(--brand)',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              lineHeight: 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                               cursor: connectingFromNodeId ? 'crosshair' : 'default',
                               zIndex: 2,
                             }}
-                          />
+                          >
+                            {connectingFromNodeId && connectingFromNodeId !== node.id ? '+' : ''}
+                          </button>
                         )}
                         <button
                           type="button"
@@ -2798,32 +2815,106 @@ export function WorkflowCanvasView({
                         )}
                         </button>
                         {node.type !== 'control.stop' && (
-                          <button
-                            type="button"
-                            aria-label={`Output port (${node.id})`}
-                            title={`Connect from ${node.name} output`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConnectingFromNodeId((prev) => (prev === node.id ? null : node.id));
-                            }}
-                            style={{
-                              position: 'absolute',
-                              right: '-7px',
-                              top: `${NODE_HEIGHT / 2 - 7}px`,
-                              width: '14px',
-                              height: '14px',
-                              padding: 0,
-                              borderRadius: '9999px',
-                              border: connectingFromNodeId === node.id
-                                ? '2px solid var(--brand)'
-                                : '2px solid var(--brand)',
-                              backgroundColor: connectingFromNodeId === node.id
-                                ? 'var(--brand)'
-                                : 'var(--surface)',
-                              cursor: 'crosshair',
-                              zIndex: 2,
-                            }}
-                          />
+                          <>
+                            <button
+                              type="button"
+                              aria-label={`Output port (${node.id})`}
+                              title={`Connect or add node after ${node.name}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConnectingFromNodeId((prev) => (prev === node.id ? null : node.id));
+                              }}
+                              style={{
+                                position: 'absolute',
+                                right: '-10px',
+                                top: `${NODE_HEIGHT / 2 - 10}px`,
+                                width: '20px',
+                                height: '20px',
+                                padding: 0,
+                                borderRadius: '9999px',
+                                border: '2px solid var(--brand)',
+                                backgroundColor: connectingFromNodeId === node.id
+                                  ? 'var(--brand)'
+                                  : 'var(--surface)',
+                                color: connectingFromNodeId === node.id ? '#FFFFFF' : 'var(--brand)',
+                                fontSize: '14px',
+                                fontWeight: 700,
+                                lineHeight: 1,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                                zIndex: 3,
+                                boxShadow: '0 1px 4px rgba(23, 23, 43, 0.14)',
+                              }}
+                            >
+                              +
+                            </button>
+                            {connectingFromNodeId === node.id && (
+                              <div
+                                role="region"
+                                aria-label="Quick connect next node"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{
+                                  position: 'absolute',
+                                  left: `${NODE_WIDTH + 14}px`,
+                                  top: '0px',
+                                  width: '210px',
+                                  padding: '8px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--lavender-border)',
+                                  backgroundColor: 'var(--surface)',
+                                  boxShadow: 'var(--shadow-card)',
+                                  display: 'grid',
+                                  gap: '5px',
+                                  zIndex: 10,
+                                  fontSize: '11.5px',
+                                }}
+                              >
+                                <div style={{ fontWeight: 700, color: 'var(--brand)' }}>
+                                  Add &amp; Connect Next Node
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '10.5px' }}>
+                                  Pick a node below or click another node&apos;s left + port:
+                                </div>
+                                {nodeCatalog
+                                  .filter((item) => !item.type.startsWith('trigger.'))
+                                  .slice(0, 6)
+                                  .map((item) => (
+                                    <button
+                                      key={`qc-${node.id}-${item.type}`}
+                                      type="button"
+                                      onClick={() => {
+                                        addNodeAtPosition(
+                                          item,
+                                          {
+                                            x: node.position.x + 260,
+                                            y: node.position.y,
+                                          },
+                                          node.id,
+                                        );
+                                        setConnectingFromNodeId(null);
+                                      }}
+                                      style={{
+                                        textAlign: 'left',
+                                        padding: '4px 8px',
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: '1px solid var(--border)',
+                                        backgroundColor: 'var(--surface-raised)',
+                                        color: 'var(--text-primary)',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                      }}
+                                    >
+                                      <span>{item.label}</span>
+                                      <span style={{ color: 'var(--brand)' }}>+</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     );
